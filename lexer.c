@@ -22,6 +22,7 @@ int bstlPush(Token* tokens,Token value)
 Token* bstLex(char* string)
 {
 	Token* tokens;
+	Token* v;
 	tokens = malloc(sizeof(Token));
 	LexMode mode = SCAN_M;
 	TokenKind curtok;
@@ -70,9 +71,11 @@ Token* bstLex(char* string)
 					curtok = TOK_IDENT;
 				break;
 		}
+		if (! (i + 1) > sizeof(*string))
+			curtok = TOK_EOF;
 		if (curtok != lastok)
 		{
-			Token* v = (Token*)calloc(1,sizeof(Token));
+			v = (Token*)calloc(1,sizeof(Token));
 			v->kind = lastok;
 			v->text = buf;
 			v->line = 1;
@@ -83,6 +86,14 @@ Token* bstLex(char* string)
 			buf = calloc(50,sizeof(char));
 		}
 	}
+	v = (Token*)calloc(1,sizeof(Token));
+	v->kind = TOK_EOF;
+	v->text = buf;
+	v->line = 1;
+	v->col = bufr;
+	bstlPush(tokens,*v);
+	free(v);
+	bufr = 0;
 	/* TODO: start lexer here */
 	return tokens;
 }
