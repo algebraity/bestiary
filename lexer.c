@@ -71,7 +71,7 @@ Token* bstLex(char* string)
 					curtok = TOK_IDENT;
 				break;
 		}
-		if (! (i + 1) > sizeof(*string))
+		if (!(i + 1 > sizeof(*string)))
 			curtok = TOK_EOF;
 		if (curtok != lastok)
 		{
