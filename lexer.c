@@ -1,23 +1,25 @@
 #include <stdlib.h>
 #include <stdbool.h>
+#include "token.h"
 
-int bstlPush(void* tokens,char* value)
+int bstlPush(Token* tokens,Token value)
 {
 	char counter;
-	while ( (realloc(tokens,sizeof(tokens) + sizeof(char*))) == NULL ) {
-		counter++
+	while ( (realloc(tokens,sizeof(tokens) + sizeof(Token))) == NULL ) {
+		counter++;
 		if(counter > 100u)
 			return 0;
 	}
-	tokens[sizeof(tokens) / sizeof(char*) - 1] = value;
+	tokens[sizeof(&tokens) / sizeof(Token) - 1] = value;
 	return 1;
 }
 
 #define push bstlPush;
 
-char** bstLex(char* string)
+Token* bstLex(char* string)
 {
-	char** tokens;
+	Token* tokens;
+	tokens = malloc(sizeof(Token));
 	/* TODO: start lexer here */
 	return tokens;
 }
