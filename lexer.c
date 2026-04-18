@@ -1,19 +1,23 @@
 #include <stdlib.h>
+#include <stdbool.h>
 
-char* bstlPush(void* stack,char* value) {
-	return realloc(stack,sizeof(stack) + sizeof(char*));
-}
-
-char* bstlPop(void* stack) {
-	return realloc(stack,sizeof(stack) - sizeof(char*));
+int bstlPush(void* tokens,char* value)
+{
+	char counter;
+	while ( (realloc(tokens,sizeof(tokens) + sizeof(char*))) == NULL ) {
+		counter++
+		if(counter > 100u)
+			return 0;
+	}
+	tokens[sizeof(tokens) / sizeof(char*) - 1] = value;
+	return 1;
 }
 
 #define push bstlPush;
-#define pop bstlPop;
 
 char** bstLex(char* string)
 {
-	char** tree;
+	char** tokens;
 	/* TODO: start lexer here */
-	return tree;
+	return tokens;
 }
