@@ -1,3 +1,3 @@
 /* prototypes */
-char** bstLex(char*);
+token* bstLex(char*);
 /* end proto */

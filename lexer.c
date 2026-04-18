@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include<string.h>
 #include <stdbool.h>
 #include "token.h"
 
@@ -9,7 +10,7 @@ typedef enum
 
 int bstlPush(Token* tokens,Token value)
 {
-	char counter;
+	char counter = 0;
 	while ( (realloc(tokens,sizeof(tokens) + sizeof(Token))) == NULL ) {
 		counter++;
 		if(counter > 100u)
@@ -25,15 +26,16 @@ Token* bstLex(char* string)
 	Token* v;
 	tokens = malloc(sizeof(Token));
 	LexMode mode = SCAN_M;
-	TokenKind curtok;
-	TokenKind lastok;
+	TokenKind curtok = TOK_NONE;
+	TokenKind lastok = TOK_NONE;
 	int inder = 0;
 	int bufr = 0;
 	char* buf;
 	buf = calloc(50,sizeof(char));
 	int i;
-	char backslashes;
-	for(i = 0 ; i < sizeof(*string) ; i++)
+	char backslashes = 0;
+	int l = strlen(string);
+	for(i = 0 ; i < l ; i++)
 	{
 		lastok = curtok;
 		switch (string[i]) {
@@ -44,10 +46,10 @@ Token* bstLex(char* string)
 			case '=':
 				curtok = TOK_EQUALS;
 				break;
-			case '}':
+			case '{':
 				curtok = TOK_LBRACE;
 				break;
-			case '{':
+			case '}':
 				curtok = TOK_RBRACE;
 				break;
 			case '\\':
@@ -57,7 +59,7 @@ Token* bstLex(char* string)
 					backslashes = 0;
 					curtok = TOK_DBLBACKSLASH;
 				}
-				curtok = TOK_COMMAND;
+				else curtok = TOK_COMMAND;
 				break;
 			case '&':
 				curtok = TOK_AMP;
@@ -71,7 +73,7 @@ Token* bstLex(char* string)
 					curtok = TOK_IDENT;
 				break;
 		}
-		if (!(i + 1 > sizeof(*string)))
+		if (!(i + 1 > l))
 			curtok = TOK_EOF;
 		if (curtok != lastok)
 		{
