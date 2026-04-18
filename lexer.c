@@ -94,6 +94,5 @@ Token* bstLex(char* string)
 	bstlPush(tokens,*v);
 	free(v);
 	bufr = 0;
-	/* TODO: start lexer here */
 	return tokens;
 }
