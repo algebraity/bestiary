@@ -1,0 +1,287 @@
+Running sokko tests...
+
+=== comp ===
+  [PASS] comp a < b
+  [PASS] comp b > a
+  [PASS] comp a == c
+  [PASS] qsort with comp
+
+=== isSquare ===
+  [PASS] 3x3 is square
+  [PASS] 2x5 is not square
+
+=== freeLU ===
+  [PASS] freeLU(NULL) doesn't crash
+  [PASS] freeLU on real LU doesn't crash
+
+=== freeMatrix ===
+  [PASS] freeMatrix(NULL) doesn't crash
+  [PASS] freeMatrix on fresh matrix doesn't crash
+  [PASS] freeMatrix with cached LU doesn't crash
+
+=== resetMatrixCache ===
+  [PASS] cache populated
+  [PASS] cache cleared
+  [PASS] second reset is no-op
+
+=== getEntry / setEntry ===
+  [PASS] get/set (0,0)
+  [PASS] get/set (2,3)
+  [PASS] get/set (1,2)
+  [PASS] uninitialized is 0
+  [PASS] cache exists before set
+  [PASS] setEntry invalidates cache
+
+=== luDecompose ===
+  [PASS] non-square returns NULL
+  [PASS] singular returns NULL
+  [PASS] identity decomposes
+  [PASS] n correct
+  [PASS] identity sign +1
+  [PASS] 3x3 decomposes
+
+=== luDet ===
+  [PASS] det(I) = 1
+  [PASS] det 2x2
+
+=== cacheLU ===
+  [PASS] cache populated
+  [PASS] re-cache works
+
+=== constructMatrix ===
+  [PASS] rows < 1 returns NULL
+  [PASS] cols < 1 returns NULL
+  [PASS] negative rows returns NULL
+  [PASS] valid construct
+  [PASS] dimensions correct
+  [PASS] cache initially NULL
+  [PASS] all entries zero
+
+=== constructMatrixFromMatrix ===
+  [PASS] lenData mismatch
+  [PASS] colLenData mismatch
+  [PASS] valid construct
+  [PASS] values correct
+
+=== constructMatrixFromArray ===
+  [PASS] wrong lenData
+  [PASS] wrong lenData 2
+  [PASS] valid construct
+  [PASS] (0,0)
+  [PASS] (0,2)
+  [PASS] (1,0)
+  [PASS] (1,2)
+
+=== printMatrix ===
+  Visual check (should see 2x2 with 1,2,3,4):
+| 1, 2 |
+| 3, 4 |
+  [PASS] printMatrix doesn't crash
+
+=== copyMatrix ===
+  [PASS] copy NULL returns NULL
+  [PASS] copy succeeds
+  [PASS] different pointer
+  [PASS] different data buffer
+  [PASS] values equal
+  [PASS] deep copy
+
+=== matrixComp ===
+  [PASS] NULL inputs false
+  [PASS] different dims false
+  [PASS] two zeros equal
+  [PASS] within tol equal
+  [PASS] outside tol not equal
+
+=== idMatrix ===
+  [PASS] id constructed
+  [PASS] dimensions
+  [PASS] id values correct
+
+=== simpleDotProduct ===
+  [PASS] length mismatch NAN
+  [PASS] 1*4+2*5+3*6 = 32
+  [PASS] dot with zero
+
+=== dotProduct ===
+  [PASS] column dot product
+  [PASS] non-column NAN
+  [PASS] row mismatch NAN
+
+=== multByConstant ===
+  [PASS] (0,0) scaled
+  [PASS] (1,1) scaled
+  [PASS] original unchanged
+  [PASS] mult by 0 zeros all
+
+=== addMatrices ===
+  [PASS] NULL inputs
+  [PASS] dim mismatch
+  [PASS] addition correct
+
+=== subtractMatrices ===
+  [PASS] NULL inputs
+  [PASS] subtraction correct
+  [PASS] A - A = 0
+
+=== multiplyMatrices ===
+  [PASS] NULL inputs
+  [PASS] incompatible dims
+  [PASS] A * I = A
+  [PASS] product dims
+  [PASS] (0,0) = 1*7+2*9+3*11
+  [PASS] (0,1) = 1*8+2*10+3*12
+  [PASS] (1,0) = 4*7+5*9+6*11
+  [PASS] (1,1) = 4*8+5*10+6*12
+
+=== tensorMatrices ===
+  [PASS] NULL inputs
+  [PASS] tensor dims 4x4
+  [PASS] block (0,0)
+  [PASS] block (0,0) row 2
+  [PASS] block (0,1)
+  [PASS] block (1,1) corner
+  [PASS] I_1 ⊗ A = A
+
+=== transpose ===
+  [PASS] transpose dims
+  [PASS] (0,0)
+  [PASS] (1,0)
+  [PASS] (2,1)
+  [PASS] (A^T)^T = A
+
+=== luSolve ===
+  [PASS] NULL inputs
+  [PASS] Ax = b verified
+  [PASS] wrong dim b returns NULL
+
+=== luInverse ===
+  [PASS] NULL input
+  [PASS] inv(I) = I
+  [PASS] A * inv(A) = I (2x2)
+  [PASS] B * inv(B) = I (4x4)
+
+=== determinant ===
+  [PASS] non-square NAN
+  [PASS] 1x1 det
+  [PASS] 2x2 det
+  [PASS] 3x3 det
+  [PASS] det(I_5) = 1
+
+=== solveLinEq ===
+  [PASS] NULL inputs
+  [PASS] solve returned
+  [PASS] Ax = b
+  [PASS] second solve works
+  [PASS] wrong rows in b
+  [PASS] b not column vec
+  [PASS] non-square A
+
+=== invertMatrix ===
+  [PASS] non-square NULL
+  [PASS] singular NULL
+  [PASS] inverse computed
+  [PASS] A * inv(A) = I
+  [PASS] 3x3 B * inv(B) = I
+
+=== applyMatrix ===
+  [PASS] NULL inputs
+  [PASS] col mismatch returns NULL
+  [PASS] non-column v returns NULL
+  [PASS] apply succeeds
+  [PASS] I*v = v
+  [PASS] diag * v correct
+  [PASS] non-square result shape
+  [PASS] non-square Av correct
+
+=== matrixPow ===
+  [PASS] NULL input
+  [PASS] non-square returns NULL
+  [PASS] A^0 = I
+  [PASS] A^1 = A
+  [PASS] A^2 = A*A
+  [PASS] A^(-1) = inv(A)
+  [PASS] A^2 * A^-2 = I
+
+=== isSymmetric ===
+  [PASS] NULL returns false
+  [PASS] non-square returns false
+  [PASS] symmetric 3x3
+  [PASS] non-symmetric 2x2
+  [PASS] identity is symmetric
+  [PASS] zero matrix is symmetric
+
+=== isAntisymmetric ===
+  [PASS] NULL returns false
+  [PASS] non-square returns false
+  [PASS] [[0,1],[-1,0]] antisymmetric
+  [PASS] zero matrix is antisymmetric
+  [PASS] identity is not antisymmetric
+  [PASS] 3x3 antisymmetric
+
+=== isOrthogonal ===
+  [PASS] NULL returns false
+  [PASS] non-square returns false
+  [PASS] identity is orthogonal
+  [PASS] 90 deg rotation is orthogonal
+  [PASS] 45 deg rotation is orthogonal
+  [PASS] scaling matrix not orthogonal
+
+=== rank ===
+  [PASS] NULL returns -1
+  [PASS] rank(I_3) = 3
+  [PASS] rank(zero 3x3) = 0
+  [PASS] rank-deficient 2x2 = 1
+  [PASS] 3x3 rank 2
+  [PASS] 2x3 full row rank = 2
+  [PASS] 3x2 rank 1
+
+=== nullity ===
+  [PASS] NULL returns -1
+  [PASS] nullity(I_3) = 0
+  [PASS] nullity of rank-1 2x2 = 1
+  [PASS] 2x3 nullity = 1
+  [PASS] zero 3x4: nullity = 4
+
+=== trace ===
+  [PASS] NULL returns NAN
+  [PASS] non-square returns NAN
+  [PASS] trace(I_4) = 4
+  [PASS] trace([[1,2],[3,4]]) = 5
+  [PASS] trace with float diagonal = 4.0
+  [PASS] trace = sum of eigenvalues
+
+=== frobeniusNorm ===
+  [PASS] NULL returns NAN
+  [PASS] zero matrix norm = 0
+  [PASS] ||I_3||_F = sqrt(3)
+  [PASS] ||[[1,2],[3,4]]||_F = sqrt(30)
+  [PASS] 1x3 [3,4,0] norm = 5
+
+=== eigenvalues2x2 ===
+  [PASS] NULL returns NULL
+  [PASS] non-2x2 returns NULL
+  [PASS] eigs(I_2) = {1, 1}
+  [PASS] eigs(diag(3,2)) = {3, 2}
+  [PASS] sum of eigs = trace
+  [PASS] product of eigs = det
+  [PASS] complex eigs stored as NAN
+  [PASS] det(A - lambda*I) = 0
+  [PASS] det(A - lambda*I) = 0
+
+=== eigenvalues3x3 ===
+  [PASS] NULL returns NULL
+  [PASS] non-3x3 returns NULL
+  [PASS] eigs(I_3) = {1,1,1}
+  [PASS] triple root 2*I eigs = {2,2,2}
+  [PASS] sum of eigs = trace(diag)
+  [PASS] product of eigs = det(diag)
+  [PASS] det(D - lambda*I) = 0
+  [PASS] det(D - lambda*I) = 0
+  [PASS] det(D - lambda*I) = 0
+  [PASS] one-real-root case: real root = 2
+  [PASS] complex roots stored as NAN
+
+========================================
+Results: 199 / 199 tests passed
+========================================
