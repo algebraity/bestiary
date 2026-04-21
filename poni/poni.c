@@ -5,6 +5,13 @@
 #include "poni.h"
 #include "sokko.h"
 
+/* PONI assumes every value is a real double. Sokko's MatrixElement is a
+   tagged union over double/ComplexNumber, so we funnel everything through
+   these two helpers: re() pulls the real component out of a MatrixElement,
+   and R() lifts a double into one. */
+static inline double re(MatrixElement e) { return e.value.real; }
+static inline MatrixElement R(double x) { return elemFromReal(x); }
+
 /* ---------- Kinematics primitives ---------- */
 
 // Computes the displacement between two points
@@ -15,7 +22,7 @@ double* displacement(Vector* p1, Vector* p2) {
     double* disp = (double*)malloc(p1->numRows * sizeof(double));
     if (!disp) return NULL;
     for (int i = 0; i < p1->numRows; i++) {
-	    disp[i] = getEntry(p2, i, 0) - getEntry(p1, i, 0);
+	    disp[i] = re(getEntry(p2, i, 0)) - re(getEntry(p1, i, 0));
     }
     return disp;
 }
@@ -28,7 +35,7 @@ double* averageVelocity(Vector* p1, Vector* p2, double time) {
     double* velocity = (double*)malloc(p1->numRows * sizeof(double));
     if (!velocity) return NULL;
     for (int i = 0; i < p1->numRows; i++) {
-	    velocity[i] = (getEntry(p2, i, 0) - getEntry(p1, i, 0)) / time;
+	    velocity[i] = (re(getEntry(p2, i, 0)) - re(getEntry(p1, i, 0))) / time;
     }
     return velocity;
 }
@@ -42,7 +49,7 @@ double* averageAcceleration(Vector* p1, Vector* p2, Vector* initVel, double time
     if (!acceleration) return NULL;
 
     for (int i = 0; i < p1->numRows; i++) {
-	    acceleration[i] = 2 * (getEntry(p2, i, 0) - getEntry(p1, i, 0) - getEntry(initVel, i, 0) * time) / (time * time);
+	    acceleration[i] = 2 * (re(getEntry(p2, i, 0)) - re(getEntry(p1, i, 0)) - re(getEntry(initVel, i, 0)) * time) / (time * time);
     }
 
     return acceleration;
@@ -57,7 +64,7 @@ Vector* velocityAtTime(Vector* initVel, Vector* acceleration, double time) {
     if (!velocity) return NULL;
 
     for (int i = 0; i < initVel->numRows; i++) {
-	    setEntry(velocity, i, 0, getEntry(initVel, i, 0) + getEntry(acceleration, i, 0) * time);
+	    setEntry(velocity, i, 0, R(re(getEntry(initVel, i, 0)) + re(getEntry(acceleration, i, 0)) * time));
     }
 
     return velocity;
@@ -72,8 +79,8 @@ Vector* positionAtTime(Vector* initPos, Vector* initVel, Vector* acceleration, d
     if (!position) return NULL;
 
     for (int i = 0; i < initPos->numRows; i++) {
-	    double pos = getEntry(initPos, i, 0) + getEntry(initVel, i, 0) * time + 0.5 * getEntry(acceleration, i, 0) * time * time;
-	    setEntry(position, i, 0, pos);
+	    double pos = re(getEntry(initPos, i, 0)) + re(getEntry(initVel, i, 0)) * time + 0.5 * re(getEntry(acceleration, i, 0)) * time * time;
+	    setEntry(position, i, 0, R(pos));
     }
 
     return position;
@@ -88,9 +95,11 @@ Vector* speedAtPosition(Vector* initPos, Vector* initVel, Vector* acceleration, 
     if (!speed) return NULL;
 
     for (int i = 0; i < initPos->numRows; i++) {
-	    double deltaPos = getEntry(pos, i, 0) - getEntry(initPos, i, 0);
-	    double vel = sqrt(getEntry(initVel, i, 0) * getEntry(initVel, i, 0) + 2 * getEntry(acceleration, i, 0) * deltaPos);
-	    setEntry(speed, i, 0, vel);
+	    double deltaPos = re(getEntry(pos, i, 0)) - re(getEntry(initPos, i, 0));
+	    double iv = re(getEntry(initVel, i, 0));
+	    double a = re(getEntry(acceleration, i, 0));
+	    double vel = sqrt(iv * iv + 2 * a * deltaPos);
+	    setEntry(speed, i, 0, R(vel));
     }
 
     return speed;
@@ -105,11 +114,11 @@ Vector* velocityAtPosition(Vector* initPos, Vector* initVel, Vector* acceleratio
     if (!velocity) return NULL;
 
     for (int i = 0; i < initPos->numRows; i++) {
-	    double deltaPos = getEntry(pos, i, 0) - getEntry(initPos, i, 0);
-	    double iv = getEntry(initVel, i, 0);
-        double a = getEntry(acceleration, i, 0);
+	    double deltaPos = re(getEntry(pos, i, 0)) - re(getEntry(initPos, i, 0));
+	    double iv = re(getEntry(initVel, i, 0));
+        double a = re(getEntry(acceleration, i, 0));
         if (a == 0) {
-            setEntry(velocity, i, 0, iv);
+            setEntry(velocity, i, 0, R(iv));
             continue;
         }
 
@@ -127,7 +136,7 @@ Vector* velocityAtPosition(Vector* initPos, Vector* initVel, Vector* acceleratio
             return NULL;
         }
 
-        setEntry(velocity, i, 0, iv + a * t);
+        setEntry(velocity, i, 0, R(iv + a * t));
     }
 
     return velocity;
@@ -233,7 +242,7 @@ Vector* netForce(Body* body) {
 	    Vector* zeroForce = constructVector(body->pos->numRows);
 	    if (!zeroForce) return NULL;
 	    for (int i = 0; i < zeroForce->numRows; i++) {
-	        setEntry(zeroForce, i, 0, 0);
+	        setEntry(zeroForce, i, 0, R(0));
 	    }
 	    return zeroForce;
     }
@@ -258,7 +267,7 @@ Vector* accelerationFromForce(Body* body) {
     if (!body) return NULL;
 
     Vector* net = netForce(body);
-    Vector* a = scaleVector(net, (double)1/body->mass);
+    Vector* a = scaleVector(net, R(1.0 / body->mass));
     freeVector(net);
     return a;
 }
@@ -270,7 +279,7 @@ Force* gravityForce(Body* body) {
 
     Vector* gVec = constructVector(body->pos->numRows);
     if (!gVec) return NULL;
-    setEntry(gVec, 1, 0, -body->mass * A_GRAVITY);
+    setEntry(gVec, 1, 0, R(-body->mass * A_GRAVITY));
 
     Vector* tail = copyMatrix(body->pos);
     if (!tail) {
@@ -295,12 +304,12 @@ Force* normalForce(Body* body, Vector* surfaceNormal) {
         freeVector(nHat);
         return NULL;
     }
-    setEntry(weight, 1, 0, -body->mass * A_GRAVITY);
+    setEntry(weight, 1, 0, R(-body->mass * A_GRAVITY));
 
-    double proj = vectorDotProduct(weight, nHat);
+    double proj = re(vectorDotProduct(weight, nHat));
     freeVector(weight);
 
-    Vector* forceVec = scaleVector(nHat, -proj);
+    Vector* forceVec = scaleVector(nHat, R(-proj));
     freeVector(nHat);
     if (!forceVec) return NULL;
 
@@ -324,7 +333,7 @@ Force* frictionForce(Force* normal, double mu, Vector* direction) {
     if (!unitDir) return NULL;
 
     double mag = mu * l2Norm(normal->vector);
-    Vector* vec = scaleVector(unitDir, mag);
+    Vector* vec = scaleVector(unitDir, R(mag));
     freeVector(unitDir);
     if (!vec) return NULL;
 
@@ -354,7 +363,7 @@ Vector* momentumVector(Body* body) {
     double mass = body->mass;
     Vector* mom = constructVector(dim);
     for (int i = 0; i < dim; i++) {
-        setEntry(mom, i, 0, mass * getEntry(body->velocity, i, 0));
+        setEntry(mom, i, 0, R(mass * re(getEntry(body->velocity, i, 0))));
     }
 
     return mom;
@@ -373,7 +382,7 @@ double gravPotentialEnergy(Body* body, double height) {
     if (!body) return NAN;
     if (height == 0) return 0;
 
-    return body->mass * height * A_GRAVITY;    
+    return body->mass * height * A_GRAVITY;
 }
 
 // Compute the potential energy of a body in a spring with spring constant k and compression x
@@ -387,7 +396,7 @@ double work(Force* F, Vector* disp) {
     if (!F || !disp) return NAN;
     if (F->vector->numRows != disp->numRows) return NAN;
 
-    return vectorDotProduct(F->vector, disp);
+    return re(vectorDotProduct(F->vector, disp));
 }
 
 // Compute the power delivered by a force F at velocity v
@@ -395,7 +404,7 @@ double power(Force* F, Vector* velocity) {
     if (!F || !velocity) return NAN;
     if (F->vector->numRows != velocity->numRows) return NAN;
 
-    return vectorDotProduct(F->vector, velocity);
+    return re(vectorDotProduct(F->vector, velocity));
 }
 
 // Compute the magnitude of the impulse delivered by a force F over a time interval time
@@ -411,7 +420,7 @@ Vector* impulseVector(Force* F, double time) {
     int dim = F->vector->numRows;
     Vector* imp = constructVector(dim);
     for (int i = 0; i < dim; i++) {
-        setEntry(imp, i, 0, time * getEntry(F->vector, i, 0));
+        setEntry(imp, i, 0, R(time * re(getEntry(F->vector, i, 0))));
     }
 
     return imp;
@@ -427,7 +436,7 @@ Vector* centerOfMass(Body** bodies, int nBodies) {
     int dim = bodies[0]->pos->numRows;
     Vector* com = constructVector(dim);
     if (!com) return NULL;
-    for (int j = 0; j < dim; j++) setEntry(com, j, 0, 0);
+    for (int j = 0; j < dim; j++) setEntry(com, j, 0, R(0));
     double totalMass = 0;
 
     for (int i = 0; i < nBodies; i++) {
@@ -438,14 +447,14 @@ Vector* centerOfMass(Body** bodies, int nBodies) {
         double mass = bodies[i]->mass;
         totalMass += mass;
         for (int j = 0; j < dim; j++) {
-            double prev = getEntry(com, j, 0);
-            setEntry(com, j, 0, prev + mass * getEntry(bodies[i]->pos, j, 0));
+            double prev = re(getEntry(com, j, 0));
+            setEntry(com, j, 0, R(prev + mass * re(getEntry(bodies[i]->pos, j, 0))));
         }
     }
 
     for (int j = 0; j < dim; j++) {
-        double prev = getEntry(com, j, 0);
-        setEntry(com, j, 0, prev / totalMass);
+        double prev = re(getEntry(com, j, 0));
+        setEntry(com, j, 0, R(prev / totalMass));
     }
 
     return com;
@@ -459,7 +468,7 @@ Vector* centerOfMassVelocity(Body** bodies, int nBodies) {
     int dim = bodies[0]->velocity->numRows;
     Vector* comVel = constructVector(dim);
     if (!comVel) return NULL;
-    for (int j = 0; j < dim; j++) setEntry(comVel, j, 0, 0);
+    for (int j = 0; j < dim; j++) setEntry(comVel, j, 0, R(0));
     double totalMass = 0;
 
     for (int i = 0; i < nBodies; i++) {
@@ -470,14 +479,14 @@ Vector* centerOfMassVelocity(Body** bodies, int nBodies) {
         double mass = bodies[i]->mass;
         totalMass += mass;
         for (int j = 0; j < dim; j++) {
-            double prev = getEntry(comVel, j, 0);
-            setEntry(comVel, j, 0, prev + mass * getEntry(bodies[i]->velocity, j, 0));
+            double prev = re(getEntry(comVel, j, 0));
+            setEntry(comVel, j, 0, R(prev + mass * re(getEntry(bodies[i]->velocity, j, 0))));
         }
     }
 
     for (int j = 0; j < dim; j++) {
-        double prev = getEntry(comVel, j, 0);
-        setEntry(comVel, j, 0, prev / totalMass);
+        double prev = re(getEntry(comVel, j, 0));
+        setEntry(comVel, j, 0, R(prev / totalMass));
     }
 
     return comVel;
@@ -489,14 +498,14 @@ void elasticCollision1D(Body* b1, Body* b2) {
 
     double m1 = b1->mass;
     double m2 = b2->mass;
-    double v1 = getEntry(b1->velocity, 0, 0);
-    double v2 = getEntry(b2->velocity, 0, 0);
+    double v1 = re(getEntry(b1->velocity, 0, 0));
+    double v2 = re(getEntry(b2->velocity, 0, 0));
 
     double newV1 = (v1 * (m1 - m2) + 2 * m2 * v2) / (m1 + m2);
     double newV2 = (v2 * (m2 - m1) + 2 * m1 * v1) / (m1 + m2);
 
-    setEntry(b1->velocity, 0, 0, newV1);
-    setEntry(b2->velocity, 0, 0, newV2);
+    setEntry(b1->velocity, 0, 0, R(newV1));
+    setEntry(b2->velocity, 0, 0, R(newV2));
 }
 
 // Handle an inelastic collision between two bodies and update them with the resulting properties (they stick together and move with the same velocity)
@@ -505,13 +514,13 @@ void inelasticCollision1D(Body* b1, Body* b2) {
 
     double m1 = b1->mass;
     double m2 = b2->mass;
-    double v1 = getEntry(b1->velocity, 0, 0);
-    double v2 = getEntry(b2->velocity, 0, 0);
+    double v1 = re(getEntry(b1->velocity, 0, 0));
+    double v2 = re(getEntry(b2->velocity, 0, 0));
 
     double newV = (m1 * v1 + m2 * v2) / (m1 + m2);
 
-    setEntry(b1->velocity, 0, 0, newV);
-    setEntry(b2->velocity, 0, 0, newV);
+    setEntry(b1->velocity, 0, 0, R(newV));
+    setEntry(b2->velocity, 0, 0, R(newV));
 }
 
 /* ---------- Rotational dynamics ---------- */
@@ -553,14 +562,14 @@ Vector* torque(Force* F, Vector* pivot) {
     if (!r) return NULL;
 
     if (dim == 2) {
-        double rx = getEntry(r, 0, 0);
-        double ry = getEntry(r, 1, 0);
-        double fx = getEntry(F->vector, 0, 0);
-        double fy = getEntry(F->vector, 1, 0);
+        double rx = re(getEntry(r, 0, 0));
+        double ry = re(getEntry(r, 1, 0));
+        double fx = re(getEntry(F->vector, 0, 0));
+        double fy = re(getEntry(F->vector, 1, 0));
         freeVector(r);
         Vector* t = constructVector(1);
         if (!t) return NULL;
-        setEntry(t, 0, 0, rx * fy - ry * fx);
+        setEntry(t, 0, 0, R(rx * fy - ry * fx));
         return t;
     }
 
@@ -588,15 +597,15 @@ Vector* angularMomentum(Body* body, Vector* pivot) {
     }
 
     if (dim == 2) {
-        double rx = getEntry(r, 0, 0);
-        double ry = getEntry(r, 1, 0);
-        double px = getEntry(p, 0, 0);
-        double py = getEntry(p, 1, 0);
+        double rx = re(getEntry(r, 0, 0));
+        double ry = re(getEntry(r, 1, 0));
+        double px = re(getEntry(p, 0, 0));
+        double py = re(getEntry(p, 1, 0));
         freeVector(r);
         freeVector(p);
         Vector* L = constructVector(1);
         if (!L) return NULL;
-        setEntry(L, 0, 0, rx * py - ry * px);
+        setEntry(L, 0, 0, R(rx * py - ry * px));
         return L;
     }
 
@@ -617,4 +626,3 @@ double angularAccelerationFromTorque(double netTorque, double I) {
     if (I <= 0) return NAN;
     return netTorque / I;
 }
-
