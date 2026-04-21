@@ -134,7 +134,7 @@ Vector* velocityAtPosition(Vector* initPos, Vector* initVel, Vector* acceleratio
 }
 
 // Returns the range, peak heightm and flight time of a projectile given initial velocity initVel, launch angle angle, from initial height initHeight
-double* projectileInfo(double initVel, double angle, double initHeight) {
+ProjectileInfo* getProjectileInfo(double initVel, double angle, double initHeight) {
     if (initVel < 0 || angle < 0 || angle > 90) return NULL;
 
     double radAngle = angle * M_PI / 180.0;
@@ -142,11 +142,11 @@ double* projectileInfo(double initVel, double angle, double initHeight) {
     double range = initVel * cos(radAngle) * timeOfFlight;
     double peakHeight = initHeight + (initVel * sin(radAngle)) * (initVel * sin(radAngle)) / (2 * A_GRAVITY);
 
-    double* results = (double*)malloc(3 * sizeof(double));
+    ProjectileInfo* results = malloc(sizeof(ProjectileInfo));
     if (!results) return NULL;
-    results[0] = range;
-    results[1] = peakHeight;
-    results[2] = timeOfFlight;
+    results->range = range;
+    results->peakHeight = peakHeight;
+    results->timeOfFlight = timeOfFlight;
 
     return results;
 }
@@ -186,7 +186,7 @@ Body* constructBody(double mass, Vector* pos, Vector* initVel) {
 
 // Construct a Force
 Force* constructForce(char* name, Vector* vector, Vector* tailPos) {
-    if (*name == '\0' || !vector || !tailPos) return NULL;
+    if (!name || *name == '\0' || !vector || !tailPos) return NULL;
 
     Force* force = malloc(sizeof(Force));
     if (!force) return NULL;
@@ -241,7 +241,13 @@ Vector* netForce(Body* body) {
     Vector* net = constructVector(body->pos->numRows);
     if (!net) return NULL;
     for (int i = 0; i < body->nForces; i++) {
-        net = addVectors(net, body->forces[i]->vector);
+        Vector* tmp = addVectors(net, body->forces[i]->vector);
+        if (!tmp) {
+            free(net);
+            return NULL;
+        }
+        free(net);
+        net = tmp;
     }
 
     return net;
@@ -333,11 +339,25 @@ Force* frictionForce(Force* normal, double mu, Vector* direction) {
 
 /* ---------- Conservation quantities ---------- */
 
-// Compute the momentum of a body
-double momentum(Body* body) {
+// Compute the magnitude of the momentum of a body
+double momentumMagnitude(Body* body) {
     if (!body) return NAN;
 
     return body->mass * l2Norm(body->velocity);
+}
+
+// Compute the momentum vector of a body
+Vector* momentumVector(Body* body) {
+    if (!body) return NULL;
+
+    int dim = body->velocity->numRows;
+    double mass = body->mass;
+    Vector* mom = constructVector(dim);
+    for (int i = 0; i < dim; i++) {
+        setEntry(mom, i, 0, mass * getEntry(body->velocity, i, 0));
+    }
+
+    return mom;
 }
 
 // Compute the kinetic energy of a body
@@ -378,21 +398,223 @@ double power(Force* F, Vector* velocity) {
     return vectorDotProduct(F->vector, velocity);
 }
 
-// Compute the impulse delivered by a force F over a time interval time
-double impulse(Force* F, double time) {
+// Compute the magnitude of the impulse delivered by a force F over a time interval time
+double impulseMagnitude(Force* F, double time) {
     if (!F || time < 0) return NAN;
     return l2Norm(F->vector) * time;
 }
 
+// Compute the impulse vector of a body
+Vector* impulseVector(Force* F, double time) {
+    if (!F) return NULL;
+
+    int dim = F->vector->numRows;
+    Vector* imp = constructVector(dim);
+    for (int i = 0; i < dim; i++) {
+        setEntry(imp, i, 0, time * getEntry(F->vector, i, 0));
+    }
+
+    return imp;
+}
+
 /* ---------- Collisions ---------- */
 
+// Find the center of mass of a system of bodies
+Vector* centerOfMass(Body** bodies, int nBodies) {
+    if (!bodies || nBodies <= 0) return NULL;
+    if (!bodies[0] || !bodies[0]->pos) return NULL;
 
+    int dim = bodies[0]->pos->numRows;
+    Vector* com = constructVector(dim);
+    if (!com) return NULL;
+    for (int j = 0; j < dim; j++) setEntry(com, j, 0, 0);
+    double totalMass = 0;
+
+    for (int i = 0; i < nBodies; i++) {
+        if (!bodies[i] || bodies[i]->pos->numRows != dim) {
+            freeVector(com);
+            return NULL;
+        }
+        double mass = bodies[i]->mass;
+        totalMass += mass;
+        for (int j = 0; j < dim; j++) {
+            double prev = getEntry(com, j, 0);
+            setEntry(com, j, 0, prev + mass * getEntry(bodies[i]->pos, j, 0));
+        }
+    }
+
+    for (int j = 0; j < dim; j++) {
+        double prev = getEntry(com, j, 0);
+        setEntry(com, j, 0, prev / totalMass);
+    }
+
+    return com;
+}
+
+// Find the velocity of the center of mass of a system of bodies by taking the mass-weighted average of their velocities
+Vector* centerOfMassVelocity(Body** bodies, int nBodies) {
+    if (!bodies || nBodies <= 0) return NULL;
+    if (!bodies[0] || !bodies[0]->velocity) return NULL;
+
+    int dim = bodies[0]->velocity->numRows;
+    Vector* comVel = constructVector(dim);
+    if (!comVel) return NULL;
+    for (int j = 0; j < dim; j++) setEntry(comVel, j, 0, 0);
+    double totalMass = 0;
+
+    for (int i = 0; i < nBodies; i++) {
+        if (!bodies[i] || bodies[i]->velocity->numRows != dim) {
+            freeVector(comVel);
+            return NULL;
+        }
+        double mass = bodies[i]->mass;
+        totalMass += mass;
+        for (int j = 0; j < dim; j++) {
+            double prev = getEntry(comVel, j, 0);
+            setEntry(comVel, j, 0, prev + mass * getEntry(bodies[i]->velocity, j, 0));
+        }
+    }
+
+    for (int j = 0; j < dim; j++) {
+        double prev = getEntry(comVel, j, 0);
+        setEntry(comVel, j, 0, prev / totalMass);
+    }
+
+    return comVel;
+}
+
+// Handle an elastic collision between two bodies and update them with the resulting properties
+void elasticCollision1D(Body* b1, Body* b2) {
+    if (!b1 || !b2) return;
+
+    double m1 = b1->mass;
+    double m2 = b2->mass;
+    double v1 = getEntry(b1->velocity, 0, 0);
+    double v2 = getEntry(b2->velocity, 0, 0);
+
+    double newV1 = (v1 * (m1 - m2) + 2 * m2 * v2) / (m1 + m2);
+    double newV2 = (v2 * (m2 - m1) + 2 * m1 * v1) / (m1 + m2);
+
+    setEntry(b1->velocity, 0, 0, newV1);
+    setEntry(b2->velocity, 0, 0, newV2);
+}
+
+// Handle an inelastic collision between two bodies and update them with the resulting properties (they stick together and move with the same velocity)
+void inelasticCollision1D(Body* b1, Body* b2) {
+    if (!b1 || !b2) return;
+
+    double m1 = b1->mass;
+    double m2 = b2->mass;
+    double v1 = getEntry(b1->velocity, 0, 0);
+    double v2 = getEntry(b2->velocity, 0, 0);
+
+    double newV = (m1 * v1 + m2 * v2) / (m1 + m2);
+
+    setEntry(b1->velocity, 0, 0, newV);
+    setEntry(b2->velocity, 0, 0, newV);
+}
 
 /* ---------- Rotational dynamics ---------- */
 
+// Get the moment of inertia of a point mass at distance r from the axis
+double momentOfInertiaPoint(double m, double r) {
+    if (m < 0 || r < 0) return NAN;
+    return m * r * r;
+}
 
+// Get the moment of inertia of a rod of length L about its center of mass
+double momentOfInertiaRod(double m, double L) {
+    if (m < 0 || L < 0) return NAN;
+    return (1.0 / 12.0) * m * L * L;
+}
 
-/* ---------- Multibody systems ---------- */
+// Get the moment of inertia of a uniform disk of radius R about its central axis
+double momentOfInertiaDisk(double m, double R) {
+    if (m < 0 || R < 0) return NAN;
+    return 0.5 * m * R * R;
+}
 
+// Apply the parallel axis theorem to find the moment of inertia
+double parallelAxisTheorem(double I_cm, double m, double d) {
+    if (I_cm < 0 || m < 0) return NAN;
+    return I_cm + m * d * d;
+}
 
+// Get the torque applied by a force about a pivot. In 2D returns a 1-vector (scalar z-component);
+// in 3D returns the full r x F cross product.
+Vector* torque(Force* F, Vector* pivot) {
+    if (!F || !pivot) return NULL;
+    if (F->vector->numRows != pivot->numRows) return NULL;
+
+    int dim = F->vector->numRows;
+    if (dim != 2 && dim != 3) return NULL;
+
+    Vector* r = subtractVectors(F->tailPos, pivot);
+    if (!r) return NULL;
+
+    if (dim == 2) {
+        double rx = getEntry(r, 0, 0);
+        double ry = getEntry(r, 1, 0);
+        double fx = getEntry(F->vector, 0, 0);
+        double fy = getEntry(F->vector, 1, 0);
+        freeVector(r);
+        Vector* t = constructVector(1);
+        if (!t) return NULL;
+        setEntry(t, 0, 0, rx * fy - ry * fx);
+        return t;
+    }
+
+    Vector* t = crossProduct(r, F->vector);
+    freeVector(r);
+    return t;
+}
+
+// Get the angular momentum of a Body about a pivot (L = r x p).
+// In 2D returns a 1-vector (scalar z-component); in 3D returns the full cross product.
+Vector* angularMomentum(Body* body, Vector* pivot) {
+    if (!body || !pivot) return NULL;
+    if (!body->pos || !body->velocity) return NULL;
+    if (body->pos->numRows != pivot->numRows) return NULL;
+
+    int dim = body->pos->numRows;
+    if (dim != 2 && dim != 3) return NULL;
+
+    Vector* r = subtractVectors(body->pos, pivot);
+    if (!r) return NULL;
+    Vector* p = momentumVector(body);
+    if (!p) {
+        freeVector(r);
+        return NULL;
+    }
+
+    if (dim == 2) {
+        double rx = getEntry(r, 0, 0);
+        double ry = getEntry(r, 1, 0);
+        double px = getEntry(p, 0, 0);
+        double py = getEntry(p, 1, 0);
+        freeVector(r);
+        freeVector(p);
+        Vector* L = constructVector(1);
+        if (!L) return NULL;
+        setEntry(L, 0, 0, rx * py - ry * px);
+        return L;
+    }
+
+    Vector* L = crossProduct(r, p);
+    freeVector(r);
+    freeVector(p);
+    return L;
+}
+
+// Get the rotational kinetic energy given the moment of inertia and angular velocity
+double rotationalKineticEnergy(double I, double omega) {
+    if (I < 0) return NAN;
+    return 0.5 * I * omega * omega;
+}
+
+// Get the angular acceleration about a fixed axis given the net torque and moment of inertia
+double angularAccelerationFromTorque(double netTorque, double I) {
+    if (I <= 0) return NAN;
+    return netTorque / I;
+}
 
