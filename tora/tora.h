@@ -3,37 +3,19 @@
 
 #include<stdbool.h>
 #include "hebi.h"
+#include "sokko.h"
 #include "usagi.h"
 
 /* ---------- Definitions of structs ---------- */
 
-typedef struct ComplexMatrix ComplexMatrix;
-typedef struct CyclotomicField CyclotomicField;
-typedef struct CyclotomicElement CyclotomicElement;
 typedef struct ConjugacyClass ConjugacyClass;
 typedef struct Representation Representation;
 typedef struct Character Character;
 typedef struct CharacterTable CharacterTable;
 
-
-struct ComplexMatrix {
-    void** data;
-    int numRows;
-    int numCols;
-};
-
-struct CyclotomicField {
-    int n;
-};
-
-struct CyclotomicElement {
-    CyclotomicField field;
-    Fraction* coeffs;
-    int len;
-};
-
 struct ConjugacyClass {
     Group* group;
+    GroupElement* rep;
     int* indices;
     int size;
     int elementOrder;
@@ -42,7 +24,7 @@ struct ConjugacyClass {
 struct Representation {
     char* repr;
     Group* group;
-    ComplexMatrix** images;
+    Matrix** images;
     int dim;
 };
 
@@ -50,7 +32,7 @@ struct Character {
     char* repr;
     Group* group;
     ConjugacyClass** classes;
-    CyclotomicElement** values;
+    ComplexNumber** values;
     int numClasses;
 };
 
@@ -58,8 +40,24 @@ struct CharacterTable {
     Group* group;
     ConjugacyClass** classes;
     Character** irreps;
+    ComplexNumber*** values;
+    int numClasses;
     int numIrreps;
-    CyclotomicField* valueField
 };
+
+
+/* ---------- Construct and free methods ---------- */
+ConjugacyClass* constructConjugacyClass(Group* group, GroupElement* rep);
+void freeConjugacyClass(ConjugacyClass* class);
+Representation* constructRepresentation(Group* group, char* repr, Matrix** images, int dim);
+void freeRepresentation(Representation* rep);
+Character* constructCharacter(Group* group, char* repr, ConjugacyClass** classes, ComplexNumber* values, int numClasses);
+void freeCharacter(Character* character);
+CharacterTable* constructCharacterTable(Group* group, ConjugacyClass** classes, Character** irreps, ComplexNumber** values, int numClasses, int numIrreps);
+void freeCharacterTable(CharacterTable* table);
+
+
+/* ----------  ---------- */
+
 
 #endif
