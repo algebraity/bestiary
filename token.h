@@ -4,13 +4,14 @@
 #include<stddef.h>
 
 typedef enum {
-    TOK_IDENT, TOK_NUMBER, TOK_EQUALS, TOK_LBRACE, TOK_RBRACE,
+    TOK_NONE=0,
+    TOK_IDENT, TOK_NUMBER, TOK_DECIMAL, TOK_EQUALS, TOK_LBRACE, TOK_RBRACE,
     TOK_COMMAND,         // e.g. \det or \otimes
     TOK_AMP, TOK_DBLBACKSLASH,
     TOK_PLUS, TOK_MINUS, TOK_STAR, TOK_SLASH,    // Math operations
     TOK_LPAREN, TOK_RPAREN,  // parentehses
+    TOK_LBRACK, TOK_RBRACK,  // left and right brackets
     TOK_COMMA,
-    TOK_DOT,
     TOK_CARET,
     TOK_UNDERSCORE,
     TOK_COLON,
@@ -21,10 +22,9 @@ typedef enum {
     TOK_DOLLAR,
     TOK_PERCENT,
     TOK_TILDE,
+    TOK_DOT,    // .
     TOK_HASH,
-    TOK_NEWLINE,
-    TOK_EOF,
-    TOK_NONE=0
+    TOK_EOF
     /* ... */
 } TokenKind;
 
