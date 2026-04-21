@@ -322,43 +322,43 @@ void testVelocityAtPosition() {
 }
 
 void testProjectileInfo() {
-    SECTION("projectileInfo");
-    CHECK(projectileInfo(-1, 45, 0) == NULL, "negative initVel NULL");
-    CHECK(projectileInfo(10, -1, 0) == NULL, "negative angle NULL");
-    CHECK(projectileInfo(10, 91, 0) == NULL, "angle > 90 NULL");
+    SECTION("getProjectileInfo");
+    CHECK(getProjectileInfo(-1, 45, 0) == NULL, "negative initVel NULL");
+    CHECK(getProjectileInfo(10, -1, 0) == NULL, "negative angle NULL");
+    CHECK(getProjectileInfo(10, 91, 0) == NULL, "angle > 90 NULL");
 
     // Launch at 45 deg from ground, v0=10:
     //   range     = v^2 * sin(2θ) / g = 100 / g
     //   peak      = (v*sinθ)^2 / (2g) = 25 / g
     //   flightT   = 2*v*sinθ / g = 10*sqrt(2) / g
-    double* i45 = projectileInfo(10, 45, 0);
+    ProjectileInfo* i45 = getProjectileInfo(10, 45, 0);
     CHECK(i45 != NULL, "allocated");
-    CHECK(approx(i45[0], 100.0 / A_GRAVITY, 1e-6), "45 deg: range = 100/g");
-    CHECK(approx(i45[1], 25.0 / A_GRAVITY, 1e-6), "45 deg: peak = 25/g");
-    CHECK(approx(i45[2], 10.0 * sqrt(2.0) / A_GRAVITY, 1e-6), "45 deg: flight = 10*sqrt(2)/g");
+    CHECK(approx(i45->range, 100.0 / A_GRAVITY, 1e-6), "45 deg: range = 100/g");
+    CHECK(approx(i45->peakHeight, 25.0 / A_GRAVITY, 1e-6), "45 deg: peak = 25/g");
+    CHECK(approx(i45->timeOfFlight, 10.0 * sqrt(2.0) / A_GRAVITY, 1e-6), "45 deg: flight = 10*sqrt(2)/g");
     free(i45);
 
     // Straight up (90 deg) from ground, v0=10:
     //   range = 0, peak = v^2/(2g) = 50/g, flight = 2v/g = 20/g
-    double* iUp = projectileInfo(10, 90, 0);
-    CHECK(approx(iUp[0], 0.0, 1e-6), "straight up: range = 0");
-    CHECK(approx(iUp[1], 50.0 / A_GRAVITY, 1e-6), "straight up: peak = 50/g");
-    CHECK(approx(iUp[2], 20.0 / A_GRAVITY, 1e-6), "straight up: flight = 20/g");
+    ProjectileInfo* iUp = getProjectileInfo(10, 90, 0);
+    CHECK(approx(iUp->range, 0.0, 1e-6), "straight up: range = 0");
+    CHECK(approx(iUp->peakHeight, 50.0 / A_GRAVITY, 1e-6), "straight up: peak = 50/g");
+    CHECK(approx(iUp->timeOfFlight, 20.0 / A_GRAVITY, 1e-6), "straight up: flight = 20/g");
     free(iUp);
 
     // Horizontal (0 deg) from height h=20, v0=10:
     //   flight = sqrt(2h/g), range = v*flight, peak = h
-    double* iH = projectileInfo(10, 0, 20);
+    ProjectileInfo* iH = getProjectileInfo(10, 0, 20);
     double tH = sqrt(2.0 * 20.0 / A_GRAVITY);
-    CHECK(approx(iH[2], tH, 1e-6), "horizontal: flight = sqrt(2h/g)");
-    CHECK(approx(iH[0], 10.0 * tH, 1e-6), "horizontal: range = v*flight");
-    CHECK(approx(iH[1], 20.0, 1e-6), "horizontal: peak = h");
+    CHECK(approx(iH->timeOfFlight, tH, 1e-6), "horizontal: flight = sqrt(2h/g)");
+    CHECK(approx(iH->range, 10.0 * tH, 1e-6), "horizontal: range = v*flight");
+    CHECK(approx(iH->peakHeight, 20.0, 1e-6), "horizontal: peak = h");
     free(iH);
 
     // Zero velocity: range = 0, peak = h
-    double* iZero = projectileInfo(0, 45, 5);
-    CHECK(approx(iZero[0], 0.0, 1e-6), "v=0: range = 0");
-    CHECK(approx(iZero[1], 5.0, 1e-6), "v=0: peak = h");
+    ProjectileInfo* iZero = getProjectileInfo(0, 45, 5);
+    CHECK(approx(iZero->range, 0.0, 1e-6), "v=0: range = 0");
+    CHECK(approx(iZero->peakHeight, 5.0, 1e-6), "v=0: peak = h");
     free(iZero);
 }
 
@@ -593,13 +593,21 @@ void testFrictionForce() {
 /* ---------- Conservation tests ---------- */
 
 void testMomentum() {
-    SECTION("momentum");
-    CHECK(isnan(momentum(NULL)), "NULL body NAN");
+    SECTION("momentumMagnitude / momentumVector");
+    CHECK(isnan(momentumMagnitude(NULL)), "NULL body NAN");
+    CHECK(momentumVector(NULL) == NULL, "NULL body vector NULL");
 
     Vector* p = constructVector3(0, 0, 0);
     Vector* v = constructVector3(3, 4, 0);
     Body* b = constructBody(2.0, p, v);
-    CHECK(approx(momentum(b), 10.0, 1e-10), "m=2, |v|=5 -> 10");
+    CHECK(approx(momentumMagnitude(b), 10.0, 1e-10), "m=2, |v|=5 -> |p|=10");
+
+    Vector* pv = momentumVector(b);
+    CHECK(pv != NULL, "vector allocated");
+    CHECK(approx(getEntry(pv, 0, 0), 6.0, 1e-10), "p_x = m*v_x = 6");
+    CHECK(approx(getEntry(pv, 1, 0), 8.0, 1e-10), "p_y = m*v_y = 8");
+    CHECK(approx(getEntry(pv, 2, 0), 0.0, 1e-10), "p_z = 0");
+    freeVector(pv);
 
     free(b->forces); free(b);
     freeVector(p); freeVector(v);
@@ -695,19 +703,429 @@ void testPower() {
 }
 
 void testImpulse() {
-    SECTION("impulse");
+    SECTION("impulseMagnitude / impulseVector");
     Vector* fv = constructVector3(3, 4, 0);  // |F| = 5
     Vector* ft = constructVector3(0, 0, 0);
     Force* f = constructForce("f", fv, ft);
 
-    CHECK(isnan(impulse(NULL, 1)), "NULL F NAN");
-    CHECK(isnan(impulse(f, -1)), "negative time NAN");
+    CHECK(isnan(impulseMagnitude(NULL, 1)), "NULL F NAN");
+    CHECK(isnan(impulseMagnitude(f, -1)), "negative time NAN");
+    CHECK(impulseVector(NULL, 1) == NULL, "NULL F vector NULL");
 
-    CHECK(approx(impulse(f, 2), 10.0, 1e-10), "|F|*t = 10");
-    CHECK(approx(impulse(f, 0), 0.0, 1e-10), "t=0 -> 0");
+    CHECK(approx(impulseMagnitude(f, 2), 10.0, 1e-10), "|F|*t = 10");
+    CHECK(approx(impulseMagnitude(f, 0), 0.0, 1e-10), "t=0 -> 0");
+
+    // Vector: J = F * t
+    Vector* J = impulseVector(f, 2);
+    CHECK(J != NULL, "vector allocated");
+    CHECK(approx(getEntry(J, 0, 0), 6.0, 1e-10), "J_x = F_x*t = 6");
+    CHECK(approx(getEntry(J, 1, 0), 8.0, 1e-10), "J_y = F_y*t = 8");
+    CHECK(approx(getEntry(J, 2, 0), 0.0, 1e-10), "J_z = 0");
+    freeVector(J);
+
+    Vector* J0 = impulseVector(f, 0);
+    CHECK(approx(l2Norm(J0), 0.0, 1e-10), "t=0: |J|=0");
+    freeVector(J0);
 
     free(f);
     freeVector(fv); freeVector(ft);
+}
+
+/* ---------- Collision tests ---------- */
+
+void testCenterOfMass() {
+    SECTION("centerOfMass");
+    CHECK(centerOfMass(NULL, 3) == NULL, "NULL bodies NULL");
+
+    Vector* p1 = constructVector3(0, 0, 0);
+    Vector* v1 = constructVector3(0, 0, 0);
+    Body* b1 = constructBody(2.0, p1, v1);
+
+    Vector* p2 = constructVector3(6, 0, 0);
+    Vector* v2 = constructVector3(0, 0, 0);
+    Body* b2 = constructBody(1.0, p2, v2);
+
+    Body* arr[2] = {b1, b2};
+    CHECK(centerOfMass(arr, 0) == NULL, "nBodies=0 NULL");
+    CHECK(centerOfMass(arr, -1) == NULL, "nBodies<0 NULL");
+
+    // m1=2 at 0, m2=1 at 6: com = (2*0 + 1*6)/3 = 2
+    Vector* com = centerOfMass(arr, 2);
+    CHECK(com != NULL, "allocated");
+    CHECK(approx(getEntry(com, 0, 0), 2.0, 1e-10), "com x = 2");
+    CHECK(approx(getEntry(com, 1, 0), 0.0, 1e-10), "com y = 0");
+    CHECK(approx(getEntry(com, 2, 0), 0.0, 1e-10), "com z = 0");
+    freeVector(com);
+
+    // Single body: com = its position
+    Body* one[1] = {b1};
+    Vector* comOne = centerOfMass(one, 1);
+    CHECK(matrixComp(comOne, p1, 1e-10), "single body: com = its pos");
+    freeVector(comOne);
+
+    // Equal masses at (2,0,0) and (-2,0,0): com at origin
+    Vector* pa = constructVector3(2, 0, 0);
+    Vector* va = constructVector3(0, 0, 0);
+    Body* ba = constructBody(1.0, pa, va);
+    Vector* pb = constructVector3(-2, 0, 0);
+    Vector* vb = constructVector3(0, 0, 0);
+    Body* bb = constructBody(1.0, pb, vb);
+    Body* pair[2] = {ba, bb};
+    Vector* comPair = centerOfMass(pair, 2);
+    Vector* zero = constructVector3(0, 0, 0);
+    CHECK(matrixComp(comPair, zero, 1e-10), "equal masses symmetric: com at origin");
+    freeVector(comPair); freeVector(zero);
+
+    // Dim mismatch: second body is 2D
+    Vector* p2D = constructVector2(1, 1);
+    Vector* v2D = constructVector2(0, 0);
+    Body* bMix = constructBody(1.0, p2D, v2D);
+    Body* mixed[2] = {b1, bMix};
+    CHECK(centerOfMass(mixed, 2) == NULL, "dim mismatch NULL");
+
+    free(b1->forces); free(b1);
+    free(b2->forces); free(b2);
+    free(ba->forces); free(ba);
+    free(bb->forces); free(bb);
+    free(bMix->forces); free(bMix);
+    freeVector(p1); freeVector(v1); freeVector(p2); freeVector(v2);
+    freeVector(pa); freeVector(va); freeVector(pb); freeVector(vb);
+    freeVector(p2D); freeVector(v2D);
+}
+
+void testCenterOfMassVelocity() {
+    SECTION("centerOfMassVelocity");
+    CHECK(centerOfMassVelocity(NULL, 3) == NULL, "NULL bodies NULL");
+
+    Vector* p1 = constructVector3(0, 0, 0);
+    Vector* v1 = constructVector3(4, 0, 0);
+    Body* b1 = constructBody(2.0, p1, v1);
+
+    Vector* p2 = constructVector3(0, 0, 0);
+    Vector* v2 = constructVector3(-2, 0, 0);
+    Body* b2 = constructBody(1.0, p2, v2);
+
+    Body* arr[2] = {b1, b2};
+    CHECK(centerOfMassVelocity(arr, 0) == NULL, "nBodies=0 NULL");
+
+    // v_cm = (2*4 + 1*(-2))/3 = 6/3 = 2
+    Vector* vcm = centerOfMassVelocity(arr, 2);
+    CHECK(vcm != NULL, "allocated");
+    CHECK(approx(getEntry(vcm, 0, 0), 2.0, 1e-10), "v_cm x = 2");
+    CHECK(approx(getEntry(vcm, 1, 0), 0.0, 1e-10), "v_cm y = 0");
+    freeVector(vcm);
+
+    // Zero-momentum frame: equal masses, opposite velocities
+    Vector* pa = constructVector3(0, 0, 0);
+    Vector* va = constructVector3(5, 0, 0);
+    Body* ba = constructBody(3.0, pa, va);
+    Vector* pb = constructVector3(0, 0, 0);
+    Vector* vb = constructVector3(-5, 0, 0);
+    Body* bb = constructBody(3.0, pb, vb);
+    Body* pair[2] = {ba, bb};
+    Vector* vcmZero = centerOfMassVelocity(pair, 2);
+    Vector* zero = constructVector3(0, 0, 0);
+    CHECK(matrixComp(vcmZero, zero, 1e-10), "zero-momentum frame: v_cm = 0");
+    freeVector(vcmZero); freeVector(zero);
+
+    free(b1->forces); free(b1);
+    free(b2->forces); free(b2);
+    free(ba->forces); free(ba);
+    free(bb->forces); free(bb);
+    freeVector(p1); freeVector(v1); freeVector(p2); freeVector(v2);
+    freeVector(pa); freeVector(va); freeVector(pb); freeVector(vb);
+}
+
+void testElasticCollision1D() {
+    SECTION("elasticCollision1D");
+
+    // Equal masses swap velocities
+    Vector* p1 = constructVector3(0, 0, 0);
+    Vector* v1 = constructVector3(3, 0, 0);
+    Body* b1 = constructBody(1.0, p1, v1);
+    Vector* p2 = constructVector3(5, 0, 0);
+    Vector* v2 = constructVector3(-1, 0, 0);
+    Body* b2 = constructBody(1.0, p2, v2);
+
+    elasticCollision1D(b1, b2);
+    CHECK(approx(getEntry(b1->velocity, 0, 0), -1.0, 1e-10), "equal mass: b1 takes b2's v");
+    CHECK(approx(getEntry(b2->velocity, 0, 0), 3.0, 1e-10), "equal mass: b2 takes b1's v");
+
+    // Momentum and KE conservation on a nontrivial mass ratio
+    Vector* pa = constructVector3(0, 0, 0);
+    Vector* va = constructVector3(4, 0, 0);
+    Body* ba = constructBody(3.0, pa, va);
+    Vector* pb = constructVector3(5, 0, 0);
+    Vector* vb = constructVector3(-2, 0, 0);
+    Body* bb = constructBody(1.0, pb, vb);
+
+    double pBefore = 3.0 * 4.0 + 1.0 * (-2.0);
+    double keBefore = 0.5 * 3.0 * 16.0 + 0.5 * 1.0 * 4.0;
+    elasticCollision1D(ba, bb);
+    double va2 = getEntry(ba->velocity, 0, 0);
+    double vb2 = getEntry(bb->velocity, 0, 0);
+    double pAfter = 3.0 * va2 + 1.0 * vb2;
+    double keAfter = 0.5 * 3.0 * va2 * va2 + 0.5 * 1.0 * vb2 * vb2;
+    CHECK(approx(pAfter, pBefore, 1e-10), "momentum conserved");
+    CHECK(approx(keAfter, keBefore, 1e-10), "KE conserved");
+
+    // Heavy stationary target (m2 >> m1): light body nearly reverses
+    Vector* ph = constructVector3(0, 0, 0);
+    Vector* vh = constructVector3(5, 0, 0);
+    Body* bh = constructBody(0.001, ph, vh);
+    Vector* pHvy = constructVector3(1, 0, 0);
+    Vector* vHvy = constructVector3(0, 0, 0);
+    Body* bHvy = constructBody(1000.0, pHvy, vHvy);
+    elasticCollision1D(bh, bHvy);
+    CHECK(approx(getEntry(bh->velocity, 0, 0), -5.0, 1e-2), "light bounces off heavy: ~-v");
+    CHECK(approx(getEntry(bHvy->velocity, 0, 0), 0.0, 1e-2), "heavy barely moves");
+
+    // NULL safety
+    elasticCollision1D(NULL, b1);
+    elasticCollision1D(b1, NULL);
+    CHECK(1, "NULL args no crash");
+
+    free(b1->forces); free(b1);
+    free(b2->forces); free(b2);
+    free(ba->forces); free(ba);
+    free(bb->forces); free(bb);
+    free(bh->forces); free(bh);
+    free(bHvy->forces); free(bHvy);
+    freeVector(p1); freeVector(v1); freeVector(p2); freeVector(v2);
+    freeVector(pa); freeVector(va); freeVector(pb); freeVector(vb);
+    freeVector(ph); freeVector(vh); freeVector(pHvy); freeVector(vHvy);
+}
+
+void testInelasticCollision1D() {
+    SECTION("inelasticCollision1D");
+
+    // Equal masses head-on with opposite speeds: both stop
+    Vector* p1 = constructVector3(0, 0, 0);
+    Vector* v1 = constructVector3(3, 0, 0);
+    Body* b1 = constructBody(1.0, p1, v1);
+    Vector* p2 = constructVector3(5, 0, 0);
+    Vector* v2 = constructVector3(-3, 0, 0);
+    Body* b2 = constructBody(1.0, p2, v2);
+
+    inelasticCollision1D(b1, b2);
+    CHECK(approx(getEntry(b1->velocity, 0, 0), 0.0, 1e-10), "symmetric headon: b1 stops");
+    CHECK(approx(getEntry(b2->velocity, 0, 0), 0.0, 1e-10), "symmetric headon: b2 stops");
+
+    // Momentum conserved, KE lost
+    Vector* pa = constructVector3(0, 0, 0);
+    Vector* va = constructVector3(10, 0, 0);
+    Body* ba = constructBody(2.0, pa, va);
+    Vector* pb = constructVector3(5, 0, 0);
+    Vector* vb = constructVector3(0, 0, 0);
+    Body* bb = constructBody(3.0, pb, vb);
+
+    double pBefore = 2.0 * 10.0 + 3.0 * 0.0;
+    double keBefore = 0.5 * 2.0 * 100.0 + 0.0;
+    inelasticCollision1D(ba, bb);
+    double va2 = getEntry(ba->velocity, 0, 0);
+    double vb2 = getEntry(bb->velocity, 0, 0);
+    CHECK(approx(va2, vb2, 1e-10), "inelastic: velocities equal");
+    CHECK(approx(va2, pBefore / 5.0, 1e-10), "v = p_total / M_total");
+    double keAfter = 0.5 * 5.0 * va2 * va2;
+    CHECK(keAfter < keBefore, "KE lost in inelastic");
+
+    // NULL safety
+    inelasticCollision1D(NULL, b1);
+    inelasticCollision1D(b1, NULL);
+    CHECK(1, "NULL args no crash");
+
+    free(b1->forces); free(b1);
+    free(b2->forces); free(b2);
+    free(ba->forces); free(ba);
+    free(bb->forces); free(bb);
+    freeVector(p1); freeVector(v1); freeVector(p2); freeVector(v2);
+    freeVector(pa); freeVector(va); freeVector(pb); freeVector(vb);
+}
+
+/* ---------- Rotational dynamics tests ---------- */
+
+void testMomentOfInertiaPoint() {
+    SECTION("momentOfInertiaPoint");
+    CHECK(isnan(momentOfInertiaPoint(-1, 1)), "negative m NAN");
+    CHECK(isnan(momentOfInertiaPoint(1, -1)), "negative r NAN");
+    CHECK(approx(momentOfInertiaPoint(2, 3), 18.0, 1e-10), "m=2, r=3: I = mr^2 = 18");
+    CHECK(approx(momentOfInertiaPoint(5, 0), 0.0, 1e-10), "r=0: I=0");
+    CHECK(approx(momentOfInertiaPoint(0, 7), 0.0, 1e-10), "m=0: I=0");
+}
+
+void testMomentOfInertiaRod() {
+    SECTION("momentOfInertiaRod");
+    CHECK(isnan(momentOfInertiaRod(-1, 1)), "negative m NAN");
+    CHECK(isnan(momentOfInertiaRod(1, -1)), "negative L NAN");
+    // m=12, L=1: I = (1/12)*12*1 = 1
+    CHECK(approx(momentOfInertiaRod(12, 1), 1.0, 1e-10), "m=12, L=1: I = 1");
+    // m=3, L=2: I = (1/12)*3*4 = 1
+    CHECK(approx(momentOfInertiaRod(3, 2), 1.0, 1e-10), "m=3, L=2: I = 1");
+    CHECK(approx(momentOfInertiaRod(0, 5), 0.0, 1e-10), "m=0: I=0");
+    CHECK(approx(momentOfInertiaRod(5, 0), 0.0, 1e-10), "L=0: I=0");
+}
+
+void testMomentOfInertiaDisk() {
+    SECTION("momentOfInertiaDisk");
+    CHECK(isnan(momentOfInertiaDisk(-1, 1)), "negative m NAN");
+    CHECK(isnan(momentOfInertiaDisk(1, -1)), "negative R NAN");
+    // m=2, R=3: I = 0.5*2*9 = 9
+    CHECK(approx(momentOfInertiaDisk(2, 3), 9.0, 1e-10), "m=2, R=3: I = 9");
+    CHECK(approx(momentOfInertiaDisk(0, 5), 0.0, 1e-10), "m=0: I=0");
+    CHECK(approx(momentOfInertiaDisk(5, 0), 0.0, 1e-10), "R=0: I=0");
+}
+
+void testParallelAxisTheorem() {
+    SECTION("parallelAxisTheorem");
+    CHECK(isnan(parallelAxisTheorem(-1, 1, 1)), "negative I_cm NAN");
+    CHECK(isnan(parallelAxisTheorem(1, -1, 1)), "negative m NAN");
+    // I_cm = 5, m = 2, d = 3: I = 5 + 2*9 = 23
+    CHECK(approx(parallelAxisTheorem(5, 2, 3), 23.0, 1e-10), "I_cm + m*d^2 = 23");
+    // d = 0: I = I_cm
+    CHECK(approx(parallelAxisTheorem(7, 2, 0), 7.0, 1e-10), "d=0: I = I_cm");
+    // Rod about end = (1/3) m L^2 = I_cm + m*(L/2)^2 = (1/12)mL^2 + (1/4)mL^2
+    double Icm = momentOfInertiaRod(6, 2);
+    double Iend = parallelAxisTheorem(Icm, 6, 1);
+    CHECK(approx(Iend, (1.0/3.0) * 6 * 4, 1e-10), "rod about end via parallel axis");
+}
+
+void testTorque() {
+    SECTION("torque");
+    Vector* pivot = constructVector3(0, 0, 0);
+    Vector* fv = constructVector3(0, 1, 0);
+    Vector* ft = constructVector3(1, 0, 0);
+    Force* F = constructForce("f", fv, ft);
+
+    CHECK(torque(NULL, pivot) == NULL, "NULL F NULL");
+    CHECK(torque(F, NULL) == NULL, "NULL pivot NULL");
+
+    Vector* pivot2 = constructVector2(0, 0);
+    CHECK(torque(F, pivot2) == NULL, "dim mismatch NULL");
+
+    // 3D: r = (1,0,0), F = (0,1,0) -> tau = (0,0,1)
+    Vector* t3 = torque(F, pivot);
+    CHECK(t3 != NULL && t3->numRows == 3, "3D returns 3-vector");
+    CHECK(approx(getEntry(t3, 0, 0), 0.0, 1e-10), "tau x = 0");
+    CHECK(approx(getEntry(t3, 1, 0), 0.0, 1e-10), "tau y = 0");
+    CHECK(approx(getEntry(t3, 2, 0), 1.0, 1e-10), "tau z = 1");
+    freeVector(t3);
+
+    // 3D: force at pivot -> zero torque
+    Vector* ftAt = constructVector3(0, 0, 0);
+    Force* Fat = constructForce("fat", fv, ftAt);
+    Vector* tZero = torque(Fat, pivot);
+    Vector* zero3 = constructVector3(0, 0, 0);
+    CHECK(matrixComp(tZero, zero3, 1e-10), "force at pivot: zero torque");
+    freeVector(tZero); freeVector(zero3);
+
+    // 3D: F parallel to r -> zero torque
+    Vector* fParallel = constructVector3(2, 0, 0);
+    Force* Fp = constructForce("fp", fParallel, ft);
+    Vector* tPar = torque(Fp, pivot);
+    Vector* zeroP = constructVector3(0, 0, 0);
+    CHECK(matrixComp(tPar, zeroP, 1e-10), "F parallel to r: zero torque");
+    freeVector(tPar); freeVector(zeroP);
+
+    // 2D: r = (1, 0), F = (0, 2) -> tau_z = 1*2 - 0*0 = 2
+    Vector* ft2 = constructVector2(1, 0);
+    Vector* fv2 = constructVector2(0, 2);
+    Force* F2 = constructForce("f2", fv2, ft2);
+    Vector* t2 = torque(F2, pivot2);
+    CHECK(t2 != NULL && t2->numRows == 1, "2D returns 1-vector");
+    CHECK(approx(getEntry(t2, 0, 0), 2.0, 1e-10), "2D tau_z = 2");
+    freeVector(t2);
+
+    // 2D: reversed r, same F -> negative torque
+    Vector* ft2neg = constructVector2(-1, 0);
+    Force* F2n = constructForce("f2n", fv2, ft2neg);
+    Vector* t2n = torque(F2n, pivot2);
+    CHECK(approx(getEntry(t2n, 0, 0), -2.0, 1e-10), "2D tau_z flips sign with -r");
+    freeVector(t2n);
+
+    free(F); free(Fat); free(Fp); free(F2); free(F2n);
+    freeVector(pivot); freeVector(pivot2);
+    freeVector(fv); freeVector(ft); freeVector(ftAt);
+    freeVector(fParallel); freeVector(ft2); freeVector(fv2); freeVector(ft2neg);
+}
+
+void testAngularMomentum() {
+    SECTION("angularMomentum");
+    Vector* pivot = constructVector3(0, 0, 0);
+    Vector* pos = constructVector3(1, 0, 0);
+    Vector* vel = constructVector3(0, 2, 0);
+    Body* b = constructBody(3.0, pos, vel);
+
+    CHECK(angularMomentum(NULL, pivot) == NULL, "NULL body NULL");
+    CHECK(angularMomentum(b, NULL) == NULL, "NULL pivot NULL");
+
+    Vector* pivot2 = constructVector2(0, 0);
+    CHECK(angularMomentum(b, pivot2) == NULL, "dim mismatch NULL");
+
+    // 3D: r=(1,0,0), p=(0,6,0), L = r x p = (0,0,6)
+    Vector* L3 = angularMomentum(b, pivot);
+    CHECK(L3 != NULL && L3->numRows == 3, "3D returns 3-vector");
+    CHECK(approx(getEntry(L3, 0, 0), 0.0, 1e-10), "L x = 0");
+    CHECK(approx(getEntry(L3, 1, 0), 0.0, 1e-10), "L y = 0");
+    CHECK(approx(getEntry(L3, 2, 0), 6.0, 1e-10), "L z = 6");
+    freeVector(L3);
+
+    // 3D: body at pivot -> L = 0
+    Vector* posAt = constructVector3(0, 0, 0);
+    Vector* velAt = constructVector3(1, 2, 3);
+    Body* bAt = constructBody(1.0, posAt, velAt);
+    Vector* LAt = angularMomentum(bAt, pivot);
+    Vector* zero3 = constructVector3(0, 0, 0);
+    CHECK(matrixComp(LAt, zero3, 1e-10), "body at pivot: L=0");
+    freeVector(LAt); freeVector(zero3);
+
+    // 2D: r=(1,0), p=(0,6), L_z = 6
+    Vector* pos2 = constructVector2(1, 0);
+    Vector* vel2 = constructVector2(0, 2);
+    Body* b2 = constructBody(3.0, pos2, vel2);
+    Vector* L2 = angularMomentum(b2, pivot2);
+    CHECK(L2 != NULL && L2->numRows == 1, "2D returns 1-vector");
+    CHECK(approx(getEntry(L2, 0, 0), 6.0, 1e-10), "2D L_z = 6");
+    freeVector(L2);
+
+    // 2D: radial velocity -> L = 0
+    Vector* pos2r = constructVector2(2, 0);
+    Vector* vel2r = constructVector2(3, 0);
+    Body* b2r = constructBody(1.0, pos2r, vel2r);
+    Vector* L2r = angularMomentum(b2r, pivot2);
+    CHECK(approx(getEntry(L2r, 0, 0), 0.0, 1e-10), "2D radial motion: L_z = 0");
+    freeVector(L2r);
+
+    free(b->forces); free(b);
+    free(bAt->forces); free(bAt);
+    free(b2->forces); free(b2);
+    free(b2r->forces); free(b2r);
+    freeVector(pivot); freeVector(pivot2);
+    freeVector(pos); freeVector(vel);
+    freeVector(posAt); freeVector(velAt);
+    freeVector(pos2); freeVector(vel2);
+    freeVector(pos2r); freeVector(vel2r);
+}
+
+void testRotationalKineticEnergy() {
+    SECTION("rotationalKineticEnergy");
+    CHECK(isnan(rotationalKineticEnergy(-1, 2)), "negative I NAN");
+    // I=4, omega=3: KE = 0.5 * 4 * 9 = 18
+    CHECK(approx(rotationalKineticEnergy(4, 3), 18.0, 1e-10), "I=4, omega=3: KE = 18");
+    CHECK(approx(rotationalKineticEnergy(10, 0), 0.0, 1e-10), "omega=0: KE=0");
+    CHECK(approx(rotationalKineticEnergy(0, 5), 0.0, 1e-10), "I=0: KE=0");
+    // Sign of omega irrelevant (squared)
+    CHECK(approx(rotationalKineticEnergy(2, -3), rotationalKineticEnergy(2, 3), 1e-10),
+          "omega sign irrelevant");
+}
+
+void testAngularAccelerationFromTorque() {
+    SECTION("angularAccelerationFromTorque");
+    CHECK(isnan(angularAccelerationFromTorque(5, 0)), "I=0 NAN");
+    CHECK(isnan(angularAccelerationFromTorque(5, -1)), "negative I NAN");
+    // tau=10, I=2: alpha = 5
+    CHECK(approx(angularAccelerationFromTorque(10, 2), 5.0, 1e-10), "tau=10, I=2: alpha=5");
+    CHECK(approx(angularAccelerationFromTorque(0, 3), 0.0, 1e-10), "no torque: alpha=0");
+    CHECK(approx(angularAccelerationFromTorque(-6, 2), -3.0, 1e-10), "negative tau: negative alpha");
 }
 
 /* ---------- Main ---------- */
@@ -742,6 +1160,20 @@ int main(void) {
     testWork();
     testPower();
     testImpulse();
+
+    testCenterOfMass();
+    testCenterOfMassVelocity();
+    testElasticCollision1D();
+    testInelasticCollision1D();
+
+    testMomentOfInertiaPoint();
+    testMomentOfInertiaRod();
+    testMomentOfInertiaDisk();
+    testParallelAxisTheorem();
+    testTorque();
+    testAngularMomentum();
+    testRotationalKineticEnergy();
+    testAngularAccelerationFromTorque();
 
     printf("\n========================================\n");
     printf("Results: %d / %d tests passed\n", testsPassed, testsRun);

@@ -24,6 +24,12 @@ typedef struct Body {
     int nForces;
 } Body;
 
+typedef struct ProjectileInfo {
+    double range;
+    double peakHeight;
+    double timeOfFlight;
+} ProjectileInfo;
+
 
 /* ---------- Kinematics primitives ---------- */
 double* displacement(Vector* p1, Vector* p2);
@@ -33,7 +39,7 @@ Vector* velocityAtTime(Vector* initVel, Vector* acceleration, double time);
 Vector* positionAtTime(Vector* initPos, Vector* initVel, Vector* acceleration, double time);
 Vector* speedAtPosition(Vector* initPos, Vector* initVel, Vector* acceleration, Vector* pos);
 Vector* velocityAtPosition(Vector* initPos, Vector* initVel, Vector* acceleration, Vector* pos);
-double* projectileInfo(double initVel, double angle, double initHeight);
+ProjectileInfo* getProjectileInfo(double initVel, double angle, double initHeight);
 double centripetalAcceleration(double vel, double radius);
 double angularVelocity(double vel, double radius);
 
@@ -49,13 +55,31 @@ Force* normalForce(Body* body, Vector* surfaceNormal);
 Force* frictionForce(Force* normal, double mu, Vector* direction);
 
 /* ---------- Conservation quantities ----------- */
-double momentum(Body* body);
+double momentumMagnitude(Body* body);
+Vector* momentumVector(Body* body);
 double kineticEnergy(Body* body);
 double gravPotentialEnergy(Body* body, double height);
 double springPotentialEnergy(double k, double x);
 double work(Force* F, Vector* disp);
 double power(Force* F, Vector* vel);
-double impulse(Force* F, double time);
+double impulseMagnitude(Force* F, double time);
+Vector* impulseVector(Force* F, double time);
+
+/* ---------- Collisions ---------- */
+Vector* centerOfMass(Body** bodies, int nBodies);
+Vector* centerOfMassVelocity(Body** bodies, int nBodies);
+void elasticCollision1D(Body* b1, Body* b2);
+void inelasticCollision1D(Body* b1, Body* b2);
+
+/* ---------- Rotational dynamics ---------- */
+double momentOfInertiaPoint(double m, double r);
+double momentOfInertiaRod(double m, double L);
+double momentOfInertiaDisk(double m, double R);
+double parallelAxisTheorem(double I_cm, double m, double d);
+Vector* torque(Force* F, Vector* pivot);
+Vector* angularMomentum(Body* body, Vector* pivot);
+double rotationalKineticEnergy(double I, double omega);
+double angularAccelerationFromTorque(double netTorque, double I);
 
 
 #endif
