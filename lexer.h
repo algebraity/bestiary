@@ -1,3 +1,4 @@
 /* prototypes */
-token* bstLex(char*);
+#include "token.h"
+Token* bstLex(char*);
 /* end proto */
