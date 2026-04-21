@@ -77,13 +77,92 @@ Token* bstLex(char* string, size_t* out_len)
 		switch (c) {
 			case '0': case '1': case '2': case '3': case '4':
 			case '5': case '6': case '7': case '8': case '9':
-				curtok = TOK_NUMBER;
+				// If we were mid-decimal (saw NUMBER then '.'), stay in DECIMAL.
+				curtok = (lastok == TOK_DECIMAL) ? TOK_DECIMAL : TOK_NUMBER;
 				break;
 			case '=':
 				curtok = TOK_EQUALS;
 				break;
+			case '(':
+				curtok = TOK_LPAREN;
+				break;
+			case ')':
+				curtok = TOK_RPAREN;
+				break;
 			case '{':
 				curtok = TOK_LBRACE;
+				break;
+			case '+':
+				curtok = TOK_PLUS;
+				break;
+			case '-':
+				curtok = TOK_MINUS;
+				break;
+			case '*':
+				curtok = TOK_STAR;
+				break;
+			case '/':
+				curtok = TOK_SLASH;
+				break;
+			case ',':
+				curtok = TOK_COMMA;
+				break;
+			case '^':
+				curtok = TOK_CARET;
+				break;
+			case ':':
+				curtok = TOK_COLON;
+				break;
+			case ';':
+				curtok = TOK_SEMICOLON;
+				break;
+			case '|':
+				curtok = TOK_PIPE;
+				break;
+			case '<':
+				curtok = TOK_LESS;
+				break;
+			case '>':
+				curtok = TOK_GREATER;
+				break;
+			case '\'':
+				curtok = TOK_PRIME;
+				break;
+			case '$':
+				curtok = TOK_DOLLAR;
+				break;
+			case '%':
+				curtok = TOK_PERCENT;
+				break;
+			case '~':
+				curtok = TOK_TILDE;
+				break;
+			case '#':
+				curtok = TOK_HASH;
+				break;
+			case '_':
+				curtok = TOK_UNDERSCORE;
+				break;
+			case '[':
+				curtok = TOK_LBRACK;
+				break;
+			case ']':
+				curtok = TOK_RBRACK;
+				break;
+			case '.':
+				// Promote a number-in-progress to DECIMAL if the next char is a digit.
+				// Otherwise '.' is its own TOK_DOT token.
+				if (lastok == TOK_NUMBER && i + 1 < l && isdigit((unsigned char)string[i + 1])) {
+					if (bufr + 1 >= bufcap) {
+						bufcap *= 2;
+						buf = realloc(buf, bufcap);
+					}
+					buf[bufr++] = '.';
+					curtok = TOK_DECIMAL;
+					col++;
+					continue;
+				}
+				curtok = TOK_DOT;
 				break;
 			case '}':
 				curtok = TOK_RBRACE;
@@ -138,6 +217,14 @@ Token* bstLex(char* string, size_t* out_len)
 		}
 		buf[bufr++] = c;     // store char in buf--was not done before, I think
 		col++;
+
+		// Only TOK_IDENT and TOK_NUMBER accumulate across characters;
+		// every other kind is one char per token, so flush right away.
+		// This prevents "((" from collapsing into a single LPAREN, etc.
+		if (curtok != TOK_IDENT && curtok != TOK_NUMBER && curtok != TOK_DECIMAL) {
+			bstlFlush(&tokens, &len, &cap, curtok, buf, &bufr, line, tokcol);
+			curtok = TOK_NONE;
+		}
 	}
 
 	/// Flush any trailing accumulated token.
