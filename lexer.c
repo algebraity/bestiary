@@ -1,46 +1,82 @@
 #include <stdlib.h>
-#include<string.h>
+#include <string.h>
 #include <stdbool.h>
+#include <ctype.h>
 #include "token.h"
 
 typedef enum
 {
-	READ_M, SCAN_M, COMMAND_M
+	SCAN_M, COMMAND_M
 } LexMode;
 
-int bstlPush(Token* tokens,Token value)
+// bstlPush now actually grows the backing buffer
+int bstlPush(Token** tokens, size_t* len, size_t* cap, Token value)
 {
-	char counter = 0;
-	while ( (realloc(tokens,sizeof(tokens) + sizeof(Token))) == NULL ) {
-		counter++;
-		if(counter > 100u)
-			return 0;
+	if (*len == *cap) {
+		size_t newcap = *cap ? *cap * 2 : 8;
+		Token* grown = realloc(*tokens, newcap * sizeof(Token));
+		if (!grown) return 0;
+		*tokens = grown;
+		*cap = newcap;
 	}
-	tokens[sizeof(&tokens) / sizeof(Token) - 1] = value;
+	(*tokens)[(*len)++] = value;
 	return 1;
 }
 
-Token* bstLex(char* string)
+static void bstlFlush(Token** tokens, size_t* len, size_t* cap,
+                      TokenKind kind, char* buf, size_t* bufr,
+                      size_t line, size_t col)
 {
-	Token* tokens;
-	Token* v;
-	tokens = malloc(sizeof(Token));
-	LexMode mode = SCAN_M;
+	if (*bufr == 0) return;
+	buf[*bufr] = '\0';
+	char* text = malloc(*bufr + 1);
+	memcpy(text, buf, *bufr + 1);
+	Token t;
+	t.kind = kind;
+	t.text = text;
+	t.line = line;
+	t.col  = col;
+	bstlPush(tokens, len, cap, t);
+	*bufr = 0;
+}
+
+Token* bstLex(char* string, size_t* out_len)
+{
+	Token* tokens = NULL;
+	size_t len = 0, cap = 0;
+	LexMode mode = SCAN_M;          // Mode is used now, was not before
 	TokenKind curtok = TOK_NONE;
 	TokenKind lastok = TOK_NONE;
-	int inder = 0;
-	int bufr = 0;
-	char* buf;
-	buf = calloc(50,sizeof(char));
-	int i;
-	char backslashes = 0;
-	int l = strlen(string);
-	for(i = 0 ; i < l ; i++)
-	{
+	size_t bufr = 0;
+	size_t bufcap = 256;
+	char* buf = calloc(bufcap, sizeof(char));
+	size_t line = 1, col = 1, tokcol = 1;
+	size_t l = strlen(string);
+
+	for (size_t i = 0; i < l; i++) {
+		char c = string[i];
 		lastok = curtok;
-		switch (string[i]) {
-			case '1': case '2': case '3': case '4': case '5':
-			case '6': case '7': case '8': case '9': case '0':
+
+		// Consume alphabet characters
+		if (mode == COMMAND_M) {
+			if (isalpha((unsigned char)c)) {
+				if (bufr + 1 >= bufcap) {
+					bufcap *= 2;
+					buf = realloc(buf, bufcap);
+				}
+				buf[bufr++] = c;
+				col++;
+				continue;
+			}
+			bstlFlush(&tokens, &len, &cap, TOK_COMMAND, buf, &bufr, line, tokcol);
+			mode = SCAN_M;
+			curtok = TOK_NONE;
+			lastok = TOK_NONE;
+		}
+
+		switch (c) {
+			case '0': case '1': case '2': case '3': case '4':
+			case '5': case '6': case '7': case '8': case '9':
 				curtok = TOK_NUMBER;
 				break;
 			case '=':
@@ -53,48 +89,72 @@ Token* bstLex(char* string)
 				curtok = TOK_RBRACE;
 				break;
 			case '\\':
-				backslashes++;
-				if(backslashes > 1)
-				{
-					backslashes = 0;
-					curtok = TOK_DBLBACKSLASH;
+				// Detect \\ by one-char lookahead
+				bstlFlush(&tokens, &len, &cap, curtok, buf, &bufr, line, tokcol);
+				if (i + 1 < l && string[i + 1] == '\\') {
+					Token t;
+					t.kind = TOK_DBLBACKSLASH;
+					t.text = NULL;
+					t.line = line;
+					t.col  = col;
+					bstlPush(&tokens, &len, &cap, t);
+					i++;
+					col += 2;
+					curtok = TOK_NONE;
+				} else {
+					mode = COMMAND_M;
+					curtok = TOK_COMMAND;
+					tokcol = col;
+					col++;
 				}
-				else curtok = TOK_COMMAND;
-				break;
+				continue;
 			case '&':
 				curtok = TOK_AMP;
 				break;
-			case (char)0xFF:
-				/* usually 0xFF is end of file */
-				curtok = TOK_EOF;
-				break;
+			case ' ': case '\t':
+				bstlFlush(&tokens, &len, &cap, curtok, buf, &bufr, line, tokcol);
+				curtok = TOK_NONE;
+				col++;
+				continue;
+			case '\n':
+				bstlFlush(&tokens, &len, &cap, curtok, buf, &bufr, line, tokcol);
+				curtok = TOK_NONE;
+				line++;
+				col = 1;
+				continue;
 			default:
-				if(curtok != TOK_COMMAND)
-					curtok = TOK_IDENT;
+				curtok = TOK_IDENT;
 				break;
 		}
-		if (!(i + 1 > l))
-			curtok = TOK_EOF;
+
+		// Fixed inverted EOF loop :3
+		// Flush when token type changes
 		if (curtok != lastok)
-		{
-			v = (Token*)calloc(1,sizeof(Token));
-			v->kind = lastok;
-			v->text = buf;
-			v->line = 1;
-			v->col = bufr;
-			bstlPush(tokens,*v);
-			free(v);
-			bufr = 0;
-			buf = calloc(50,sizeof(char));
+			bstlFlush(&tokens, &len, &cap, lastok, buf, &bufr, line, tokcol);
+		if (bufr == 0) tokcol = col;
+		if (bufr + 1 >= bufcap) {
+			bufcap *= 2;
+			buf = realloc(buf, bufcap);
 		}
+		buf[bufr++] = c;     // store char in buf--was not done before, I think
+		col++;
 	}
-	v = (Token*)calloc(1,sizeof(Token));
-	v->kind = TOK_EOF;
-	v->text = buf;
-	v->line = 1;
-	v->col = bufr;
-	bstlPush(tokens,*v);
-	free(v);
-	bufr = 0;
+
+	/// Flush any trailing accumulated token.
+	if (mode == COMMAND_M)
+		bstlFlush(&tokens, &len, &cap, TOK_COMMAND, buf, &bufr, line, tokcol);
+	else
+		bstlFlush(&tokens, &len, &cap, curtok, buf, &bufr, line, tokcol);
+	free(buf);
+
+	// emit TOK_EOF once loop exits, only once
+	Token eof;
+	eof.kind = TOK_EOF;
+	eof.text = NULL;
+	eof.line = line;
+	eof.col  = col;
+	bstlPush(&tokens, &len, &cap, eof);
+
+	if (out_len) *out_len = len;
 	return tokens;
 }
