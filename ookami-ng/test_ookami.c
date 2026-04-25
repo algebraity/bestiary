@@ -82,15 +82,14 @@ int main(void) {
     printf("diameter(A)  = %lld\n", getDiameter(A));
     printf("diameter(AP) = %lld\n", getDiameter(AP));
 
-    Fraction* densA  = getDensity(A);
-    Fraction* densAP = getDensity(AP);
-    Fraction* dcA    = doublingConstant(A);
-    Fraction* dcAP   = doublingConstant(AP);
-    printf("density(A)   = %lld/%lld\n", densA->num, densA->denom);
-    printf("density(AP)  = %lld/%lld\n", densAP->num, densAP->denom);
-    printf("doubling(A)  = %lld/%lld\n", dcA->num, dcA->denom);
-    printf("doubling(AP) = %lld/%lld\n", dcAP->num, dcAP->denom);
-    free(densA); free(densAP); free(dcA); free(dcAP);
+    Fraction densA  = getDensity(A);
+    Fraction densAP = getDensity(AP);
+    Fraction dcA    = doublingConstant(A);
+    Fraction dcAP   = doublingConstant(AP);
+    printf("density(A)   = %lld/%lld\n", densA.num, densA.denom);
+    printf("density(AP)  = %lld/%lld\n", densAP.num, densAP.denom);
+    printf("doubling(A)  = %lld/%lld\n", dcA.num, dcA.denom);
+    printf("doubling(AP) = %lld/%lld\n", dcAP.num, dcAP.denom);
 
     /* ---------- Transformations ---------- */
     section("Transformations");

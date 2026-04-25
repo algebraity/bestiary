@@ -45,13 +45,14 @@ CombSet* setUnion(CombSet* A, CombSet* B);
 /* ---------- Basic invariants ---------- */
 
 long long getDiameter(CombSet* combset);
-Fraction* getDensity(CombSet* combset);
-Fraction* doublingConstant(CombSet* combset);
+Fraction getDensity(CombSet* combset);
+Fraction doublingConstant(CombSet* combset);
 
 /* ---------- Basic transformations ---------- */
 
 void addElement(CombSet* combset, long long n);
 void removeElement(CombSet* combset, long long n);
+CombSet* negateSet(CombSet* combset);
 CombSet* translateSet(CombSet* combset, long long n);
 CombSet* dilateSet(CombSet* combset, long long n);
 

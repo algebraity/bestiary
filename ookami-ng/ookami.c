@@ -263,14 +263,14 @@ long long getDiameter(CombSet* combset) {
 }
 
 // Return the density of the CombSet: card / (diameter+1)
-Fraction* getDensity(CombSet* combset) {
+Fraction getDensity(CombSet* combset) {
     return constructFraction(combset->card, getDiameter(combset) + 1);
 }
 
 // Compute the doubling contstant of the CombSet: |A + A|/|A|
-Fraction* doublingConstant(CombSet* combset) {
+Fraction doublingConstant(CombSet* combset) {
     CombSet* combsetads = ads(combset);
-    Fraction* frac = constructFraction(combsetads->card, combset->card);
+    Fraction frac = constructFraction(combsetads->card, combset->card);
     freeCombset(combsetads);
     return frac;
 }
@@ -298,6 +298,15 @@ void removeElement(CombSet* combset, long long n) {
 	    return;
 	}
     }
+}
+
+// Negate every element of the CombSet and normalize the result
+CombSet* negateSet(CombSet* combset) {
+    long long *buf = malloc(combset->card * sizeof(long long));
+    for (int i = 0; i < combset->card; i++) buf[i] = -combset->set[i];
+    CombSet* result = constructCombset(buf, combset->card);
+    free(buf);
+    return result;
 }
 
 // Translate the CombSet by an integer n
@@ -480,12 +489,13 @@ long long repMult(CombSet* combset, long long x) {
 
 // Compute the k-fold additive energy of a CombSet
 long long kEnergyAdd(CombSet* A, int k) {
+    if (!A || k <= 0) return 0;
     int n = A->card;
     long long total = 1;
     for (int i = 0; i < k; i++) total *= n;
     
     long long* sums = malloc(total * sizeof(long long));
-    int* index = calloc(k, sizeof(int));
+    int* index = calloc((size_t)k, sizeof(int));
     
     // Enumerate all k-tuples, record their sums
     for (long long t = 0; t < total; t++) {
@@ -517,12 +527,13 @@ long long kEnergyAdd(CombSet* A, int k) {
 
 // Compute the k-fold difference energy of a CombSet
 long long kEnergyDiff(CombSet* A, int k) {
+    if (!A || k <= 0) return 0;
     int n = A->card;
     long long total = 1;
     for (int i = 0; i < k; i++) total *= n;
     
     long long* diffs = malloc(total * sizeof(long long));
-    int* index = calloc(k, sizeof(int));
+    int* index = calloc((size_t)k, sizeof(int));
     
     // Enumerate all k-tuples, record their differences
     for (long long t = 0; t < total; t++) {
@@ -554,12 +565,13 @@ long long kEnergyDiff(CombSet* A, int k) {
 
 // Compute the k-fold multiplicative energy of a CombSet
 long long kEnergyMult(CombSet* A, int k) {
+    if (!A || k <= 0) return 0;
     int n = A->card;
     long long total = 1;
     for (int i = 0; i < k; i++) total *= n;
     
     long long* prods = malloc(total * sizeof(long long));
-    int* index = calloc(k, sizeof(int));
+    int* index = calloc((size_t)k, sizeof(int));
     
     // Enumerate all k-tuples, record their products
     for (long long t = 0; t < total; t++) {

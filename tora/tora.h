@@ -25,6 +25,7 @@ struct Representation {
     char* repr;
     Group* group;
     Matrix** images;
+    int mdim;
     int dim;
 };
 
@@ -32,7 +33,7 @@ struct Character {
     char* repr;
     Group* group;
     ConjugacyClass** classes;
-    ComplexNumber** values;
+    ComplexNumber* values;
     int numClasses;
 };
 
@@ -40,7 +41,7 @@ struct CharacterTable {
     Group* group;
     ConjugacyClass** classes;
     Character** irreps;
-    ComplexNumber*** values;
+    ComplexNumber** values;
     int numClasses;
     int numIrreps;
 };
@@ -49,7 +50,7 @@ struct CharacterTable {
 /* ---------- Construct and free methods ---------- */
 ConjugacyClass* constructConjugacyClass(Group* group, GroupElement* rep);
 void freeConjugacyClass(ConjugacyClass* class);
-Representation* constructRepresentation(Group* group, char* repr, Matrix** images, int dim);
+Representation* constructRepresentation(Group* group, char* repr, Matrix** images, int mdim, int dim);
 void freeRepresentation(Representation* rep);
 Character* constructCharacter(Group* group, char* repr, ConjugacyClass** classes, ComplexNumber* values, int numClasses);
 void freeCharacter(Character* character);
@@ -57,7 +58,14 @@ CharacterTable* constructCharacterTable(Group* group, ConjugacyClass** classes, 
 void freeCharacterTable(CharacterTable* table);
 
 
-/* ----------  ---------- */
+/* ---------- ConjugacyClass helpers ---------- */
+ConjugacyClass* getConjugacyClass(GroupElement* element);
+ConjugacyClass** getConjugacyClasses(Group* group, int* numClasses);
 
+/* ---------- Representations ---------- */
+Representation* trivialRepresentation(Group* G);
+Representation* regularRepresentation(Group* G);
+Representation* permutationRepresentation(Group* G);
+Representation* standardRepresentation(Group* G);
 
 #endif

@@ -13,9 +13,9 @@ int comp(const void* a, const void* b) {
 /* ---------- Fractions ---------- */
 
 // Construct a Fraction with a given num and denom
-Fraction* constructFraction(long long num, long long denom) {
-    if (denom == 0) return NULL;
-    Fraction* frac = malloc(sizeof(Fraction));
+Fraction constructFraction(long long num, long long denom) {
+    if (denom == 0) return (Fraction){0, 0}; // Invalid fraction
+    Fraction frac;
 
     long long g = llabs(num), b = llabs(denom);
     while (b) {
@@ -25,19 +25,41 @@ Fraction* constructFraction(long long num, long long denom) {
     }
     if (g == 0) g = 1;
 
-    frac->num = num / g;
-    frac->denom = denom / g;
+    frac.num = num / g;
+    frac.denom = denom / g;
+    if (frac.denom < 0) {
+	frac.num = -frac.num;
+	frac.denom = -frac.denom;
+    }
     return frac;
 }
 
-// Compare Fractions
-int compFractions(Fraction* p, Fraction* q) {
-    if (!p || !q) return 2;
+// Add two Fractions
+Fraction addFractions(Fraction p, Fraction q) {
+    return constructFraction(p.num * q.denom + q.num * p.denom, p.denom * q.denom);
+}
 
-    long long n1 = p->num;
-    long long d1 = p->denom;
-    long long n2 = q->num;
-    long long d2 = q->denom;
+// Subtract two Fractions
+Fraction subtractFractions(Fraction p, Fraction q) {
+    return constructFraction(p.num * q.denom - q.num * p.denom, p.denom * q.denom);
+}
+
+// Multiply two Fractions
+Fraction multiplyFractions(Fraction p, Fraction q) {
+    return constructFraction(p.num * q.num, p.denom * q.denom);
+}
+
+// Divide two Fractions
+Fraction divideFractions(Fraction p, Fraction q) {
+    return constructFraction(p.num * q.denom, p.denom * q.num);
+}
+
+// Compare Fractions
+int compFractions(Fraction p, Fraction q) {
+    long long n1 = p.num;
+    long long d1 = p.denom;
+    long long n2 = q.num;
+    long long d2 = q.denom;
 
     if (n1 == n2 && d1 == d2) return 0;
     if (n1 != n2 && d1 == d2) return (n1 > n2) - (n1 < n2);
@@ -46,21 +68,113 @@ int compFractions(Fraction* p, Fraction* q) {
 }
 
 // Print a Fraction
-void printFraction(Fraction* frac) {
-    if (!frac) return;
-
-    if (frac->denom == 1) {
-        printf("%lld", frac->num);
+void printFraction(Fraction frac) {
+    if (frac.denom == 1) {
+        printf("%lld", frac.num);
         return;
     }
 
-    printf("%lld/%lld", frac->num, frac->denom);
+    printf("%lld/%lld", frac.num, frac.denom);
 }
 
-// Free a Fraction
-void freeFraction(Fraction* frac) {
-    if (!frac) return;
-    free(frac);
+/* ---------- Complex arithmetic ---------- */
+
+// Add two ComplexNumbers
+ComplexNumber complexAdd(ComplexNumber a, ComplexNumber b) {
+    ComplexNumber c;
+    c.real = a.real + b.real;
+    c.imag = a.imag + b.imag;
+    return c;
+}
+
+// Subtract two ComplexNumbers
+ComplexNumber complexSub(ComplexNumber a, ComplexNumber b) {
+    ComplexNumber c;
+    c.real = a.real - b.real;
+    c.imag = a.imag - b.imag;
+    return c;
+}
+
+// Multiply two ComplexNumbers
+ComplexNumber complexMul(ComplexNumber a, ComplexNumber b) {
+    ComplexNumber c;
+    c.real = a.real * b.real - a.imag * b.imag;
+    c.imag = a.real * b.imag + a.imag * b.real;
+    return c;
+}
+
+// Divide two ComplexNumbers
+ComplexNumber complexDiv(ComplexNumber a, ComplexNumber b) {
+    ComplexNumber c;
+    double denom = b.real * b.real + b.imag * b.imag;
+    c.real = (a.real * b.real + a.imag * b.imag) / denom;
+    c.imag = (a.imag * b.real - a.real * b.imag) / denom;
+    return c;
+}
+
+// Negate a ComplexNumber
+ComplexNumber complexNeg(ComplexNumber a) {
+    ComplexNumber c;
+    c.real = -a.real;
+    c.imag = -a.imag;
+    return c;
+}
+
+// Return the complex conjugate
+ComplexNumber complexConj(ComplexNumber a) {
+    ComplexNumber c;
+    c.real = a.real;
+    c.imag = -a.imag;
+    return c;
+}
+
+// Return the modulus |a|
+double complexAbs(ComplexNumber a) {
+    return sqrt(a.real * a.real + a.imag * a.imag);
+}
+
+// Return the argument arg(a) in (-pi, pi]
+double complexArg(ComplexNumber a) {
+    return atan2(a.imag, a.real);
+}
+
+// Return the principal square root of a ComplexNumber
+ComplexNumber complexSqrt(ComplexNumber a) {
+    ComplexNumber c;
+    // Real fast path: sqrt is either real or pure imaginary, no trig noise
+    if (a.imag == 0.0) {
+        if (a.real >= 0.0) { c.real = sqrt(a.real); c.imag = 0.0; }
+        else { c.real = 0.0; c.imag = sqrt(-a.real); }
+        return c;
+    }
+    double r = complexAbs(a);
+    double theta = complexArg(a);
+    double sr = sqrt(r);
+    c.real = sr * cos(theta / 2.0);
+    c.imag = sr * sin(theta / 2.0);
+    return c;
+}
+
+// Return the principal cube root of a ComplexNumber
+ComplexNumber complexCbrt(ComplexNumber a) {
+    ComplexNumber c;
+    // Real fast path: cbrt of a real is real
+    if (a.imag == 0.0) {
+        c.real = cbrt(a.real);
+        c.imag = 0.0;
+        return c;
+    }
+    double r = complexAbs(a);
+    double theta = complexArg(a);
+    double cr = cbrt(r);
+    c.real = cr * cos(theta / 3.0);
+    c.imag = cr * sin(theta / 3.0);
+    return c;
+}
+
+// Tell if two ComplexNumbers are equal up to some tolerance
+bool complexEq(ComplexNumber a, ComplexNumber b, double tol) {
+    return fabs(a.real - b.real) <= tol && fabs(a.imag - b.imag) <= tol;
 }
 
 /* ---------- Transcendental constants ---------- */

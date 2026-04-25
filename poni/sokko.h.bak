@@ -4,6 +4,11 @@
 #include "hebi.h"
 
 /* ---------- Definition of structs ---------- */
+typedef struct ComplexNumber {
+    double real;
+    double imag;
+} ComplexNumber;
+
 typedef struct MatrixElement {
     union {
         double real;
@@ -39,6 +44,19 @@ void freeMatrix(Matrix* matrix);
 /* ---------- Accessors ---------- */
 MatrixElement getEntry(const Matrix* matrix, int i, int j);
 void setEntry(Matrix* matrix, int i, int j, MatrixElement x);
+
+/* ---------- Complex arithmetic ---------- */
+ComplexNumber complexAdd(ComplexNumber a, ComplexNumber b);
+ComplexNumber complexSub(ComplexNumber a, ComplexNumber b);
+ComplexNumber complexMul(ComplexNumber a, ComplexNumber b);
+ComplexNumber complexDiv(ComplexNumber a, ComplexNumber b);
+ComplexNumber complexNeg(ComplexNumber a);
+ComplexNumber complexConj(ComplexNumber a);
+double complexAbs(ComplexNumber a);
+double complexArg(ComplexNumber a);
+ComplexNumber complexSqrt(ComplexNumber a);
+ComplexNumber complexCbrt(ComplexNumber a);
+bool complexEq(ComplexNumber a, ComplexNumber b, double tol);
 
 /* ---------- MatrixElement operations ---------- */
 MatrixElement elemFromReal(double x);
@@ -82,7 +100,6 @@ Matrix* subtractMatrices(Matrix* A, Matrix* B);
 Matrix* multiplyMatrices(Matrix* A, Matrix* B);
 Matrix* tensorMatrices(Matrix* A, Matrix* B);
 Matrix* transpose(Matrix* matrix);
-Matrix* adjoint(Matrix* matrix);
 
 /* ---------- Vector methods ---------- */
 void freeVector(Vector* vector);
@@ -92,7 +109,6 @@ Vector* constructVector2(MatrixElement x, MatrixElement y);
 Vector* constructVector3(MatrixElement x, MatrixElement y, MatrixElement z);
 Vector* addVectors(Vector* v1, Vector* v2);
 MatrixElement vectorDotProduct(Vector* v1, Vector* v2);
-MatrixElement hermitianDotProduct(Vector* v1, Vector* v2);
 Vector* crossProduct(Vector* v1, Vector* v2);
 double l2Norm(Vector* vect);
 Vector* negativeVector(Vector* vect);
@@ -107,7 +123,6 @@ Vector* vectorProjectOnto(Vector* v1, Vector* v2);
 bool isSymmetric(Matrix* matrix);
 bool isAntisymmetric(Matrix* matrix);
 bool isOrthogonal(Matrix* matrix);
-bool isUnitary(Matrix* matrix);
 int rank(Matrix* matrix);
 int nullity(Matrix* matrix);
 MatrixElement trace(Matrix* matrix);
@@ -121,7 +136,5 @@ MatrixElement* eigenvalues2x2(Matrix* matrix);
 MatrixElement* eigenvalues3x3(Matrix* matrix);
 Matrix** eigenvectors2x2(Matrix* matrix);
 Matrix** eigenvectors3x3(Matrix* matrix);
-MatrixElement* eigenvalues(Matrix* matrix);
-Matrix** eigenvectors(Matrix* matrix);
 
 #endif

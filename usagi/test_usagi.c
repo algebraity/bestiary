@@ -2051,6 +2051,120 @@ static void test_primeFiniteField(void) {
     CHECK(primeFiniteField(0) == NULL, "primeFiniteField(0) returns NULL");
 }
 
+static void test_constructFiniteField(void) {
+    printf("\n=== constructFiniteField ===\n");
+
+    /* k = 0: trivial ring regardless of p */
+    Ring* triv = constructFiniteField(5, 0);
+    CHECK(triv != NULL, "F_{p^0} is the trivial ring");
+    CHECK(triv->card == 1, "F_{p^0} has one element");
+    freeRing(triv);
+
+    /* k = 1: F_p */
+    Ring* F3 = constructFiniteField(3, 1);
+    CHECK(F3 != NULL, "F_3 (k=1) non-NULL");
+    CHECK(F3->card == 3, "F_3 has order 3");
+    CHECK(isField(F3), "F_3 is a field");
+    freeRing(F3);
+
+    /* F_4 = F_{2^2} */
+    Ring* F4 = constructFiniteField(2, 2);
+    CHECK(F4 != NULL, "F_4 non-NULL");
+    CHECK(F4->card == 4, "F_4 has order 4");
+    CHECK(isField(F4), "F_4 is a field");
+    CHECK(isCommutativeRing(F4), "F_4 is commutative");
+    CHECK(isIntegralDomain(F4), "F_4 is an integral domain");
+    CHECK(!hasZeroDivisors(F4), "F_4 has no zero divisors");
+    freeRing(F4);
+
+    /* F_8 = F_{2^3} */
+    Ring* F8 = constructFiniteField(2, 3);
+    CHECK(F8 != NULL, "F_8 non-NULL");
+    CHECK(F8->card == 8, "F_8 has order 8");
+    CHECK(isField(F8), "F_8 is a field");
+    freeRing(F8);
+
+    /* F_9 = F_{3^2} */
+    Ring* F9 = constructFiniteField(3, 2);
+    CHECK(F9 != NULL, "F_9 non-NULL");
+    CHECK(F9->card == 9, "F_9 has order 9");
+    CHECK(isField(F9), "F_9 is a field");
+    freeRing(F9);
+
+    /* F_16 = F_{2^4} */
+    Ring* F16 = constructFiniteField(2, 4);
+    CHECK(F16 != NULL, "F_16 non-NULL");
+    CHECK(F16->card == 16, "F_16 has order 16");
+    CHECK(isField(F16), "F_16 is a field");
+    freeRing(F16);
+
+    /* F_25 = F_{5^2} */
+    Ring* F25 = constructFiniteField(5, 2);
+    CHECK(F25 != NULL, "F_25 non-NULL");
+    CHECK(F25->card == 25, "F_25 has order 25");
+    CHECK(isField(F25), "F_25 is a field");
+    freeRing(F25);
+
+    /* Invalid inputs */
+    CHECK(constructFiniteField(4, 2) == NULL, "constructFiniteField(4,2) NULL (p not prime)");
+    CHECK(constructFiniteField(6, 3) == NULL, "constructFiniteField(6,3) NULL (p not prime)");
+    CHECK(constructFiniteField(2, -1) == NULL, "constructFiniteField(2,-1) NULL");
+    CHECK(constructFiniteField(1, 2) == NULL, "constructFiniteField(1,2) NULL (p=1)");
+}
+
+static void test_quotientRing(void) {
+    printf("\n=== quotientRing ===\n");
+
+    Ring* Z6 = constructZnRing(6);
+
+    /* Z/6Z / (2) where (2) = {0,2,4} ≅ Z/2Z */
+    int* idx_even = malloc(3 * sizeof(int));
+    idx_even[0] = 0; idx_even[1] = 2; idx_even[2] = 4;
+    Ideal* I_even = constructLeftIdeal(Z6, idx_even, 3);
+
+    Ring* Q1 = quotientRing(Z6, I_even);
+    CHECK(Q1 != NULL, "Z/6Z / (2) constructed");
+    CHECK(Q1->card == 2, "Z/6Z / (2) has order 2");
+    CHECK(isField(Q1), "Z/6Z / (2) is a field (≅ Z/2Z)");
+
+    /* Z/6Z / (3) where (3) = {0,3} ≅ Z/3Z */
+    int* idx_03 = malloc(2 * sizeof(int));
+    idx_03[0] = 0; idx_03[1] = 3;
+    Ideal* I_03 = constructLeftIdeal(Z6, idx_03, 2);
+
+    Ring* Q2 = quotientRing(Z6, I_03);
+    CHECK(Q2 != NULL, "Z/6Z / (3) constructed");
+    CHECK(Q2->card == 3, "Z/6Z / (3) has order 3");
+    CHECK(isField(Q2), "Z/6Z / (3) is a field (≅ Z/3Z)");
+
+    /* Z/6Z / (0) ≅ Z/6Z */
+    int* idx_0 = malloc(sizeof(int));
+    idx_0[0] = 0;
+    Ideal* I_0 = constructLeftIdeal(Z6, idx_0, 1);
+    Ring* Q3 = quotientRing(Z6, I_0);
+    CHECK(Q3 != NULL, "Z/6Z / (0) constructed");
+    CHECK(Q3->card == 6, "Z/6Z / (0) has order 6");
+    CHECK(isCommutativeRing(Q3), "Z/6Z / (0) is commutative");
+
+    /* Z/6Z / (1) = Z/6Z / Z6 is the trivial ring */
+    int* idx_all = malloc(6 * sizeof(int));
+    for (int i = 0; i < 6; i++) idx_all[i] = i;
+    Ideal* I_all = constructLeftIdeal(Z6, idx_all, 6);
+    Ring* Q4 = quotientRing(Z6, I_all);
+    CHECK(Q4 != NULL, "Z/6Z / Z/6Z constructed");
+    CHECK(Q4->card == 1, "Z/6Z / Z/6Z has one element (trivial)");
+    CHECK(isTrivialRing(Q4), "Z/6Z / Z/6Z is the trivial ring");
+
+    /* NULL safety */
+    CHECK(quotientRing(NULL, NULL) == NULL, "quotientRing(NULL,NULL) NULL");
+    CHECK(quotientRing(Z6, NULL) == NULL, "quotientRing(Z6,NULL) NULL");
+    CHECK(quotientRing(NULL, I_even) == NULL, "quotientRing(NULL,I) NULL");
+
+    free(I_even); free(I_03); free(I_0); free(I_all);
+    freeRing(Q1); freeRing(Q2); freeRing(Q3); freeRing(Q4);
+    freeRing(Z6);
+}
+
 static void test_isPrime(void) {
     printf("\n=== isPrime ===\n");
 
@@ -3070,6 +3184,141 @@ static void test_D5_deep(void) {
     freeGroup(D5);
 }
 
+/* ---------- listAllMaximalSubgroups tests ---------- */
+
+static void test_listAllMaximalSubgroups(void) {
+    printf("\n=== listAllMaximalSubgroups ===\n");
+
+    /* Z/4Z: unique maximal subgroup {0,2} of order 2 */
+    Group* Z4 = constructZnGroup(4);
+    int cnt = 0;
+    SubGroup** mx = listAllMaximalSubgroups(Z4, &cnt);
+    CHECK(mx != NULL, "listAllMaximalSubgroups(Z/4Z) non-NULL");
+    CHECK(cnt == 1, "Z/4Z has 1 maximal subgroup");
+    if (cnt == 1) CHECK(mx[0]->card == 2, "Z/4Z maximal subgroup has order 2");
+    for (int i = 0; i < cnt; i++) freeSubgroup(mx[i]);
+    free(mx);
+    freeGroup(Z4);
+
+    /* Z/6Z: two maximal subgroups — {0,2,4} (order 3) and {0,3} (order 2) */
+    Group* Z6 = constructZnGroup(6);
+    cnt = 0;
+    mx = listAllMaximalSubgroups(Z6, &cnt);
+    CHECK(mx != NULL, "listAllMaximalSubgroups(Z/6Z) non-NULL");
+    CHECK(cnt == 2, "Z/6Z has 2 maximal subgroups");
+    if (cnt == 2) {
+        int cards = mx[0]->card + mx[1]->card;
+        CHECK(cards == 5, "Z/6Z maximal subgroups have orders 2 and 3");
+    }
+    for (int i = 0; i < cnt; i++) freeSubgroup(mx[i]);
+    free(mx);
+    freeGroup(Z6);
+
+    /* V4: three maximal subgroups, each of order 2 */
+    Group* V4 = make_V4();
+    cnt = 0;
+    mx = listAllMaximalSubgroups(V4, &cnt);
+    CHECK(mx != NULL, "listAllMaximalSubgroups(V4) non-NULL");
+    CHECK(cnt == 3, "V4 has 3 maximal subgroups");
+    for (int i = 0; i < cnt; i++) {
+        CHECK(mx[i]->card == 2, "V4 maximal subgroup has order 2");
+        freeSubgroup(mx[i]);
+    }
+    free(mx);
+    freeGroup(V4);
+
+    /* S3: four maximal subgroups — three of order 2 and A3 of order 3 */
+    Group* S3 = constructSymmetricGroup(3);
+    cnt = 0;
+    mx = listAllMaximalSubgroups(S3, &cnt);
+    CHECK(mx != NULL, "listAllMaximalSubgroups(S3) non-NULL");
+    CHECK(cnt == 4, "S3 has 4 maximal subgroups");
+    if (cnt == 4) {
+        int ord2 = 0, ord3 = 0;
+        for (int i = 0; i < cnt; i++) {
+            if (mx[i]->card == 2) ord2++;
+            if (mx[i]->card == 3) ord3++;
+        }
+        CHECK(ord2 == 3, "S3 has 3 maximal subgroups of order 2");
+        CHECK(ord3 == 1, "S3 has 1 maximal subgroup of order 3");
+    }
+    for (int i = 0; i < cnt; i++) freeSubgroup(mx[i]);
+    free(mx);
+    freeGroup(S3);
+
+    /* Q8: three maximal subgroups, each of order 4 */
+    Group* Q8 = make_Q8();
+    cnt = 0;
+    mx = listAllMaximalSubgroups(Q8, &cnt);
+    CHECK(mx != NULL, "listAllMaximalSubgroups(Q8) non-NULL");
+    CHECK(cnt == 3, "Q8 has 3 maximal subgroups");
+    for (int i = 0; i < cnt; i++) {
+        CHECK(mx[i]->card == 4, "Q8 maximal subgroup has order 4");
+        freeSubgroup(mx[i]);
+    }
+    free(mx);
+    freeGroup(Q8);
+
+    /* NULL safety */
+    CHECK(listAllMaximalSubgroups(NULL, &cnt) == NULL, "listAllMaximalSubgroups(NULL,_) NULL");
+    Group* Z2 = constructZnGroup(2);
+    CHECK(listAllMaximalSubgroups(Z2, NULL) == NULL, "listAllMaximalSubgroups(_,NULL) NULL");
+    freeGroup(Z2);
+}
+
+/* ---------- largestCoreFreeSubgroup tests ---------- */
+
+static void test_largestCoreFreeSubgroup(void) {
+    printf("\n=== largestCoreFreeSubgroup ===\n");
+
+    /* S3: transposition subgroups (order 2) are core-free; A3 is normal.
+     * Largest core-free proper subgroup has order 2. */
+    Group* S3 = constructSymmetricGroup(3);
+    SubGroup* cf = largestCoreFreeSubgroup(S3);
+    CHECK(cf != NULL, "largestCoreFreeSubgroup(S3) non-NULL");
+    CHECK(cf->card == 2, "largestCoreFreeSubgroup(S3) has order 2");
+    freeSubgroup(cf);
+    freeGroup(S3);
+
+    /* Q8: every non-trivial subgroup is normal, so only {e} is core-free. */
+    Group* Q8 = make_Q8();
+    cf = largestCoreFreeSubgroup(Q8);
+    CHECK(cf != NULL, "largestCoreFreeSubgroup(Q8) non-NULL");
+    CHECK(cf->card == 1, "largestCoreFreeSubgroup(Q8) is trivial (all non-trivial subgroups normal)");
+    freeSubgroup(cf);
+    freeGroup(Q8);
+
+    /* Z/4Z: abelian, all subgroups normal, only {e} is core-free. */
+    Group* Z4 = constructZnGroup(4);
+    cf = largestCoreFreeSubgroup(Z4);
+    CHECK(cf != NULL, "largestCoreFreeSubgroup(Z/4Z) non-NULL");
+    CHECK(cf->card == 1, "largestCoreFreeSubgroup(Z/4Z) is trivial");
+    freeSubgroup(cf);
+    freeGroup(Z4);
+
+    /* S4: Stab(point) ≅ S3 has order 6 and trivial core (conjugates are
+     * stabilisers of distinct points, intersection is trivial).
+     * That is the largest core-free subgroup. */
+    Group* S4 = constructSymmetricGroup(4);
+    cf = largestCoreFreeSubgroup(S4);
+    CHECK(cf != NULL, "largestCoreFreeSubgroup(S4) non-NULL");
+    CHECK(cf->card == 6, "largestCoreFreeSubgroup(S4) has order 6");
+    freeSubgroup(cf);
+    freeGroup(S4);
+
+    /* Z/2Z (prime order, simple): the only proper subgroup is {e},
+     * which is core-free, so we get order 1. */
+    Group* Z2 = constructZnGroup(2);
+    cf = largestCoreFreeSubgroup(Z2);
+    CHECK(cf != NULL, "largestCoreFreeSubgroup(Z/2Z) non-NULL");
+    CHECK(cf->card == 1, "largestCoreFreeSubgroup(Z/2Z) is trivial");
+    freeSubgroup(cf);
+    freeGroup(Z2);
+
+    /* NULL safety */
+    CHECK(largestCoreFreeSubgroup(NULL) == NULL, "largestCoreFreeSubgroup(NULL) NULL");
+}
+
 /* ---------- additional tests to reach 1000+ ---------- */
 
 static void test_extra_coverage(void) {
@@ -3208,6 +3457,8 @@ int main(void) {
     test_constructDihedralGroup();
     test_constructQ8_constructor();
     test_primeFiniteField();
+    test_constructFiniteField();
+    test_quotientRing();
     test_isPrime();
     test_constructProductRing();
     test_kfoldProductRing();
@@ -3230,6 +3481,8 @@ int main(void) {
     test_S4_deep();
     test_A4_deep();
     test_D5_deep();
+    test_listAllMaximalSubgroups();
+    test_largestCoreFreeSubgroup();
     test_extra_coverage();
 
     freeGroup(Q8);
