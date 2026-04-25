@@ -1,7 +1,11 @@
 #!/bin/bash
 
-ookami/test_ookami
-sokko/test_sokko
-usagi/test_usagi
-poni/test_poni
+set -euo pipefail
+
+make tests
+build/bin/test_ookami
+build/bin/test_sokko
+build/bin/test_usagi
+build/bin/test_poni
+build/bin/test_tora
 

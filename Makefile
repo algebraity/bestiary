@@ -2,133 +2,90 @@
 
 CC       ?= gcc
 CFLAGS   ?= -Wall -Wextra -O2
-CPPFLAGS += -I. -Ihebi -Isokko -Iusagi -Iponi -Iookami-ng -Itora -Ineko
-LDLIBS   += -lm -lreadline
+CPPFLAGS += -Iinclude
 DEPFLAGS  = -MMD -MP
 
-BEAST_OBJS = \
-	hebi/hebi.o \
-	sokko/sokko.o \
-	usagi/usagi.o \
-	poni/poni.o \
-	ookami-ng/ookami.o \
-	tora/tora.o \
-	neko/neko.o
+OBJDIR := build/obj
+BINDIR := build/bin
 
-PIPELINE_OBJS = lexer.o ast.o parser.o value.o eval.o repl.o
+BEAST_SRCS = \
+	src/beasts/hebi.c \
+	src/beasts/sokko.c \
+	src/beasts/usagi.c \
+	src/beasts/poni.c \
+	src/beasts/ookami.c \
+	src/beasts/tora.c \
+	src/beasts/neko.c
 
-TEST_OBJS = \
-	sokko/test_sokko.o \
-	usagi/test_usagi.o \
-	poni/test_poni.o \
-	ookami-ng/test_ookami.o \
-	tora/test_tora.o
+CORE_SRCS = \
+	src/core/lexer.c \
+	src/core/ast.c \
+	src/core/parser.c \
+	src/core/value.c \
+	src/core/eval.c
 
+REPL_SRC = src/repl.c
+
+TEST_SRCS = \
+	tests/test_sokko.c \
+	tests/test_usagi.c \
+	tests/test_poni.c \
+	tests/test_ookami.c \
+	tests/test_tora.c
+
+BEAST_OBJS = $(patsubst src/%.c,$(OBJDIR)/src/%.o,$(BEAST_SRCS))
+CORE_OBJS = $(patsubst src/%.c,$(OBJDIR)/src/%.o,$(CORE_SRCS))
+REPL_OBJ = $(patsubst src/%.c,$(OBJDIR)/src/%.o,$(REPL_SRC))
+TEST_OBJS = $(patsubst tests/%.c,$(OBJDIR)/tests/%.o,$(TEST_SRCS))
+
+REPL_BIN := $(BINDIR)/repl
 TEST_BINS = \
-	sokko/test_sokko \
-	usagi/test_usagi \
-	poni/test_poni \
-	ookami-ng/test_ookami \
-	tora/test_tora
+	$(BINDIR)/test_sokko \
+	$(BINDIR)/test_usagi \
+	$(BINDIR)/test_poni \
+	$(BINDIR)/test_ookami \
+	$(BINDIR)/test_tora
 
-DEPFILES = $(BEAST_OBJS:.o=.d) $(PIPELINE_OBJS:.o=.d) $(TEST_OBJS:.o=.d)
+DEPFILES = $(BEAST_OBJS:.o=.d) $(CORE_OBJS:.o=.d) $(REPL_OBJ:.o=.d) $(TEST_OBJS:.o=.d)
 
-.PHONY: all beasts pipeline tests clean
+.PHONY: all repl beasts pipeline tests clean
 
 all: repl
 
+repl: $(REPL_BIN)
+
 beasts: $(BEAST_OBJS)
 
-pipeline: $(PIPELINE_OBJS)
+pipeline: $(CORE_OBJS) $(REPL_OBJ)
 
 tests: $(TEST_BINS)
 
-repl: $(PIPELINE_OBJS) $(BEAST_OBJS)
-	$(CC) $(CFLAGS) -o $@ $(PIPELINE_OBJS) $(BEAST_OBJS) $(LDLIBS)
+$(REPL_BIN): $(CORE_OBJS) $(REPL_OBJ) $(BEAST_OBJS) | $(BINDIR)
+	$(CC) $(CFLAGS) -o $@ $^ -lm -lreadline
 
-# Encode the intended BEAST build order so `make -j` still respects it.
-sokko/sokko.o: | hebi/hebi.o
-poni/poni.o: | hebi/hebi.o sokko/sokko.o
-ookami-ng/ookami.o: | hebi/hebi.o
-tora/tora.o: | hebi/hebi.o sokko/sokko.o usagi/usagi.o
-neko/neko.o: | hebi/hebi.o
-
-# Encode the main pipeline order explicitly as well.
-parser.o: | lexer.o ast.o
-value.o: | hebi/hebi.o
-eval.o: | ast.o value.o
-repl.o: | lexer.o parser.o ast.o eval.o value.o
-
-lexer.o: lexer.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
-
-ast.o: ast.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
-
-parser.o: parser.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
-
-value.o: value.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
-
-eval.o: eval.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
-
-repl.o: repl.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
-
-hebi/hebi.o: hebi/hebi.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
-
-sokko/sokko.o: sokko/sokko.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
-
-usagi/usagi.o: usagi/usagi.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
-
-poni/poni.o: poni/poni.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
-
-ookami-ng/ookami.o: ookami-ng/ookami.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
-
-tora/tora.o: tora/tora.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
-
-neko/neko.o: neko/neko.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
-
-sokko/test_sokko.o: sokko/test_sokko.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
-
-usagi/test_usagi.o: usagi/test_usagi.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
-
-poni/test_poni.o: poni/test_poni.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
-
-ookami-ng/test_ookami.o: ookami-ng/test_ookami.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
-
-tora/test_tora.o: tora/test_tora.c
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
-
-sokko/test_sokko: sokko/test_sokko.o sokko/sokko.o hebi/hebi.o
+$(BINDIR)/test_sokko: $(OBJDIR)/tests/test_sokko.o $(OBJDIR)/src/beasts/sokko.o $(OBJDIR)/src/beasts/hebi.o | $(BINDIR)
 	$(CC) $(CFLAGS) -o $@ $^ -lm
 
-usagi/test_usagi: usagi/test_usagi.o usagi/usagi.o
+$(BINDIR)/test_usagi: $(OBJDIR)/tests/test_usagi.o $(OBJDIR)/src/beasts/usagi.o | $(BINDIR)
 	$(CC) $(CFLAGS) -o $@ $^ -lm
 
-poni/test_poni: poni/test_poni.o poni/poni.o sokko/sokko.o hebi/hebi.o
+$(BINDIR)/test_poni: $(OBJDIR)/tests/test_poni.o $(OBJDIR)/src/beasts/poni.o $(OBJDIR)/src/beasts/sokko.o $(OBJDIR)/src/beasts/hebi.o | $(BINDIR)
 	$(CC) $(CFLAGS) -o $@ $^ -lm
 
-ookami-ng/test_ookami: ookami-ng/test_ookami.o ookami-ng/ookami.o hebi/hebi.o
+$(BINDIR)/test_ookami: $(OBJDIR)/tests/test_ookami.o $(OBJDIR)/src/beasts/ookami.o $(OBJDIR)/src/beasts/hebi.o | $(BINDIR)
 	$(CC) $(CFLAGS) -o $@ $^ -lm
 
-tora/test_tora: tora/test_tora.o tora/tora.o sokko/sokko.o usagi/usagi.o hebi/hebi.o
+$(BINDIR)/test_tora: $(OBJDIR)/tests/test_tora.o $(OBJDIR)/src/beasts/tora.o $(OBJDIR)/src/beasts/sokko.o $(OBJDIR)/src/beasts/usagi.o $(OBJDIR)/src/beasts/hebi.o | $(BINDIR)
 	$(CC) $(CFLAGS) -o $@ $^ -lm
+
+$(OBJDIR)/%.o: %.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
+
+$(BINDIR):
+	@mkdir -p $@
 
 clean:
-	rm -f repl $(PIPELINE_OBJS) $(BEAST_OBJS) $(TEST_OBJS) $(TEST_BINS) $(DEPFILES)
+	rm -rf build
 
 -include $(DEPFILES)
