@@ -59,7 +59,7 @@ Token* bstLex(char* string, size_t* out_len)
 
 		// Consume alphabet characters
 		if (mode == COMMAND_M) {
-			if (isalpha((unsigned char)c)) {
+			if (isalnum((unsigned char)c)) {
 				if (bufr + 1 >= bufcap) {
 					bufcap *= 2;
 					buf = realloc(buf, bufcap);
@@ -75,8 +75,43 @@ Token* bstLex(char* string, size_t* out_len)
 		}
 
 		switch (c) {
+			case '"':
+			case '\'': {
+				bstlFlush(&tokens, &len, &cap, curtok, buf, &bufr, line, tokcol);
+				char quote = c;
+				size_t startCol = col;
+				size_t j = i + 1;
+				size_t slen = 0;
+				while (j < l && string[j] != quote) {
+					if (string[j] == '\n') break;
+					slen++;
+					j++;
+				}
+				char* text = malloc(slen + 1);
+				for (size_t k = 0; k < slen; k++) text[k] = string[i + 1 + k];
+				text[slen] = '\0';
+				Token t;
+				t.kind = TOK_STRING;
+				t.text = text;
+				t.line = line;
+				t.col = startCol;
+				bstlPush(&tokens, &len, &cap, t);
+				if (j < l && string[j] == quote) {
+					col += slen + 2;
+					i = j;
+				} else {
+					col += slen + 1;
+					i = j - 1;
+				}
+				curtok = TOK_NONE;
+				continue;
+			}
 			case '0': case '1': case '2': case '3': case '4':
 			case '5': case '6': case '7': case '8': case '9':
+				if (lastok == TOK_IDENT) {
+					curtok = TOK_IDENT;
+					break;
+				}
 				// If we were mid-decimal (saw NUMBER then '.'), stay in DECIMAL.
 				curtok = (lastok == TOK_DECIMAL) ? TOK_DECIMAL : TOK_NUMBER;
 				break;
@@ -110,6 +145,9 @@ Token* bstLex(char* string, size_t* out_len)
 			case '^':
 				curtok = TOK_CARET;
 				break;
+			case '!':
+				curtok = TOK_BANG;
+				break;
 			case ':':
 				curtok = TOK_COLON;
 				break;
@@ -124,9 +162,6 @@ Token* bstLex(char* string, size_t* out_len)
 				break;
 			case '>':
 				curtok = TOK_GREATER;
-				break;
-			case '\'':
-				curtok = TOK_PRIME;
 				break;
 			case '$':
 				curtok = TOK_DOLLAR;
@@ -227,7 +262,7 @@ Token* bstLex(char* string, size_t* out_len)
 		}
 	}
 
-	/// Flush any trailing accumulated token.
+	// Flush any trailing accumulated token.
 	if (mode == COMMAND_M)
 		bstlFlush(&tokens, &len, &cap, TOK_COMMAND, buf, &bufr, line, tokcol);
 	else

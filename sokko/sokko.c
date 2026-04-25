@@ -50,106 +50,6 @@ void setEntry(Matrix* matrix, int i, int j, MatrixElement x) {
     resetMatrixCache(matrix);
 }
 
-/* ---------- Complex arithmetic ---------- */
-
-// Add two ComplexNumbers
-ComplexNumber complexAdd(ComplexNumber a, ComplexNumber b) {
-    ComplexNumber c;
-    c.real = a.real + b.real;
-    c.imag = a.imag + b.imag;
-    return c;
-}
-
-// Subtract two ComplexNumbers
-ComplexNumber complexSub(ComplexNumber a, ComplexNumber b) {
-    ComplexNumber c;
-    c.real = a.real - b.real;
-    c.imag = a.imag - b.imag;
-    return c;
-}
-
-// Multiply two ComplexNumbers
-ComplexNumber complexMul(ComplexNumber a, ComplexNumber b) {
-    ComplexNumber c;
-    c.real = a.real * b.real - a.imag * b.imag;
-    c.imag = a.real * b.imag + a.imag * b.real;
-    return c;
-}
-
-// Divide two ComplexNumbers
-ComplexNumber complexDiv(ComplexNumber a, ComplexNumber b) {
-    ComplexNumber c;
-    double denom = b.real * b.real + b.imag * b.imag;
-    c.real = (a.real * b.real + a.imag * b.imag) / denom;
-    c.imag = (a.imag * b.real - a.real * b.imag) / denom;
-    return c;
-}
-
-// Negate a ComplexNumber
-ComplexNumber complexNeg(ComplexNumber a) {
-    ComplexNumber c;
-    c.real = -a.real;
-    c.imag = -a.imag;
-    return c;
-}
-
-// Return the complex conjugate
-ComplexNumber complexConj(ComplexNumber a) {
-    ComplexNumber c;
-    c.real = a.real;
-    c.imag = -a.imag;
-    return c;
-}
-
-// Return the modulus |a|
-double complexAbs(ComplexNumber a) {
-    return sqrt(a.real * a.real + a.imag * a.imag);
-}
-
-// Return the argument arg(a) in (-pi, pi]
-double complexArg(ComplexNumber a) {
-    return atan2(a.imag, a.real);
-}
-
-// Return the principal square root of a ComplexNumber
-ComplexNumber complexSqrt(ComplexNumber a) {
-    ComplexNumber c;
-    // Real fast path: sqrt is either real or pure imaginary, no trig noise
-    if (a.imag == 0.0) {
-        if (a.real >= 0.0) { c.real = sqrt(a.real); c.imag = 0.0; }
-        else { c.real = 0.0; c.imag = sqrt(-a.real); }
-        return c;
-    }
-    double r = complexAbs(a);
-    double theta = complexArg(a);
-    double sr = sqrt(r);
-    c.real = sr * cos(theta / 2.0);
-    c.imag = sr * sin(theta / 2.0);
-    return c;
-}
-
-// Return the principal cube root of a ComplexNumber
-ComplexNumber complexCbrt(ComplexNumber a) {
-    ComplexNumber c;
-    // Real fast path: cbrt of a real is real
-    if (a.imag == 0.0) {
-        c.real = cbrt(a.real);
-        c.imag = 0.0;
-        return c;
-    }
-    double r = complexAbs(a);
-    double theta = complexArg(a);
-    double cr = cbrt(r);
-    c.real = cr * cos(theta / 3.0);
-    c.imag = cr * sin(theta / 3.0);
-    return c;
-}
-
-// Tell if two ComplexNumbers are equal up to some tolerance
-bool complexEq(ComplexNumber a, ComplexNumber b, double tol) {
-    return fabs(a.real - b.real) <= tol && fabs(a.imag - b.imag) <= tol;
-}
-
 /* ---------- MatrixElement operations ---------- */
 
 // Wrap a double in a MatrixElement
@@ -1458,5 +1358,403 @@ Matrix** eigenvectors3x3(Matrix* matrix) {
     }
 
     free(eigs);
+    return evects;
+}
+
+/* ---------- General n x n eigenvalues / eigenvectors ----------
+ * Algorithm: reduce to upper Hessenberg form via Givens similarity
+ * transforms, then run the implicitly-shifted QR iteration (Wilkinson
+ * shift) until subdiagonals decouple. Eigenvectors are recovered by
+ * computing a null-space basis vector of (A - lambda*I) for each
+ * computed eigenvalue, using complex Gaussian elimination with partial
+ * pivoting.
+ *
+ * The QR iteration in complex arithmetic does not handle every
+ * pathological matrix (e.g. defective non-diagonalizable cases produce
+ * approximate, possibly degenerate eigenvectors), but is correct for
+ * generic matrices.
+ */
+
+static const double EIGEN_TOL = 1e-12;
+static const double EIGEN_REAL_SNAP = 1e-9;
+
+// Complex Givens rotation that maps (x, y) -> (r, 0) for r >= 0 real.
+// Uses c = conj(x)/r, s = conj(y)/r so G = [[c, s], [-conj(s), conj(c)]].
+static void cGivens(ComplexNumber x, ComplexNumber y, ComplexNumber* c, ComplexNumber* s) {
+    double ax = complexAbs(x);
+    double ay = complexAbs(y);
+    double r = sqrt(ax*ax + ay*ay);
+    if (r < 1e-300) {
+        c->real = 1.0; c->imag = 0.0;
+        s->real = 0.0; s->imag = 0.0;
+        return;
+    }
+    c->real = x.real / r;  c->imag = -x.imag / r;
+    s->real = y.real / r;  s->imag = -y.imag / r;
+}
+
+// Apply G (left) to rows p, q across columns [j0, j1).
+//   row_p   <-  c*row_p + s*row_q
+//   row_q   <- -conj(s)*row_p + conj(c)*row_q
+static void applyGivensLeft(ComplexNumber* H, int n, int p, int q,
+                            ComplexNumber c, ComplexNumber s, int j0, int j1) {
+    ComplexNumber cs = complexConj(s);
+    ComplexNumber cc = complexConj(c);
+    for (int j = j0; j < j1; j++) {
+        ComplexNumber a = H[p*n + j];
+        ComplexNumber b = H[q*n + j];
+        H[p*n + j] = complexAdd(complexMul(c, a), complexMul(s, b));
+        H[q*n + j] = complexAdd(complexNeg(complexMul(cs, a)), complexMul(cc, b));
+    }
+}
+
+// Apply G^* (right) to cols p, q across rows [i0, i1).
+//   col_p   <-  conj(c)*col_p + conj(s)*col_q
+//   col_q   <- -s*col_p + c*col_q
+static void applyGivensRight(ComplexNumber* H, int n, int p, int q,
+                             ComplexNumber c, ComplexNumber s, int i0, int i1) {
+    ComplexNumber cs = complexConj(s);
+    ComplexNumber cc = complexConj(c);
+    for (int i = i0; i < i1; i++) {
+        ComplexNumber a = H[i*n + p];
+        ComplexNumber b = H[i*n + q];
+        H[i*n + p] = complexAdd(complexMul(cc, a), complexMul(cs, b));
+        H[i*n + q] = complexAdd(complexNeg(complexMul(s, a)), complexMul(c, b));
+    }
+}
+
+// Reduce H (n x n) to upper Hessenberg form by similarity (in place).
+static void hessenbergReduce(ComplexNumber* H, int n) {
+    for (int k = 0; k < n - 2; k++) {
+        for (int i = k + 2; i < n; i++) {
+            ComplexNumber c, s;
+            cGivens(H[(k+1)*n + k], H[i*n + k], &c, &s);
+            applyGivensLeft(H, n, k + 1, i, c, s, k, n);
+            applyGivensRight(H, n, k + 1, i, c, s, 0, n);
+        }
+    }
+}
+
+// Run shifted QR iteration on Hessenberg H (n x n); fill eigs[0..n-1].
+static void qrIterate(ComplexNumber* H, int n, ComplexNumber* eigs) {
+    if (n == 0) return;
+    if (n == 1) { eigs[0] = H[0]; return; }
+
+    int p = n;
+    int totalIter = 0;
+    int sinceDeflate = 0;
+    int maxIter = 500 * n + 500;
+
+    while (p > 1 && totalIter < maxIter) {
+        // Try to deflate any small subdiagonal in [1, p-1]
+        int split = -1;
+        for (int i = p - 1; i >= 1; i--) {
+            ComplexNumber sub = H[i*n + (i-1)];
+            ComplexNumber d1 = H[i*n + i];
+            ComplexNumber d2 = H[(i-1)*n + (i-1)];
+            double tol = EIGEN_TOL * (complexAbs(d1) + complexAbs(d2)) + 1e-300;
+            if (complexAbs(sub) < tol) {
+                H[i*n + (i-1)] = (ComplexNumber){0.0, 0.0};
+                if (i == p - 1) {
+                    eigs[p - 1] = d1;
+                    p--;
+                    split = -2; // deflated tail
+                    break;
+                }
+                split = i;
+                break;
+            }
+        }
+        if (split == -2) { sinceDeflate = 0; continue; }
+
+        if (p <= 1) break;
+
+        // Operate on the active block [start, p) where start = split (or 0).
+        int start = (split >= 0) ? split : 0;
+
+        // Wilkinson shift: eigenvalue of trailing 2x2 closer to H[p-1,p-1]
+        ComplexNumber a = H[(p-2)*n + (p-2)];
+        ComplexNumber b = H[(p-2)*n + (p-1)];
+        ComplexNumber cc = H[(p-1)*n + (p-2)];
+        ComplexNumber d = H[(p-1)*n + (p-1)];
+        ComplexNumber tr = complexAdd(a, d);
+        ComplexNumber det = complexSub(complexMul(a, d), complexMul(b, cc));
+        ComplexNumber two = {2.0, 0.0};
+        ComplexNumber four = {4.0, 0.0};
+        ComplexNumber disc = complexSqrt(complexSub(complexMul(tr, tr), complexMul(four, det)));
+        ComplexNumber lam1 = complexDiv(complexAdd(tr, disc), two);
+        ComplexNumber lam2 = complexDiv(complexSub(tr, disc), two);
+        ComplexNumber mu = (complexAbs(complexSub(lam1, d)) <
+                            complexAbs(complexSub(lam2, d))) ? lam1 : lam2;
+
+        // Exceptional shift: if stuck (e.g. trailing 2x2 has zero trace and det,
+        // making Wilkinson shift = 0), perturb with the subdiagonal magnitude.
+        if (sinceDeflate > 0 && sinceDeflate % 10 == 0) {
+            double bump = complexAbs(H[(p-1)*n + (p-2)]);
+            if (sinceDeflate % 20 == 0) {
+                mu.real += 1.5 * bump;
+                mu.imag += 0.7 * bump;
+            } else {
+                mu.real += 0.75 * bump;
+            }
+        }
+
+        // H[start:p, start:p] -= mu*I
+        for (int i = start; i < p; i++) H[i*n + i] = complexSub(H[i*n + i], mu);
+
+        // QR step: zero subdiagonals via Givens, accumulating rotations.
+        int rotCount = p - 1 - start;
+        ComplexNumber* cs = malloc((rotCount > 0 ? rotCount : 1) * sizeof(ComplexNumber));
+        ComplexNumber* ss = malloc((rotCount > 0 ? rotCount : 1) * sizeof(ComplexNumber));
+        if (!cs || !ss) {
+            free(cs); free(ss);
+            for (int i = start; i < p; i++) H[i*n + i] = complexAdd(H[i*n + i], mu);
+            for (int i = 0; i < p; i++) eigs[i] = H[i*n + i];
+            return;
+        }
+        for (int i = start; i < p - 1; i++) {
+            int idx = i - start;
+            cGivens(H[i*n + i], H[(i+1)*n + i], &cs[idx], &ss[idx]);
+            applyGivensLeft(H, n, i, i + 1, cs[idx], ss[idx], i, n);
+        }
+        // Apply Q on the right (R*Q): apply each G_i^* to columns i, i+1
+        for (int i = start; i < p - 1; i++) {
+            int idx = i - start;
+            applyGivensRight(H, n, i, i + 1, cs[idx], ss[idx], 0, p);
+        }
+        free(cs); free(ss);
+
+        // H[start:p, start:p] += mu*I
+        for (int i = start; i < p; i++) H[i*n + i] = complexAdd(H[i*n + i], mu);
+
+        totalIter++;
+        sinceDeflate++;
+    }
+
+    // Anything left along the diagonal of the unconverged block is best estimate
+    for (int i = 0; i < p; i++) eigs[i] = H[i*n + i];
+}
+
+// Build a complex copy of A (n x n) packed row-major.
+static ComplexNumber* matrixToComplex(Matrix* A) {
+    int n = A->numRows;
+    ComplexNumber* H = malloc(n * n * sizeof(ComplexNumber));
+    if (!H) return NULL;
+    for (int i = 0; i < n; i++)
+        for (int j = 0; j < n; j++)
+            H[i*n + j] = elemToComplex(getEntry(A, i, j));
+    return H;
+}
+
+// Find a single null-space vector of the n x n complex matrix M (modified in place).
+// Writes a normalized vector to v. If M is full-rank within tolerance, returns 0;
+// otherwise returns 1 on success.
+static int complexNullVector(ComplexNumber* M, int n, ComplexNumber* v) {
+    int* pivotCol = malloc(n * sizeof(int));
+    if (!pivotCol) return 0;
+    for (int i = 0; i < n; i++) pivotCol[i] = -1;
+
+    int row = 0;
+    for (int col = 0; col < n && row < n; col++) {
+        // Partial pivot: largest |M[r, col]| for r in [row, n)
+        int piv = -1;
+        double best = 0.0;
+        for (int r = row; r < n; r++) {
+            double a = complexAbs(M[r*n + col]);
+            if (a > best) { best = a; piv = r; }
+        }
+        if (piv < 0 || best < EIGEN_TOL) continue;
+        if (piv != row) {
+            for (int c = 0; c < n; c++) {
+                ComplexNumber t = M[row*n + c];
+                M[row*n + c] = M[piv*n + c];
+                M[piv*n + c] = t;
+            }
+        }
+        // Eliminate above and below
+        ComplexNumber pv = M[row*n + col];
+        for (int r = 0; r < n; r++) {
+            if (r == row) continue;
+            ComplexNumber f = complexDiv(M[r*n + col], pv);
+            if (complexAbs(f) < 1e-300) continue;
+            for (int c = col; c < n; c++) {
+                M[r*n + c] = complexSub(M[r*n + c], complexMul(f, M[row*n + c]));
+            }
+        }
+        // Normalize pivot row to 1
+        for (int c = col; c < n; c++) M[row*n + c] = complexDiv(M[row*n + c], pv);
+        pivotCol[row] = col;
+        row++;
+    }
+
+    // Find a free column
+    int freeCol = -1;
+    for (int c = 0; c < n; c++) {
+        bool found = false;
+        for (int r = 0; r < n; r++) if (pivotCol[r] == c) { found = true; break; }
+        if (!found) { freeCol = c; break; }
+    }
+    if (freeCol < 0) { free(pivotCol); return 0; }
+
+    // Build null vector: v[freeCol] = 1, v[other free] = 0,
+    // v[pivotCol[r]] = -M[r, freeCol]
+    for (int i = 0; i < n; i++) { v[i].real = 0.0; v[i].imag = 0.0; }
+    v[freeCol].real = 1.0;
+    for (int r = 0; r < n; r++) {
+        if (pivotCol[r] >= 0) {
+            v[pivotCol[r]] = complexNeg(M[r*n + freeCol]);
+        }
+    }
+    free(pivotCol);
+
+    // Normalize
+    double s = 0.0;
+    for (int i = 0; i < n; i++) {
+        double a = complexAbs(v[i]);
+        s += a * a;
+    }
+    s = sqrt(s);
+    if (s < 1e-300) {
+        v[0].real = 1.0; v[0].imag = 0.0;
+        return 1;
+    }
+    for (int i = 0; i < n; i++) {
+        v[i].real /= s;
+        v[i].imag /= s;
+    }
+    return 1;
+}
+
+// Returns true iff every entry of A is a real (non-complex) MatrixElement.
+static bool matrixIsReal(Matrix* A) {
+    int n = A->numRows;
+    for (int i = 0; i < n; i++)
+        for (int j = 0; j < n; j++)
+            if (getEntry(A, i, j).isComplex) return false;
+    return true;
+}
+
+// Compute eigenvalues of an arbitrary square matrix.
+// Returns a freshly allocated array of length matrix->numRows on success.
+MatrixElement* eigenvalues(Matrix* matrix) {
+    if (!matrix) return NULL;
+    if (!isSquare(matrix)) return NULL;
+
+    int n = matrix->numRows;
+    if (n == 2) return eigenvalues2x2(matrix);
+    if (n == 3) return eigenvalues3x3(matrix);
+
+    MatrixElement* out = malloc(n * sizeof(MatrixElement));
+    if (!out) return NULL;
+    if (n == 1) {
+        out[0] = getEntry(matrix, 0, 0);
+        return out;
+    }
+
+    ComplexNumber* H = matrixToComplex(matrix);
+    if (!H) { free(out); return NULL; }
+    ComplexNumber* eigs = malloc(n * sizeof(ComplexNumber));
+    if (!eigs) { free(H); free(out); return NULL; }
+
+    hessenbergReduce(H, n);
+    qrIterate(H, n, eigs);
+
+    // If the input was real, snap tiny imaginary residuals to 0
+    bool inputReal = matrixIsReal(matrix);
+    if (inputReal) {
+        double scale = 0.0;
+        for (int i = 0; i < n; i++) {
+            double a = complexAbs(eigs[i]);
+            if (a > scale) scale = a;
+        }
+        double tol = EIGEN_REAL_SNAP * scale + 1e-12;
+        for (int i = 0; i < n; i++)
+            if (fabs(eigs[i].imag) < tol) eigs[i].imag = 0.0;
+    }
+
+    for (int i = 0; i < n; i++) out[i] = elemFromComplex(eigs[i]);
+    free(eigs);
+    free(H);
+    return out;
+}
+
+// Compute eigenvectors of an arbitrary square matrix.
+// Returns a freshly allocated array of n column matrices, parallel to eigenvalues().
+Matrix** eigenvectors(Matrix* matrix) {
+    if (!matrix) return NULL;
+    if (!isSquare(matrix)) return NULL;
+
+    int n = matrix->numRows;
+    if (n == 2) return eigenvectors2x2(matrix);
+    if (n == 3) return eigenvectors3x3(matrix);
+
+    MatrixElement* eigs = eigenvalues(matrix);
+    if (!eigs) return NULL;
+
+    Matrix** evects = malloc(n * sizeof(Matrix*));
+    if (!evects) { free(eigs); return NULL; }
+    for (int i = 0; i < n; i++) {
+        evects[i] = constructMatrix(n, 1);
+        if (!evects[i]) {
+            for (int j = 0; j < i; j++) freeMatrix(evects[j]);
+            free(evects); free(eigs);
+            return NULL;
+        }
+    }
+
+    if (n == 1) {
+        setEntry(evects[0], 0, 0, elemFromReal(1.0));
+        free(eigs);
+        return evects;
+    }
+
+    bool inputReal = matrixIsReal(matrix);
+
+    ComplexNumber* M = malloc(n * n * sizeof(ComplexNumber));
+    ComplexNumber* v = malloc(n * sizeof(ComplexNumber));
+    if (!M || !v) {
+        free(M); free(v);
+        for (int i = 0; i < n; i++) freeMatrix(evects[i]);
+        free(evects); free(eigs);
+        return NULL;
+    }
+
+    for (int k = 0; k < n; k++) {
+        if (elemIsNan(eigs[k])) {
+            freeMatrix(evects[k]);
+            evects[k] = NULL;
+            continue;
+        }
+        ComplexNumber lam = elemToComplex(eigs[k]);
+
+        // Build M = A - lam*I
+        for (int i = 0; i < n; i++)
+            for (int j = 0; j < n; j++)
+                M[i*n + j] = elemToComplex(getEntry(matrix, i, j));
+        for (int i = 0; i < n; i++) M[i*n + i] = complexSub(M[i*n + i], lam);
+
+        if (!complexNullVector(M, n, v)) {
+            // Fallback: e_0
+            for (int i = 0; i < n; i++) { v[i].real = 0.0; v[i].imag = 0.0; }
+            v[0].real = 1.0;
+        }
+
+        // Snap tiny imaginary parts to 0 for real inputs with real eigenvalue
+        if (inputReal && fabs(lam.imag) < 1e-12) {
+            double scale = 0.0;
+            for (int i = 0; i < n; i++) {
+                double a = complexAbs(v[i]);
+                if (a > scale) scale = a;
+            }
+            double tol = EIGEN_REAL_SNAP * scale + 1e-12;
+            for (int i = 0; i < n; i++)
+                if (fabs(v[i].imag) < tol) v[i].imag = 0.0;
+        }
+
+        for (int i = 0; i < n; i++)
+            setEntry(evects[k], i, 0, elemFromComplex(v[i]));
+    }
+
+    free(M); free(v); free(eigs);
     return evects;
 }

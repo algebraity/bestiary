@@ -117,7 +117,6 @@ Group* constructQ8(void);
 Ring* constructZnRing(int n);
 Ring* constructZnProductRing(int* vals, int k);
 Ring* primeFiniteField(int p);
-Ring* constructFiniteField(int p, int k);
 bool isPrime(int p);
 
 /* ---------- Compare methods ---------- */
@@ -220,7 +219,6 @@ Ideal* constructRightIdeal(Ring* R, int* indices, int indicesLen);
 bool cmpIdeals(Ideal* I, Ideal* J);
 Ideal* addIdeals(Ideal* I, Ideal* J);
 Ideal* multIdeals(Ideal* I, Ideal* J);
-Ring* quotientRing(Ring* R, Ideal* I);
 
 /* ---------- Ring homomorphisms ---------- */
 RingHomomorphism* constructRingHomomorphism(Ring* domain, Ring* codomain, int* indicesMapping, int indicesMappingSize);

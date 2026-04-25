@@ -263,7 +263,7 @@ Ring* constructRing(RingElement** elements, int** addTable, int** multTable, int
     return ring;
 }
 
-/* ---------- Repr helpers ---------- */
+/* ---------- Helpers functions ---------- */
 
 // Recursively collect leaf reprs from a nested product repr, e.g. "((0,1),2)" → "0,1,2"
 char* flattenReprInner(const char* s) {
@@ -307,6 +307,75 @@ char* flattenRepr(const char* repr) {
     sprintf(result, "(%s)", inner);
     free(inner);
     return result;
+}
+
+// Helpers for F_{p^k} construction
+static int intPow(int base, int exp) {
+	int r = 1;
+	for (int i = 0; i < exp; i++) r *= base;
+	return r;
+}
+
+// Reduce polynomial a (length aLen, low coeff first) modulo monic f of degree k.
+// f has length k+1 with f[k] == 1. Result written to out (length k).
+static void polyRemMod(const int* a, int aLen, const int* f, int k, int p, int* out) {
+	int* r = malloc(aLen * sizeof(int));
+	if (!r) { for (int i = 0; i < k; i++) out[i] = 0; return; }
+	for (int i = 0; i < aLen; i++) r[i] = a[i];
+	for (int i = aLen - 1; i >= k; i--) {
+		int c = r[i];
+		if (c == 0) continue;
+		for (int j = 0; j <= k; j++) {
+			r[i - k + j] = ((r[i - k + j] - c * f[j]) % p + p) % p;
+		}
+	}
+	for (int i = 0; i < k; i++) out[i] = (i < aLen) ? r[i] : 0;
+	free(r);
+}
+
+// Returns true iff monic poly f of degree k is irreducible over F_p.
+// Brute force: no monic poly of degree 1..k/2 divides f.
+static bool isIrreduciblePolyMod(const int* f, int k, int p) {
+	if (k < 2) return k == 1;
+	int maxDeg = k / 2;
+	int* g = malloc((maxDeg + 1) * sizeof(int));
+	if (!g) return false;
+	int* rem = malloc(k * sizeof(int));
+	if (!rem) { free(g); return false; }
+	for (int d = 1; d <= maxDeg; d++) {
+		int count = intPow(p, d);
+		for (int idx = 0; idx < count; idx++) {
+			int n = idx;
+			for (int i = 0; i < d; i++) { g[i] = n % p; n /= p; }
+			g[d] = 1;
+			polyRemMod(f, k + 1, g, d, p, rem);
+			bool zero = true;
+			for (int i = 0; i < d; i++) if (rem[i] != 0) { zero = false; break; }
+			if (zero) { free(g); free(rem); return false; }
+		}
+	}
+	free(g); free(rem);
+	return true;
+}
+
+// Build a polynomial repr "a_0+a_1 x+a_2 x^2+..." in buf (size bufLen), omitting zero terms.
+static void polyReprBuf(const int* poly, int k, char* buf, int bufLen) {
+	int pos = 0;
+	bool first = true;
+	buf[0] = '\0';
+	for (int j = 0; j < k; j++) {
+		if (poly[j] == 0) continue;
+		if (!first) pos += snprintf(buf + pos, bufLen - pos, "+");
+		if (j == 0) {
+			pos += snprintf(buf + pos, bufLen - pos, "%d", poly[j]);
+		} else {
+			if (poly[j] != 1) pos += snprintf(buf + pos, bufLen - pos, "%d", poly[j]);
+			if (j == 1) pos += snprintf(buf + pos, bufLen - pos, "x");
+			else pos += snprintf(buf + pos, bufLen - pos, "x^%d", j);
+		}
+		first = false;
+	}
+	if (first) snprintf(buf, bufLen, "0");
 }
 
 /* ---------- Permutation helpers ---------- */
@@ -1024,6 +1093,133 @@ Ring* primeFiniteField(int p) {
     return constructZnRing(p);
 }
 
+// Construct the finite field F_{p^k} = F_p[x] / (f(x)) for an irreducible f.
+Ring* constructFiniteField(int p, int k) {
+	if (k < 0) return NULL;
+	if (k == 0) return trivialRing();
+	if (!isPrime(p)) return NULL;
+	if (k == 1) return primeFiniteField(p);
+
+	// Find an irreducible monic polynomial f of degree k over F_p
+	int numMonic = intPow(p, k);
+	int* f = malloc((k + 1) * sizeof(int));
+	if (!f) return NULL;
+	f[k] = 1;
+	bool found = false;
+	for (int idx = 0; idx < numMonic; idx++) {
+		int n = idx;
+		for (int i = 0; i < k; i++) { f[i] = n % p; n /= p; }
+		if (isIrreduciblePolyMod(f, k, p)) { found = true; break; }
+	}
+	if (!found) { free(f); return NULL; }
+
+	int N = intPow(p, k);
+
+	RingElement** elements = malloc(N * sizeof(RingElement*));
+	if (!elements) { free(f); return NULL; }
+	int** addTable = malloc(N * sizeof(int*));
+	if (!addTable) { free(elements); free(f); return NULL; }
+	int** multTable = malloc(N * sizeof(int*));
+	if (!multTable) { free(addTable); free(elements); free(f); return NULL; }
+
+	// Allocate per-row arrays first so cleanup is uniform on failure
+	for (int i = 0; i < N; i++) {
+		elements[i] = NULL;
+		addTable[i] = NULL;
+		multTable[i] = NULL;
+	}
+
+	// Build elements
+	int* poly = malloc(k * sizeof(int));
+	if (!poly) {
+		free(elements); free(addTable); free(multTable); free(f);
+		return NULL;
+	}
+	int bufLen = 16 * k + 16;
+	char* buf = malloc(bufLen);
+	if (!buf) {
+		free(poly); free(elements); free(addTable); free(multTable); free(f);
+		return NULL;
+	}
+	for (int i = 0; i < N; i++) {
+		int n = i;
+		for (int j = 0; j < k; j++) { poly[j] = n % p; n /= p; }
+		polyReprBuf(poly, k, buf, bufLen);
+		elements[i] = constructRingElement(NULL, buf);
+		if (!elements[i]) {
+			for (int j = 0; j < i; j++) freeRingElement(elements[j]);
+			free(elements); free(addTable); free(multTable);
+			free(poly); free(buf); free(f);
+			return NULL;
+		}
+		addTable[i] = malloc(N * sizeof(int));
+		multTable[i] = malloc(N * sizeof(int));
+		if (!addTable[i] || !multTable[i]) {
+			for (int j = 0; j <= i; j++) freeRingElement(elements[j]);
+			for (int j = 0; j <= i; j++) { free(addTable[j]); free(multTable[j]); }
+			free(elements); free(addTable); free(multTable);
+			free(poly); free(buf); free(f);
+			return NULL;
+		}
+	}
+	free(poly);
+	free(buf);
+
+	// Fill in tables
+	int* a = malloc(k * sizeof(int));
+	int* b = malloc(k * sizeof(int));
+	int* sum = malloc(k * sizeof(int));
+	int* prod = malloc((2 * k - 1) * sizeof(int));
+	int* rem = malloc(k * sizeof(int));
+	if (!a || !b || !sum || !prod || !rem) {
+		free(a); free(b); free(sum); free(prod); free(rem);
+		for (int j = 0; j < N; j++) {
+			freeRingElement(elements[j]);
+			free(addTable[j]); free(multTable[j]);
+		}
+		free(elements); free(addTable); free(multTable); free(f);
+		return NULL;
+	}
+	for (int i = 0; i < N; i++) {
+		int ni = i;
+		for (int t = 0; t < k; t++) { a[t] = ni % p; ni /= p; }
+		for (int j = 0; j < N; j++) {
+			int nj = j;
+			for (int t = 0; t < k; t++) { b[t] = nj % p; nj /= p; }
+
+			for (int t = 0; t < k; t++) sum[t] = (a[t] + b[t]) % p;
+			int sumIdx = 0;
+			for (int t = k - 1; t >= 0; t--) sumIdx = sumIdx * p + sum[t];
+			addTable[i][j] = sumIdx;
+
+			for (int t = 0; t < 2 * k - 1; t++) prod[t] = 0;
+			for (int u = 0; u < k; u++) {
+				if (a[u] == 0) continue;
+				for (int v = 0; v < k; v++) {
+					prod[u + v] = (prod[u + v] + a[u] * b[v]) % p;
+				}
+			}
+			polyRemMod(prod, 2 * k - 1, f, k, p, rem);
+			int prodIdx = 0;
+			for (int t = k - 1; t >= 0; t--) prodIdx = prodIdx * p + rem[t];
+			multTable[i][j] = prodIdx;
+		}
+	}
+	free(a); free(b); free(sum); free(prod); free(rem); free(f);
+
+	Ring* R = constructRing(elements, addTable, multTable, N);
+	if (!R) {
+		for (int i = 0; i < N; i++) {
+			freeRingElement(elements[i]);
+			free(addTable[i]); free(multTable[i]);
+		}
+		free(elements); free(addTable); free(multTable);
+		return NULL;
+	}
+	for (int i = 0; i < N; i++) elements[i]->ring = R;
+	return R;
+}
+
 /* ---------- Compare methods ---------- */
 
 // Compare two GroupElements
@@ -1197,6 +1393,40 @@ int elementOrder(Group* G, GroupElement* g) {
 	}
 
 	return order;
+}
+
+// Returns the additive order of x in the additive group of R
+int additiveOrder(Ring* R, RingElement* x) {
+    if (!x) return -1;
+    if (!cmpRings(R, x->ring)) return -1;
+
+    int order = 1;
+    RingElement* sum = x;
+    while (!isRingAddIdentity(R, sum)) {
+        sum = ringAdd(sum, x);
+        order++;
+        if (order > R->card) return -1;
+    }
+
+    return order;
+}
+
+// Returns the multiplicative order of x in the unit group of R
+int multiplicativeOrder(Ring* R, RingElement* x) {
+    if (!x) return -1;
+    if (!cmpRings(R, x->ring)) return -1;
+    if (!hasMultIdentity(R)) return -1;
+    if (!ringMultInverse(x)) return -1;
+
+    int order = 1;
+    RingElement* prod = x;
+    while (!isRingMultIdentity(R, prod)) {
+        prod = ringMult(prod, x);
+        order++;
+        if (order > R->card) return -1;
+    }
+
+    return order;
 }
 
 // Return true if G is simple, false otherwise
@@ -2051,6 +2281,92 @@ SubGroup** listAllNormalSubgroups(Group* G, int* count) {
 
     *count = n;
     return normal;
+}
+
+// List all maximal subgroups of G
+SubGroup** listAllMaximalSubgroups(Group* G, int* count) {
+    if (!G || !count) return NULL;
+
+    int numSubgroups = 0;
+    SubGroup** subgroups = listAllSubgroups(G, &numSubgroups);
+    if (!subgroups) return NULL;
+
+    SubGroup** maximal = malloc(numSubgroups * sizeof(SubGroup*));
+    if (!maximal) {
+        for (int i = 0; i < numSubgroups; i++) freeSubgroup(subgroups[i]);
+        free(subgroups);
+        return NULL;
+    }
+
+    int numMaxSubgroups = 0;
+    for (int i = 0; i < numSubgroups; i++) {
+        if (subgroups[i]->card == G->card) { freeSubgroup(subgroups[i]); continue; }
+        bool isMaximal = true;
+        for (int j = 0; j < numSubgroups; j++) {
+            if (subgroups[j]->card <= subgroups[i]->card) continue;
+            if (subgroups[j]->card == G->card) continue;
+            if (subgroupContains(subgroups[j], subgroups[i])) {
+                isMaximal = false;
+                break;
+            }
+        }
+        if (isMaximal) maximal[numMaxSubgroups++] = subgroups[i];
+        else freeSubgroup(subgroups[i]);
+    }
+    free(subgroups);
+
+    *count = numMaxSubgroups;
+    return maximal;
+}
+
+// Returns true iff core_G(H) = {e}, i.e. no non-identity element of H is
+// fixed by all conjugations.  (core = intersection of all conjugates of H)
+static bool hasTrivialCore(SubGroup* H) {
+    Group* G = H->ambient;
+    for (int hi = 0; hi < H->card; hi++) {
+        if (H->indices[hi] == 0) continue; // skip identity
+        GroupElement* h = G->elements[H->indices[hi]];
+        bool inAllConjugates = true;
+        for (int gi = 0; gi < G->card; gi++) {
+            GroupElement* conj = groupElementConjugate(G->elements[gi], h);
+            if (!conj) return false;
+            bool inH = false;
+            for (int m = 0; m < H->card; m++) {
+                if (conj->index == H->indices[m]) { inH = true; break; }
+            }
+            if (!inH) { inAllConjugates = false; break; }
+        }
+        if (inAllConjugates) return false; // h lies in the core
+    }
+    return true;
+}
+
+// Get the largest subgroup of G with trivial core
+SubGroup* largestCoreFreeSubgroup(Group* G) {
+    if (!G) return NULL;
+
+    int numSubgroups = 0;
+    SubGroup** subgroups = listAllSubgroups(G, &numSubgroups);
+    if (!subgroups) return NULL;
+
+    SubGroup* largest = NULL;
+    for (int i = 0; i < numSubgroups; i++) {
+        SubGroup* H = subgroups[i];
+        if (H->card == G->card) { freeSubgroup(H); continue; }
+        if (hasTrivialCore(H)) {
+            if (!largest || H->card > largest->card) {
+                if (largest) freeSubgroup(largest);
+                largest = H;
+            } else {
+                freeSubgroup(H);
+            }
+        } else {
+            freeSubgroup(H);
+        }
+    }
+    free(subgroups);
+
+    return largest;
 }
 
 /* ---------- Cyclic groups ---------- */
@@ -3029,6 +3345,113 @@ Ideal* multIdeals(Ideal* I, Ideal* J) {
     K->isLeft = I->isLeft;
 
     return K;
+}
+
+// Construct the quotient ring R / I for a two-sided Ideal I of R
+Ring* quotientRing(Ring* R, Ideal* I) {
+	if (!R || !I) return NULL;
+	if (I->ring != R) return NULL;
+
+	// Verify I is two-sided (required for the quotient to be well-defined)
+	for (int i = 0; i < I->card; i++) {
+		for (int j = 0; j < R->card; j++) {
+			int lp = R->multTable[j][I->indices[i]];
+			int rp = R->multTable[I->indices[i]][j];
+			bool foundL = false, foundR = false;
+			for (int m = 0; m < I->card; m++) {
+				if (I->indices[m] == lp) foundL = true;
+				if (I->indices[m] == rp) foundR = true;
+			}
+			if (!foundL || !foundR) return NULL;
+		}
+	}
+
+	if (R->card % I->card != 0) return NULL;
+	int numCosets = R->card / I->card;
+
+	// Assign each element of R to its additive coset; pick one rep per coset
+	int* cosetOf = malloc(R->card * sizeof(int));
+	if (!cosetOf) return NULL;
+	for (int i = 0; i < R->card; i++) cosetOf[i] = -1;
+
+	int* reps = malloc(numCosets * sizeof(int));
+	if (!reps) { free(cosetOf); return NULL; }
+
+	int assigned = 0;
+	for (int x = 0; x < R->card; x++) {
+		if (cosetOf[x] != -1) continue;
+		if (assigned >= numCosets) { free(cosetOf); free(reps); return NULL; }
+		reps[assigned] = x;
+		for (int t = 0; t < I->card; t++) {
+			int y = R->addTable[x][I->indices[t]];
+			cosetOf[y] = assigned;
+		}
+		assigned++;
+	}
+	if (assigned != numCosets) { free(cosetOf); free(reps); return NULL; }
+
+	// Build element reprs "<rep>+I"
+	RingElement** elements = calloc(numCosets, sizeof(RingElement*));
+	if (!elements) { free(cosetOf); free(reps); return NULL; }
+	for (int i = 0; i < numCosets; i++) {
+		const char* rrepr = R->elements[reps[i]]->repr;
+		int rlen = strlen(rrepr) + 4;
+		char* repr = malloc(rlen);
+		if (!repr) {
+			for (int j = 0; j < i; j++) freeRingElement(elements[j]);
+			free(elements); free(cosetOf); free(reps);
+			return NULL;
+		}
+		snprintf(repr, rlen, "%s+I", rrepr);
+		elements[i] = constructRingElement(NULL, repr);
+		free(repr);
+		if (!elements[i]) {
+			for (int j = 0; j < i; j++) freeRingElement(elements[j]);
+			free(elements); free(cosetOf); free(reps);
+			return NULL;
+		}
+	}
+
+	// Build tables
+	int** addTable = malloc(numCosets * sizeof(int*));
+	int** multTable = malloc(numCosets * sizeof(int*));
+	if (!addTable || !multTable) {
+		free(addTable); free(multTable);
+		for (int j = 0; j < numCosets; j++) freeRingElement(elements[j]);
+		free(elements); free(cosetOf); free(reps);
+		return NULL;
+	}
+	for (int i = 0; i < numCosets; i++) {
+		addTable[i] = malloc(numCosets * sizeof(int));
+		multTable[i] = malloc(numCosets * sizeof(int));
+		if (!addTable[i] || !multTable[i]) {
+			for (int j = 0; j <= i; j++) { free(addTable[j]); free(multTable[j]); }
+			free(addTable); free(multTable);
+			for (int j = 0; j < numCosets; j++) freeRingElement(elements[j]);
+			free(elements); free(cosetOf); free(reps);
+			return NULL;
+		}
+		for (int j = 0; j < numCosets; j++) {
+			int sumIdx = R->addTable[reps[i]][reps[j]];
+			int prodIdx = R->multTable[reps[i]][reps[j]];
+			addTable[i][j] = cosetOf[sumIdx];
+			multTable[i][j] = cosetOf[prodIdx];
+		}
+	}
+
+	free(cosetOf); free(reps);
+
+	Ring* Q = constructRing(elements, addTable, multTable, numCosets);
+	if (!Q) {
+		for (int i = 0; i < numCosets; i++) {
+			freeRingElement(elements[i]);
+			free(addTable[i]); free(multTable[i]);
+		}
+		free(elements); free(addTable); free(multTable);
+		return NULL;
+	}
+	for (int i = 0; i < numCosets; i++) elements[i]->ring = Q;
+	return Q;
 }
 
 /* ---------- Ring homomorphisms ---------- */

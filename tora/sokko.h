@@ -40,6 +40,19 @@ void freeMatrix(Matrix* matrix);
 MatrixElement getEntry(const Matrix* matrix, int i, int j);
 void setEntry(Matrix* matrix, int i, int j, MatrixElement x);
 
+/* ---------- Complex arithmetic ---------- */
+ComplexNumber complexAdd(ComplexNumber a, ComplexNumber b);
+ComplexNumber complexSub(ComplexNumber a, ComplexNumber b);
+ComplexNumber complexMul(ComplexNumber a, ComplexNumber b);
+ComplexNumber complexDiv(ComplexNumber a, ComplexNumber b);
+ComplexNumber complexNeg(ComplexNumber a);
+ComplexNumber complexConj(ComplexNumber a);
+double complexAbs(ComplexNumber a);
+double complexArg(ComplexNumber a);
+ComplexNumber complexSqrt(ComplexNumber a);
+ComplexNumber complexCbrt(ComplexNumber a);
+bool complexEq(ComplexNumber a, ComplexNumber b, double tol);
+
 /* ---------- MatrixElement operations ---------- */
 MatrixElement elemFromReal(double x);
 MatrixElement elemFromComplex(ComplexNumber c);
@@ -121,7 +134,5 @@ MatrixElement* eigenvalues2x2(Matrix* matrix);
 MatrixElement* eigenvalues3x3(Matrix* matrix);
 Matrix** eigenvectors2x2(Matrix* matrix);
 Matrix** eigenvectors3x3(Matrix* matrix);
-MatrixElement* eigenvalues(Matrix* matrix);
-Matrix** eigenvectors(Matrix* matrix);
 
 #endif

@@ -5,7 +5,7 @@
 
 typedef enum {
     TOK_NONE=0,
-    TOK_IDENT, TOK_NUMBER, TOK_DECIMAL, TOK_EQUALS, TOK_LBRACE, TOK_RBRACE,
+    TOK_IDENT, TOK_NUMBER, TOK_DECIMAL, TOK_STRING, TOK_EQUALS, TOK_LBRACE, TOK_RBRACE,
     TOK_COMMAND,         // e.g. \det or \otimes
     TOK_AMP, TOK_DBLBACKSLASH,
     TOK_PLUS, TOK_MINUS, TOK_STAR, TOK_SLASH,    // Math operations
@@ -14,6 +14,7 @@ typedef enum {
     TOK_COMMA,
     TOK_CARET,
     TOK_UNDERSCORE,
+    TOK_BANG,
     TOK_COLON,
     TOK_SEMICOLON,
     TOK_PIPE,
