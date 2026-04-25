@@ -1,6 +1,8 @@
-# Bestiary
-a collection of mathematics libraries and utilities.
-the subprojects should be referred to as Beasts
+![](https://git.keimai.space/algebraity/bestiary/raw/branch/main/bestiary-banner.png)
+
+# Bestiary: release the BEASTs!!
+
+...the Bundles of Efficient Algorithms for Science and Technology, that is!!
 
 ---
 
