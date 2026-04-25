@@ -2199,6 +2199,220 @@ void testComplexMatrixIntegration() {
     freeMatrix(A); freeMatrix(invA);
 }
 
+/* ---------- Reduction and subspace tests ---------- */
+
+void testReduceRows() {
+    printf("\n[testReduceRows]\n");
+
+    CHECK(reduceRows(NULL) == NULL, "reduceRows(NULL) is NULL");
+
+    // 2x3, full row rank: pivots in cols 0 and 1, last col is the dependent column
+    double d1[] = { 1, 2, 3,
+                    2, 5, 7 };
+    Matrix* A = makeRealMatrix(2, 3, d1);
+    Matrix* R = reduceRows(A);
+    CHECK(R != NULL, "RREF built");
+    CHECK(approxReal(getEntry(R, 0, 0), 1.0, 1e-9), "R[0][0] = 1");
+    CHECK(approxReal(getEntry(R, 0, 1), 0.0, 1e-9), "R[0][1] = 0 (eliminated above)");
+    CHECK(approxReal(getEntry(R, 0, 2), 1.0, 1e-9), "R[0][2] = 1");
+    CHECK(approxReal(getEntry(R, 1, 0), 0.0, 1e-9), "R[1][0] = 0");
+    CHECK(approxReal(getEntry(R, 1, 1), 1.0, 1e-9), "R[1][1] = 1");
+    CHECK(approxReal(getEntry(R, 1, 2), 1.0, 1e-9), "R[1][2] = 1");
+    freeMatrix(A); freeMatrix(R);
+
+    // 3x3 rank-deficient: third row is row1 + row2 -> RREF has bottom row of zeros
+    double d2[] = { 1, 2, 3,
+                    4, 5, 6,
+                    5, 7, 9 };
+    A = makeRealMatrix(3, 3, d2);
+    R = reduceRows(A);
+    CHECK(R != NULL, "rank-deficient RREF built");
+    bool zeroRow = approxReal(getEntry(R, 2, 0), 0.0, 1e-9)
+                && approxReal(getEntry(R, 2, 1), 0.0, 1e-9)
+                && approxReal(getEntry(R, 2, 2), 0.0, 1e-9);
+    CHECK(zeroRow, "rank-deficient: bottom row is zero");
+    freeMatrix(A); freeMatrix(R);
+
+    // RREF of identity is identity
+    Matrix* I = idMatrix(4);
+    R = reduceRows(I);
+    CHECK(matrixComp(R, I, 1e-12), "RREF(I) = I");
+    freeMatrix(I); freeMatrix(R);
+
+    // RREF is idempotent
+    double d3[] = { 0, 1, 2,
+                    1, 0, 3,
+                    2, 4, 6 };
+    A = makeRealMatrix(3, 3, d3);
+    R = reduceRows(A);
+    Matrix* R2 = reduceRows(R);
+    CHECK(matrixComp(R, R2, 1e-9), "RREF is idempotent");
+    freeMatrix(A); freeMatrix(R); freeMatrix(R2);
+}
+
+void testReduceColumns() {
+    printf("\n[testReduceColumns]\n");
+
+    CHECK(reduceColumns(NULL) == NULL, "reduceColumns(NULL) is NULL");
+
+    // reduceColumns(A) == transpose(reduceRows(transpose(A)))
+    double d[] = { 1, 2, 3,
+                   4, 5, 6,
+                   7, 8, 10 };
+    Matrix* A = makeRealMatrix(3, 3, d);
+    Matrix* C = reduceColumns(A);
+    Matrix* T = transpose(A);
+    Matrix* RT = reduceRows(T);
+    Matrix* expected = transpose(RT);
+    CHECK(matrixComp(C, expected, 1e-9), "reduceColumns = T(rref(T(A)))");
+    freeMatrix(A); freeMatrix(C); freeMatrix(T); freeMatrix(RT); freeMatrix(expected);
+
+    // reduceColumns of identity is identity
+    Matrix* I = idMatrix(3);
+    Matrix* CI = reduceColumns(I);
+    CHECK(matrixComp(CI, I, 1e-12), "reduceColumns(I) = I");
+    freeMatrix(I); freeMatrix(CI);
+
+    // Rank preservation: rank(A) == rank(reduceColumns(A))
+    double d2[] = { 1, 2, 3,
+                    2, 4, 6 };
+    A = makeRealMatrix(2, 3, d2);
+    C = reduceColumns(A);
+    CHECK(rank(A) == rank(C), "reduceColumns preserves rank");
+    CHECK(rank(A) == 1, "rank check sanity");
+    freeMatrix(A); freeMatrix(C);
+}
+
+void testColumnSpace() {
+    printf("\n[testColumnSpace]\n");
+
+    int count = -1;
+    CHECK(columnSpace(NULL, &count) == NULL, "NULL matrix");
+
+    // 3x3 with rank 2: columns c0, c1 are independent; c2 = c0 + c1
+    double d[] = { 1, 0, 1,
+                   2, 1, 3,
+                   3, 2, 5 };
+    Matrix* A = makeRealMatrix(3, 3, d);
+    Vector** basis = columnSpace(A, &count);
+    CHECK(basis != NULL, "basis returned");
+    CHECK(count == 2, "rank 2 -> 2 basis vectors");
+    CHECK(count == rank(A), "count matches rank");
+
+    // Shape: each basis vector has shape (m, 1)
+    bool shapeOk = true;
+    for (int k = 0; k < count; k++) {
+        if (basis[k]->numRows != A->numRows) shapeOk = false;
+        if (basis[k]->numCols != 1) shapeOk = false;
+    }
+    CHECK(shapeOk, "basis vectors have shape (m, 1)");
+
+    // Each basis vector should equal one of the original columns of A
+    bool fromOriginal = true;
+    for (int k = 0; k < count; k++) {
+        bool matched = false;
+        for (int c = 0; c < A->numCols && !matched; c++) {
+            bool eq = true;
+            for (int i = 0; i < A->numRows; i++) {
+                MatrixElement b = getEntry(basis[k], i, 0);
+                MatrixElement a = getEntry(A, i, c);
+                if (!elemEq(a, b, 1e-12)) { eq = false; break; }
+            }
+            if (eq) matched = true;
+        }
+        if (!matched) fromOriginal = false;
+    }
+    CHECK(fromOriginal, "each basis vector equals an original column of A");
+
+    // The dependent column (c2 = c0 + c1) should be expressible from the two basis cols.
+    Vector* sum = addVectors(basis[0], basis[1]);
+    bool depMatches = true;
+    for (int i = 0; i < 3; i++) {
+        MatrixElement s = getEntry(sum, i, 0);
+        MatrixElement c2 = getEntry(A, i, 2);
+        if (!elemEq(s, c2, 1e-9)) depMatches = false;
+    }
+    CHECK(depMatches, "basis[0] + basis[1] = column 2 of A");
+    freeVector(sum);
+
+    for (int k = 0; k < count; k++) freeVector(basis[k]);
+    free(basis);
+    freeMatrix(A);
+
+    // Identity: column space basis is the n standard basis vectors
+    Matrix* I = idMatrix(3);
+    basis = columnSpace(I, &count);
+    CHECK(count == 3, "I_3 has 3 col-space basis vectors");
+    bool isStdBasis = true;
+    for (int k = 0; k < 3; k++) {
+        for (int i = 0; i < 3; i++) {
+            double expected = (i == k) ? 1.0 : 0.0;
+            if (!approxReal(getEntry(basis[k], i, 0), expected, 1e-12)) isStdBasis = false;
+        }
+    }
+    CHECK(isStdBasis, "I_3 column space basis = standard basis");
+    for (int k = 0; k < count; k++) freeVector(basis[k]);
+    free(basis);
+    freeMatrix(I);
+
+    // Zero matrix: column space is trivial
+    Matrix* Z = constructMatrix(3, 4);
+    basis = columnSpace(Z, &count);
+    CHECK(basis == NULL && count == 0, "zero matrix: empty basis");
+    freeMatrix(Z);
+}
+
+void testRowSpace() {
+    printf("\n[testRowSpace]\n");
+
+    int count = -1;
+    CHECK(rowSpace(NULL, &count) == NULL, "NULL matrix");
+
+    // 3x3 with rank 2: row 2 = row 0 + row 1
+    double d[] = { 1, 2, 3,
+                   0, 1, 4,
+                   1, 3, 7 };
+    Matrix* A = makeRealMatrix(3, 3, d);
+    Vector** basis = rowSpace(A, &count);
+    CHECK(basis != NULL, "basis returned");
+    CHECK(count == 2, "rank 2 -> 2 row-space basis vectors");
+    CHECK(count == rank(A), "count matches rank");
+
+    // Each basis vector has length n (= numCols of A)
+    bool shapeOk = true;
+    for (int k = 0; k < count; k++) {
+        if (basis[k]->numRows != A->numCols) shapeOk = false;
+        if (basis[k]->numCols != 1) shapeOk = false;
+    }
+    CHECK(shapeOk, "row-space basis vectors have shape (n, 1)");
+
+    for (int k = 0; k < count; k++) freeVector(basis[k]);
+    free(basis);
+    freeMatrix(A);
+
+    // Identity: row-space basis = n standard basis vectors
+    Matrix* I = idMatrix(4);
+    basis = rowSpace(I, &count);
+    CHECK(count == 4, "I_4 has 4 row-space basis vectors");
+    for (int k = 0; k < count; k++) freeVector(basis[k]);
+    free(basis);
+    freeMatrix(I);
+
+    // dim(row space) == dim(col space)
+    double d2[] = { 1, 2, 3, 4,
+                    2, 4, 6, 8,
+                    1, 1, 1, 1 };
+    A = makeRealMatrix(3, 4, d2);
+    int cR = -1, cC = -1;
+    Vector** rs = rowSpace(A, &cR);
+    Vector** cs = columnSpace(A, &cC);
+    CHECK(cR == cC, "dim row space = dim col space");
+    for (int k = 0; k < cR; k++) freeVector(rs[k]);
+    for (int k = 0; k < cC; k++) freeVector(cs[k]);
+    free(rs); free(cs);
+    freeMatrix(A);
+}
+
 /* ---------- Main ---------- */
 
 int main(void) {
@@ -2268,6 +2482,10 @@ int main(void) {
     testVectorAngle();
     testVectorProjectOnto();
     testComplexMatrixIntegration();
+    testReduceRows();
+    testReduceColumns();
+    testColumnSpace();
+    testRowSpace();
 
     printf("\n========================================\n");
     printf("Results: %d / %d tests passed\n", testsPassed, testsRun);

@@ -182,6 +182,7 @@ SubGroup** listAllSubgroups(Group* G, int* count);
 SubGroup** listAllNormalSubgroups(Group* G, int* count);
 SubGroup** listAllMaximalSubgroups(Group* G, int* count);
 SubGroup* largestCoreFreeSubgroup(Group* G);
+Group* subgroupAsGroup(SubGroup* H);
 
 /* ---------- Cyclic groups ---------- */
 bool isCyclicGroup(Group* G);

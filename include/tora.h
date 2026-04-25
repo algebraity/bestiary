@@ -67,5 +67,16 @@ Representation* trivialRepresentation(Group* G);
 Representation* regularRepresentation(Group* G);
 Representation* permutationRepresentation(Group* G);
 Representation* standardRepresentation(Group* G);
+Representation* signRepresentation(Group* Sn);
+Representation* dualRepresentation(Representation* V);
+Representation* conjugateRepresentation(Representation* V);
+GroupHomomorphism* projectToAbelianization(Group* G);
+Representation** get1Dreps(Group* G, int* count);
+Representation* crossProductReps(Representation* V, Representation* W, Group* GxH);
+Representation* tensorProduct(Representation* V, Representation* W);
+Representation* symmetricProduct(Representation* V);
+Representation* wedgeProduct(Representation* V);
+Representation* restrictRepresentation(Representation* V, SubGroup* H, Group* Hgroup);
+Representation* inducedRepresentation(Representation* V, SubGroup* H);
 
 #endif

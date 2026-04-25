@@ -1069,6 +1069,172 @@ Matrix* invertMatrix(Matrix* matrix) {
     return luInverse(matrix->cachedLU);
 }
 
+// Return the reduced row echelon form of a Matrix (Gauss-Jordan with partial pivoting).
+Matrix* reduceRows(Matrix* matrix) {
+    if (!matrix) return NULL;
+    int m = matrix->numRows;
+    int n = matrix->numCols;
+
+    Matrix* R = copyMatrix(matrix);
+    if (!R) return NULL;
+
+    const double tol = 1e-12;
+    int row = 0;
+    for (int col = 0; col < n && row < m; col++) {
+        // Partial pivot: largest |entry| in column col, rows [row, m)
+        int pivot = -1;
+        double maxVal = tol;
+        for (int i = row; i < m; i++) {
+            double v = elemAbs(getEntry(R, i, col));
+            if (v > maxVal) { maxVal = v; pivot = i; }
+        }
+        if (pivot < 0) continue;
+
+        if (pivot != row) {
+            for (int j = 0; j < n; j++) {
+                MatrixElement tmp = getEntry(R, row, j);
+                setEntry(R, row, j, getEntry(R, pivot, j));
+                setEntry(R, pivot, j, tmp);
+            }
+        }
+
+        // Scale pivot row so the pivot is 1
+        MatrixElement pv = getEntry(R, row, col);
+        for (int j = col; j < n; j++) {
+            setEntry(R, row, j, elemDiv(getEntry(R, row, j), pv));
+        }
+        // Force exact 1 to avoid rounding drift on the pivot
+        setEntry(R, row, col, elemFromReal(1.0));
+
+        // Eliminate every other row's entry in this column
+        for (int i = 0; i < m; i++) {
+            if (i == row) continue;
+            MatrixElement factor = getEntry(R, i, col);
+            if (elemIsZero(factor, tol)) continue;
+            for (int j = col; j < n; j++) {
+                MatrixElement v = elemSub(getEntry(R, i, j), elemMul(factor, getEntry(R, row, j)));
+                setEntry(R, i, j, v);
+            }
+            setEntry(R, i, col, elemFromReal(0.0));
+        }
+
+        row++;
+    }
+    return R;
+}
+
+// Return the reduced column echelon form of a Matrix
+// (column analogue of RREF: same pivots are 1, every other entry in the pivot row is 0).
+Matrix* reduceColumns(Matrix* matrix) {
+    if (!matrix) return NULL;
+    Matrix* T = transpose(matrix);
+    if (!T) return NULL;
+    Matrix* R = reduceRows(T);
+    freeMatrix(T);
+    if (!R) return NULL;
+    Matrix* result = transpose(R);
+    freeMatrix(R);
+    return result;
+}
+
+// Return a basis of the column space of the matrix as a heap-allocated array of column
+// Vectors. Sets *count to the number of basis vectors (the rank). Caller frees each
+// Vector via freeVector and the array via free.
+Vector** columnSpace(Matrix* matrix, int* count) {
+    if (!matrix || !count) return NULL;
+    int m = matrix->numRows;
+    int n = matrix->numCols;
+    *count = 0;
+
+    Matrix* R = reduceRows(matrix);
+    if (!R) return NULL;
+
+    const double tol = 1e-12;
+
+    // Identify pivot columns of R: row r's pivot is the leftmost column with a 1 in that row.
+    int* pivotCols = malloc(n * sizeof(int));
+    if (!pivotCols) { freeMatrix(R); return NULL; }
+    int numPivots = 0;
+    int row = 0;
+    for (int col = 0; col < n && row < m; col++) {
+        MatrixElement v = getEntry(R, row, col);
+        if (!elemIsZero(v, tol)) {
+            pivotCols[numPivots++] = col;
+            row++;
+        }
+    }
+    freeMatrix(R);
+
+    if (numPivots == 0) { free(pivotCols); return NULL; }
+
+    Vector** basis = malloc(numPivots * sizeof(Vector*));
+    if (!basis) { free(pivotCols); return NULL; }
+
+    for (int k = 0; k < numPivots; k++) {
+        basis[k] = constructVector(m);
+        if (!basis[k]) {
+            for (int j = 0; j < k; j++) freeVector(basis[j]);
+            free(basis);
+            free(pivotCols);
+            return NULL;
+        }
+        int c = pivotCols[k];
+        for (int i = 0; i < m; i++) setEntry(basis[k], i, 0, getEntry(matrix, i, c));
+    }
+    free(pivotCols);
+
+    *count = numPivots;
+    return basis;
+}
+
+// Return a basis of the row space of the matrix as column Vectors of length numCols.
+// Sets *count to the number of basis vectors (the rank). The vectors are the non-zero
+// rows of the RREF, transposed into column form. Caller frees each Vector and the array.
+Vector** rowSpace(Matrix* matrix, int* count) {
+    if (!matrix || !count) return NULL;
+    int m = matrix->numRows;
+    int n = matrix->numCols;
+    *count = 0;
+
+    Matrix* R = reduceRows(matrix);
+    if (!R) return NULL;
+
+    const double tol = 1e-12;
+    int numPivots = 0;
+    bool* nonzero = calloc(m, sizeof(bool));
+    if (!nonzero) { freeMatrix(R); return NULL; }
+    for (int i = 0; i < m; i++) {
+        for (int j = 0; j < n; j++) {
+            if (!elemIsZero(getEntry(R, i, j), tol)) { nonzero[i] = true; numPivots++; break; }
+        }
+    }
+
+    if (numPivots == 0) { freeMatrix(R); free(nonzero); return NULL; }
+
+    Vector** basis = malloc(numPivots * sizeof(Vector*));
+    if (!basis) { freeMatrix(R); free(nonzero); return NULL; }
+
+    int k = 0;
+    for (int i = 0; i < m; i++) {
+        if (!nonzero[i]) continue;
+        basis[k] = constructVector(n);
+        if (!basis[k]) {
+            for (int j = 0; j < k; j++) freeVector(basis[j]);
+            free(basis);
+            freeMatrix(R);
+            free(nonzero);
+            return NULL;
+        }
+        for (int j = 0; j < n; j++) setEntry(basis[k], j, 0, getEntry(R, i, j));
+        k++;
+    }
+    free(nonzero);
+    freeMatrix(R);
+
+    *count = numPivots;
+    return basis;
+}
+
 // Get the eigenvalues of a 2 x 2 matrix.
 // Returns complex eigenvalues when the discriminant is negative or when
 // input entries are complex; pure-real eigenvalues collapse to real MatrixElements.

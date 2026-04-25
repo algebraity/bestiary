@@ -2369,6 +2369,89 @@ SubGroup* largestCoreFreeSubgroup(Group* G) {
     return largest;
 }
 
+// Realise a SubGroup H of G as a standalone Group, with elements indexed so that
+// the identity is at position 0 and the rest follow H->indices' order. The
+// multiplication table is the restriction of G's table to H.
+Group* subgroupAsGroup(SubGroup* H) {
+    if (!H || !H->ambient) return NULL;
+    Group* G = H->ambient;
+    int n = H->card;
+    if (n < 1) return NULL;
+
+    // Permute H->indices so the ambient identity (index 0) comes first
+    int* localToAmbient = malloc(n * sizeof(int));
+    if (!localToAmbient) return NULL;
+    int idPos = -1;
+    for (int i = 0; i < n; i++) {
+        if (H->indices[i] == 0) { idPos = i; break; }
+    }
+    if (idPos < 0) { free(localToAmbient); return NULL; }
+    localToAmbient[0] = 0;
+    int next = 1;
+    for (int i = 0; i < n; i++) {
+        if (i != idPos) localToAmbient[next++] = H->indices[i];
+    }
+
+    GroupElement** elements = calloc(n, sizeof(GroupElement*));
+    if (!elements) { free(localToAmbient); return NULL; }
+    for (int i = 0; i < n; i++) {
+        elements[i] = constructGroupElement(NULL, G->elements[localToAmbient[i]]->repr);
+        if (!elements[i]) {
+            for (int j = 0; j < i; j++) freeGroupElement(elements[j]);
+            free(elements);
+            free(localToAmbient);
+            return NULL;
+        }
+    }
+
+    int** table = malloc(n * sizeof(int*));
+    if (!table) {
+        for (int i = 0; i < n; i++) freeGroupElement(elements[i]);
+        free(elements);
+        free(localToAmbient);
+        return NULL;
+    }
+    for (int i = 0; i < n; i++) {
+        table[i] = malloc(n * sizeof(int));
+        if (!table[i]) {
+            for (int j = 0; j < i; j++) free(table[j]);
+            free(table);
+            for (int j = 0; j < n; j++) freeGroupElement(elements[j]);
+            free(elements);
+            free(localToAmbient);
+            return NULL;
+        }
+        for (int j = 0; j < n; j++) {
+            int prodAmbient = G->table[localToAmbient[i]][localToAmbient[j]];
+            int pos = -1;
+            for (int k = 0; k < n; k++) {
+                if (localToAmbient[k] == prodAmbient) { pos = k; break; }
+            }
+            if (pos < 0) {
+                for (int kk = 0; kk <= i; kk++) free(table[kk]);
+                free(table);
+                for (int kk = 0; kk < n; kk++) freeGroupElement(elements[kk]);
+                free(elements);
+                free(localToAmbient);
+                return NULL;
+            }
+            table[i][j] = pos;
+        }
+    }
+
+    free(localToAmbient);
+
+    Group* Hg = constructGroupSkipValidate(elements, table, n);
+    if (!Hg) {
+        for (int i = 0; i < n; i++) { freeGroupElement(elements[i]); free(table[i]); }
+        free(elements);
+        free(table);
+        return NULL;
+    }
+    for (int i = 0; i < n; i++) elements[i]->group = Hg;
+    return Hg;
+}
+
 /* ---------- Cyclic groups ---------- */
 
 // Returns true if G is cyclic, else false
