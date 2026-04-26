@@ -79,4 +79,14 @@ Representation* wedgeProduct(Representation* V);
 Representation* restrictRepresentation(Representation* V, SubGroup* H, Group* Hgroup);
 Representation* inducedRepresentation(Representation* V, SubGroup* H);
 
+/* ---------- Characters and character tables ---------- */
+ComplexNumber characterValue(Representation* rep, ConjugacyClass* class);
+Character* characterOfRepresentation(Representation* rep);
+ComplexNumber characterInnerProduct(Character* chi, Character* psi);
+bool isIrreducible(Representation* rep);
+int* decomposeRepresentation(Representation* V, CharacterTable* T);
+Character** allIrreducibleCharacters(Group* G, int* count);
+CharacterTable* characterTable(Group* G);
+void printCharacterTable(CharacterTable* T);
+
 #endif

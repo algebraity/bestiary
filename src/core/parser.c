@@ -143,6 +143,7 @@ static BinInfo peekBinop(P* p) {
     BinInfo b = {0};
     Token* t = peek(p);
     switch (t->kind) {
+        case TOK_EQEQ: b = (BinInfo){1,  5, 0, OP_CMD, "=="}; break;
         case TOK_PLUS:  b = (BinInfo){1, 10, 0, OP_ADD, NULL}; break;
         case TOK_MINUS: b = (BinInfo){1, 10, 0, OP_SUB, NULL}; break;
         case TOK_STAR:  b = (BinInfo){1, 20, 0, OP_MUL, NULL}; break;
@@ -178,15 +179,21 @@ static AstNode* parseUnary(P* p);
 static AstNode* parsePostfix(P* p);
 static AstNode* parsePrimary(P* p);
 static AstNode* parseCommandCall(P* p);
+static AstNode* parseIntegralCall(P* p, Token* cmd);
+static AstNode* parseBoundedSingleArgCall(P* p, Token* cmd, const char* outName);
+static AstNode* parseCallArgList(P* p);
 static AstNode* parseBracketArg(P* p);
 static AstNode* parseBraceGroup(P* p);
 static AstNode* parseSetLiteral(P* p);
 static AstNode* parseScriptOperand(P* p);
+static AstNode* parseIntegralScriptOperand(P* p);
 static AstNode* parseMatrixLit(P* p);
 static AstNode* parseParenOrTuple(P* p);
+static AstNode* parseAnglePair(P* p);
 static AstNode* parsePipeGroup(P* p);
 static AstNode* parseEnvironment(P* p, size_t beginLine, size_t beginCol);
 static char*    readBraceIdent(P* p);
+static AstNode* stripDifferential(AstNode* n);
 
 /* ---------- Primary-starter predicate ---------- */
 
@@ -195,6 +202,7 @@ static int tokStartsPrimary(TokenKind k) {
     switch (k) {
         case TOK_NUMBER: case TOK_DECIMAL: case TOK_STRING: case TOK_IDENT:
         case TOK_LPAREN: case TOK_LBRACE:  case TOK_LBRACK:
+        case TOK_LESS:
         case TOK_COMMAND:
             return 1;
         default:
@@ -228,6 +236,7 @@ static AstNode* parsePrimary(P* p) {
         case TOK_LPAREN:  return parseParenOrTuple(p);
         case TOK_LBRACE:  return parseSetLiteral(p);
         case TOK_LBRACK:  return parseMatrixLit(p);
+        case TOK_LESS:    return parseAnglePair(p);
         case TOK_PIPE:    return parsePipeGroup(p);
         case TOK_COMMAND: return parseCommandCall(p);
         default:
@@ -288,6 +297,19 @@ static AstNode* parseScriptOperand(P* p) {
     return parseUnary(p);
 }
 
+// Integral limits like \int_0^1(...) should consume only the single
+// unbraced limit token; braced limits still allow full expressions.
+static AstNode* parseIntegralScriptOperand(P* p) {
+    if (check(p, TOK_LBRACE)) return parseBraceGroup(p);
+    if (match(p, TOK_MINUS)) return astUnary(OP_NEG, parsePrimary(p));
+    if (match(p, TOK_PLUS)) return astUnary(OP_POS, parsePrimary(p));
+    if (check(p, TOK_COMMAND)) {
+        Token* cmd = advance(p);
+        return astCall(cmd->text ? cmd->text : "", NULL, 0, cmd->line, cmd->col);
+    }
+    return parsePrimary(p);
+}
+
 // Parse '( expr )' or '( a, b, c )'
 static AstNode* parseParenOrTuple(P* p) {
     if (!match(p, TOK_LPAREN)) { parseError(p, "expected '('"); return NULL; }
@@ -301,6 +323,41 @@ static AstNode* parseParenOrTuple(P* p) {
     }
     if (!match(p, TOK_RPAREN)) { parseError(p, "expected ')'"); }
     return first;
+}
+
+static AstNode* parseCallArgList(P* p) {
+    return parseParenOrTuple(p);
+}
+
+// Parse '< expr , expr >' and lower it to '\charIP{expr}{expr}'
+static AstNode* parseAnglePair(P* p) {
+    Token* less = peek(p);
+    if (!match(p, TOK_LESS)) { parseError(p, "expected '<'"); return NULL; }
+
+    AstNode* lhs = parseExpr(p);
+    if (!match(p, TOK_COMMA)) {
+        parseError(p, "expected ',' in angle pair");
+        astFree(lhs);
+        return NULL;
+    }
+    AstNode* rhs = parseExpr(p);
+    if (!match(p, TOK_GREATER)) {
+        parseError(p, "expected '>'");
+        astFree(lhs);
+        astFree(rhs);
+        return NULL;
+    }
+
+    AstNode** args = malloc(2 * sizeof(AstNode*));
+    if (!args) {
+        parseError(p, "out of memory");
+        astFree(lhs);
+        astFree(rhs);
+        return NULL;
+    }
+    args[0] = lhs;
+    args[1] = rhs;
+    return astCall("charIP", args, 2, less->line, less->col);
 }
 
 // Parse '[ r0c0 , r0c1 ; r1c0 , r1c1 ]' (short-form matrix literal)
@@ -433,6 +490,12 @@ static AstNode* parseCommandCall(P* p) {
         parseError(p, "unexpected \\end without matching \\begin");
         return NULL;
     }
+    if (strcmp(name, "int") == 0 || strcmp(name, "integral") == 0) {
+        return parseIntegralCall(p, cmd);
+    }
+    if (strcmp(name, "funcArea") == 0) {
+        return parseBoundedSingleArgCall(p, cmd, "funcArea");
+    }
 
     NodeBuf args; nbInit(&args);
     for (;;) {
@@ -451,6 +514,81 @@ static AstNode* parseCommandCall(P* p) {
         break;
     }
     return astCall(name, args.data, args.len, cmd->line, cmd->col);
+}
+
+static AstNode* parseIntegralArg(P* p) {
+    if (check(p, TOK_LBRACE)) return parseBraceGroup(p);
+    if (check(p, TOK_LPAREN)) return parseParenOrTuple(p);
+    if (check(p, TOK_LBRACK)) return parseBracketArg(p);
+    parseError(p, "expected integral argument");
+    return NULL;
+}
+
+static AstNode* parseIntegralCall(P* p, Token* cmd) {
+    AstNode* lower = NULL;
+    AstNode* upper = NULL;
+
+    for (int i = 0; i < 2; i++) {
+        if (!lower && match(p, TOK_UNDERSCORE)) {
+            lower = parseIntegralScriptOperand(p);
+            continue;
+        }
+        if (!upper && match(p, TOK_CARET)) {
+            upper = parseIntegralScriptOperand(p);
+            continue;
+        }
+        break;
+    }
+
+    AstNode* integrand = stripDifferential(parseIntegralArg(p));
+    NodeBuf args; nbInit(&args);
+    nbPush(&args, integrand);
+
+    if ((lower && !upper) || (!lower && upper)) {
+        astFree(lower);
+        astFree(upper);
+        parseError(p, "integral bounds require both lower and upper limits");
+        return astCall("int", args.data, args.len, cmd->line, cmd->col);
+    }
+
+    if (lower && upper) {
+        nbPush(&args, lower);
+        nbPush(&args, upper);
+    }
+    return astCall("int", args.data, args.len, cmd->line, cmd->col);
+}
+
+static AstNode* parseBoundedSingleArgCall(P* p, Token* cmd, const char* outName) {
+    AstNode* lower = NULL;
+    AstNode* upper = NULL;
+
+    for (int i = 0; i < 2; i++) {
+        if (!lower && match(p, TOK_UNDERSCORE)) {
+            lower = parseIntegralScriptOperand(p);
+            continue;
+        }
+        if (!upper && match(p, TOK_CARET)) {
+            upper = parseIntegralScriptOperand(p);
+            continue;
+        }
+        break;
+    }
+
+    AstNode* body = parseIntegralArg(p);
+    NodeBuf args; nbInit(&args);
+    nbPush(&args, body);
+
+    if ((lower && !upper) || (!lower && upper)) {
+        astFree(lower);
+        astFree(upper);
+        parseError(p, "bounded command requires both lower and upper limits");
+        return astCall(outName, args.data, args.len, cmd->line, cmd->col);
+    }
+    if (lower && upper) {
+        nbPush(&args, lower);
+        nbPush(&args, upper);
+    }
+    return astCall(outName, args.data, args.len, cmd->line, cmd->col);
 }
 
 static AstNode* parseBracketArg(P* p) {
@@ -499,6 +637,41 @@ static AstNode* parseBracketArg(P* p) {
     return first;
 }
 
+static int isIdentNamed(const AstNode* n, const char* name) {
+    return n && n->kind == AST_IDENT && n->as.ident && strcmp(n->as.ident, name) == 0;
+}
+
+static AstNode* detachMulSide(AstNode* n, AstNode* keep, AstNode* drop) {
+    n->as.binop.lhs = NULL;
+    n->as.binop.rhs = NULL;
+    free(n->as.binop.opname);
+    free(n);
+    astFree(drop);
+    return stripDifferential(keep);
+}
+
+static AstNode* stripDifferential(AstNode* n) {
+    if (!n) return NULL;
+    if (n->kind == AST_IDENT && n->as.ident) {
+        size_t len = strlen(n->as.ident);
+        if (len > 2 && strcmp(n->as.ident + len - 2, "dx") == 0) {
+            n->as.ident[len - 2] = '\0';
+        } else if (len == 2 && strcmp(n->as.ident, "dx") == 0) {
+            size_t line = n->line, col = n->col;
+            astFree(n);
+            return astNumber(1, line, col);
+        }
+        return n;
+    }
+    if (n->kind == AST_BINOP && n->as.binop.op == OP_MUL) {
+        AstNode* lhs = n->as.binop.lhs;
+        AstNode* rhs = n->as.binop.rhs;
+        if (isIdentNamed(rhs, "dx")) return detachMulSide(n, lhs, rhs);
+        if (isIdentNamed(lhs, "dx")) return detachMulSide(n, rhs, lhs);
+    }
+    return n;
+}
+
 /* ---------- Postfix (^, _, implicit multiplication) ---------- */
 
 // Parse a primary then any trailing ^expr / _expr and implicit-mul
@@ -527,6 +700,32 @@ static AstNode* parsePostfix(P* p) {
             }
             args[0] = left;
             left = astCall("factorial", args, 1, bang->line, bang->col);
+            continue;
+        }
+        if (check(p, TOK_PRIME)) {
+            Token* prime = advance(p);
+            AstNode** args = malloc(sizeof(AstNode*));
+            if (!args) {
+                parseError(p, "out of memory");
+                astFree(left);
+                return NULL;
+            }
+            args[0] = left;
+            left = astCall("derivative", args, 1, prime->line, prime->col);
+            continue;
+        }
+        if (check(p, TOK_LPAREN) && left && left->kind == AST_IDENT) {
+            AstNode* arg = parseCallArgList(p);
+            AstNode** args = malloc(2 * sizeof(AstNode*));
+            if (!args) {
+                parseError(p, "out of memory");
+                astFree(left);
+                astFree(arg);
+                return NULL;
+            }
+            args[0] = left;
+            args[1] = arg;
+            left = astCall("eval", args, 2, left->line, left->col);
             continue;
         }
         Token* nx = peek(p);

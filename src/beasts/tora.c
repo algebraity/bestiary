@@ -993,20 +993,661 @@ Representation* inducedRepresentation(Representation* V, SubGroup* H) {
 /* ---------- Characters and character tables ---------- */
 
 // Compute the character value of a representation rep on a conjugacy class class.
-// This is the trace of rep->images[g] for any g in class (all have the same trace).
+// This is the trace of rep->images[g] for any g in class (all elements have the same trace).
 ComplexNumber characterValue(Representation* rep, ConjugacyClass* class) {
     if (!rep || !class) return (ComplexNumber){0.0, 0.0};
     Group* G = rep->group;
     if (!G || G != class->group) return (ComplexNumber){0.0, 0.0};
+    return elemToComplex(trace(rep->images[class->rep->index]));
 }
 
-// Returns a Character struct for a Representation
+// Build a Character struct from a Representation.
+// The returned Character holds a freshly-allocated classes array and values; per the
+// codebase's freeing convention the caller must walk chi->classes and freeConjugacyClass
+// each entry before calling freeCharacter(chi).
 Character* characterOfRepresentation(Representation* rep) {
-    return NULL;
+    if (!rep || !rep->group) return NULL;
+
+    int n;
+    ConjugacyClass** classes = getConjugacyClasses(rep->group, &n);
+    if (!classes) return NULL;
+
+    ComplexNumber* values = malloc(n * sizeof(ComplexNumber));
+    if (!values) {
+        for (int i = 0; i < n; i++) freeConjugacyClass(classes[i]);
+        free(classes);
+        return NULL;
+    }
+    for (int i = 0; i < n; i++) values[i] = characterValue(rep, classes[i]);
+
+    Character* chi = constructCharacter(rep->group, rep->repr, classes, values, n);
+    if (!chi) {
+        for (int i = 0; i < n; i++) freeConjugacyClass(classes[i]);
+        free(classes);
+        free(values);
+        return NULL;
+    }
+    return chi;
 }
 
-// Generates the character table of a Group
+// Standard inner product of two characters of the same group:
+//   <chi, psi> = (1/|G|) * sum_C |C| * chi(C) * conj(psi(C))
+// The two characters may have classes arranged in different orders; matching is by
+// looking up each class representative's index in the other side's class lists.
+ComplexNumber characterInnerProduct(Character* chi, Character* psi) {
+    if (!chi || !psi) return (ComplexNumber){0.0, 0.0};
+    if (chi->group != psi->group) return (ComplexNumber){0.0, 0.0};
+    Group* G = chi->group;
+
+    ComplexNumber sum = {0.0, 0.0};
+    for (int i = 0; i < chi->numClasses; i++) {
+        ConjugacyClass* C = chi->classes[i];
+        if (!C) return (ComplexNumber){0.0, 0.0};
+
+        // Find the class in psi that contains C's representative
+        ComplexNumber psiVal = {0.0, 0.0};
+        bool matched = false;
+        int repIdx = C->rep->index;
+        for (int j = 0; j < psi->numClasses; j++) {
+            ConjugacyClass* D = psi->classes[j];
+            for (int k = 0; k < D->size; k++) {
+                if (D->indices[k] == repIdx) { psiVal = psi->values[j]; matched = true; break; }
+            }
+            if (matched) break;
+        }
+        if (!matched) return (ComplexNumber){0.0, 0.0};
+
+        ComplexNumber term = complexMul(chi->values[i], complexConj(psiVal));
+        term.real *= (double) C->size;
+        term.imag *= (double) C->size;
+        sum = complexAdd(sum, term);
+    }
+
+    sum.real /= (double) G->card;
+    sum.imag /= (double) G->card;
+    return sum;
+}
+
+// A representation is irreducible iff <chi, chi> = 1.
+bool isIrreducible(Representation* rep) {
+    if (!rep) return false;
+    Character* chi = characterOfRepresentation(rep);
+    if (!chi) return false;
+
+    ComplexNumber inner = characterInnerProduct(chi, chi);
+    bool irr = fabs(inner.real - 1.0) < 1e-6 && fabs(inner.imag) < 1e-6;
+
+    for (int i = 0; i < chi->numClasses; i++) freeConjugacyClass(chi->classes[i]);
+    freeCharacter(chi);
+    return irr;
+}
+
+// Decompose a representation V of G into irreducibles given a CharacterTable T of G.
+// Returns a freshly-allocated int array of length T->numIrreps where entry i is the
+// multiplicity of T->irreps[i] in V (V = sum_i n_i V_i). Caller frees with free().
+int* decomposeRepresentation(Representation* V, CharacterTable* T) {
+    if (!V || !T) return NULL;
+    if (V->group != T->group) return NULL;
+
+    Character* chi = characterOfRepresentation(V);
+    if (!chi) return NULL;
+
+    int* mults = malloc(T->numIrreps * sizeof(int));
+    if (!mults) {
+        for (int i = 0; i < chi->numClasses; i++) freeConjugacyClass(chi->classes[i]);
+        freeCharacter(chi);
+        return NULL;
+    }
+    for (int i = 0; i < T->numIrreps; i++) {
+        ComplexNumber n = characterInnerProduct(chi, T->irreps[i]);
+        mults[i] = (int) round(n.real);
+    }
+
+    for (int i = 0; i < chi->numClasses; i++) freeConjugacyClass(chi->classes[i]);
+    freeCharacter(chi);
+    return mults;
+}
+
+/* ---------- Internal helpers: class algebra (Burnside-Dixon-Schneider) ---------- */
+
+// Compute structure constants of the class algebra:
+//   c[i*r*r + j*r + k] = coefficient of K_k in K_i K_j
+//                     = #{ (x, y) : x in C_i, y in C_j, xy = z_k }
+// where z_k is a fixed representative of class C_k.
+static int* classAlgebraStructureConstants(Group* G, ConjugacyClass** classes, int r) {
+    int* c = calloc((size_t) r * r * r, sizeof(int));
+    if (!c) return NULL;
+
+    // Precompute inverse-index lookup for ambient group elements
+    int* invIdx = malloc(G->card * sizeof(int));
+    if (!invIdx) { free(c); return NULL; }
+    for (int x = 0; x < G->card; x++) {
+        invIdx[x] = -1;
+        for (int t = 0; t < G->card; t++) {
+            if (G->table[x][t] == 0) { invIdx[x] = t; break; }
+        }
+        if (invIdx[x] < 0) { free(invIdx); free(c); return NULL; }
+    }
+
+    // Precompute: ambient-element index -> conjugacy class index
+    int* classOf = malloc(G->card * sizeof(int));
+    if (!classOf) { free(invIdx); free(c); return NULL; }
+    for (int g = 0; g < G->card; g++) classOf[g] = -1;
+    for (int j = 0; j < r; j++) {
+        for (int yi = 0; yi < classes[j]->size; yi++) {
+            classOf[classes[j]->indices[yi]] = j;
+        }
+    }
+
+    for (int i = 0; i < r; i++) {
+        ConjugacyClass* Ci = classes[i];
+        for (int k = 0; k < r; k++) {
+            int z = classes[k]->rep->index;
+            for (int xi = 0; xi < Ci->size; xi++) {
+                int x = Ci->indices[xi];
+                int y = G->table[invIdx[x]][z]; // y = x^{-1} * z, so x * y = z
+                int j = classOf[y];
+                if (j >= 0) c[i * r * r + j * r + k]++;
+            }
+        }
+    }
+    free(invIdx);
+    free(classOf);
+    return c;
+}
+
+// Compute all r irreducible characters of G via simultaneous diagonalisation of the class
+// algebra (Burnside-Dixon-Schneider). Returns an array of Character*; each Character has
+// its own classes-array but the underlying ConjugacyClass objects are shared. Cleanup
+// pattern (caller):
+//     for (int i = 0; i < out[0]->numClasses; i++) freeConjugacyClass(out[0]->classes[i]);
+//     for (int k = 0; k < count; k++) freeCharacter(out[k]);
+//     free(out);
+Character** allIrreducibleCharacters(Group* G, int* count) {
+    if (!G || !count) return NULL;
+    *count = 0;
+
+    int r;
+    ConjugacyClass** classes = getConjugacyClasses(G, &r);
+    if (!classes) return NULL;
+
+    int* c = classAlgebraStructureConstants(G, classes, r);
+    if (!c) {
+        for (int i = 0; i < r; i++) freeConjugacyClass(classes[i]);
+        free(classes);
+        return NULL;
+    }
+
+    // Build M[i] for i = 0..r-1: (M[i])_{kj} = c[i*r*r + j*r + k]
+    Matrix** M = malloc(r * sizeof(Matrix*));
+    if (!M) {
+        free(c);
+        for (int i = 0; i < r; i++) freeConjugacyClass(classes[i]);
+        free(classes);
+        return NULL;
+    }
+    for (int i = 0; i < r; i++) {
+        M[i] = constructMatrix(r, r);
+        if (!M[i]) {
+            for (int x = 0; x < i; x++) freeMatrix(M[x]);
+            free(M); free(c);
+            for (int x = 0; x < r; x++) freeConjugacyClass(classes[x]);
+            free(classes);
+            return NULL;
+        }
+        for (int k = 0; k < r; k++)
+            for (int j = 0; j < r; j++)
+                setEntry(M[i], k, j, elemFromReal((double) c[i * r * r + j * r + k]));
+    }
+
+    // Locate identity class once (used for degree sorting/validation)
+    int idClassPos = 0;
+    for (int j = 0; j < r; j++) {
+        if (classes[j]->size == 1 && classes[j]->rep->index == 0) {
+            idClassPos = j;
+            break;
+        }
+    }
+
+    Character** out = NULL;
+    int outCount = 0;
+    Character** pool = calloc((size_t) r, sizeof(Character*));
+    int poolCount = 0;
+    if (!pool) {
+        free(c);
+        for (int i = 0; i < r; i++) freeMatrix(M[i]);
+        free(M);
+        for (int i = 0; i < r; i++) freeConjugacyClass(classes[i]);
+        free(classes);
+        return NULL;
+    }
+
+    // Different linear combinations can collide on larger groups (e.g. S5).
+    // Retry with multiple deterministic seeds until we recover a valid full set.
+    for (int attempt = 0; attempt < 256 && !out; attempt++) {
+        unsigned int seed = 0x9E3779B9u ^ (unsigned int) (attempt * 0x85EBCA6Bu);
+
+        Matrix* M_total = constructMatrix(r, r);
+        if (!M_total) break;
+
+        double* alpha = malloc((size_t) r * sizeof(double));
+        if (!alpha) {
+            freeMatrix(M_total);
+            break;
+        }
+        alpha[0] = 0.0;
+        for (int i = 1; i < r; i++) {
+            seed = seed * 1103515245u + 12345u;
+            alpha[i] = 1.0 + (double) ((seed >> 8) & 0xFFFFFFu) / (double) 0x1000000u;
+        }
+
+        for (int i = 1; i < r; i++) {
+            for (int row = 0; row < r; row++) {
+                for (int col = 0; col < r; col++) {
+                    MatrixElement cur = getEntry(M_total, row, col);
+                    MatrixElement mrc = getEntry(M[i], row, col);
+                    MatrixElement add = elemMul(elemFromReal(alpha[i]), mrc);
+                    setEntry(M_total, row, col, elemAdd(cur, add));
+                }
+            }
+        }
+        free(alpha);
+
+        Matrix** evecs = eigenvectors(M_total);
+        freeMatrix(M_total);
+        if (!evecs) continue;
+
+        Character** cand = malloc((size_t) r * sizeof(Character*));
+        int candCount = 0;
+        if (!cand) {
+            for (int i = 0; i < r; i++) if (evecs[i]) freeMatrix(evecs[i]);
+            free(evecs);
+            break;
+        }
+
+        for (int a = 0; a < r; a++) {
+            if (!evecs[a]) continue;
+            Matrix* v = evecs[a];
+
+            int jmax = 0;
+            double vmax = elemAbs(getEntry(v, 0, 0));
+            for (int j = 1; j < r; j++) {
+                double mag = elemAbs(getEntry(v, j, 0));
+                if (mag > vmax) { vmax = mag; jmax = j; }
+            }
+            if (vmax < 1e-12) continue;
+            ComplexNumber v_ref = elemToComplex(getEntry(v, jmax, 0));
+
+            ComplexNumber* omega = malloc((size_t) r * sizeof(ComplexNumber));
+            if (!omega) continue;
+            omega[0].real = 1.0;
+            omega[0].imag = 0.0;
+
+            bool bad = false;
+            for (int i = 1; i < r; i++) {
+                Matrix* Mv = applyMatrix(M[i], v);
+                if (!Mv) { bad = true; break; }
+                ComplexNumber Mv_jmax = elemToComplex(getEntry(Mv, jmax, 0));
+                omega[i] = complexDiv(Mv_jmax, v_ref);
+                freeMatrix(Mv);
+            }
+            if (bad) {
+                free(omega);
+                continue;
+            }
+
+            double sum = 0.0;
+            for (int j = 0; j < r; j++) {
+                double mag2 = omega[j].real * omega[j].real + omega[j].imag * omega[j].imag;
+                sum += mag2 / (double) classes[j]->size;
+            }
+            if (sum < 1e-15) {
+                free(omega);
+                continue;
+            }
+            double dim_sq = (double) G->card / sum;
+            int dim = (int) round(sqrt(dim_sq));
+            if (dim < 1) dim = 1;
+
+            ComplexNumber* values = malloc((size_t) r * sizeof(ComplexNumber));
+            if (!values) {
+                free(omega);
+                continue;
+            }
+            for (int j = 0; j < r; j++) {
+                values[j].real = (double) dim * omega[j].real / (double) classes[j]->size;
+                values[j].imag = (double) dim * omega[j].imag / (double) classes[j]->size;
+                if (fabs(values[j].real - round(values[j].real)) < 1e-6) values[j].real = round(values[j].real);
+                if (fabs(values[j].imag - round(values[j].imag)) < 1e-6) values[j].imag = round(values[j].imag);
+                if (fabs(values[j].imag) < 1e-9) values[j].imag = 0.0;
+            }
+            free(omega);
+
+            ConjugacyClass** classesCopy = malloc((size_t) r * sizeof(ConjugacyClass*));
+            if (!classesCopy) {
+                free(values);
+                continue;
+            }
+            for (int j = 0; j < r; j++) classesCopy[j] = classes[j];
+
+            char label[32];
+            snprintf(label, sizeof(label), "chi-%d", candCount + 1);
+            Character* chi = constructCharacter(G, label, classesCopy, values, r);
+            if (!chi) {
+                free(classesCopy);
+                free(values);
+                continue;
+            }
+            cand[candCount++] = chi;
+        }
+
+        for (int i = 0; i < r; i++) if (evecs[i]) freeMatrix(evecs[i]);
+        free(evecs);
+
+        for (int i = 0; i < candCount; i++) {
+            Character* chi = cand[i];
+            if (!chi) continue;
+
+            double dReal = chi->values[idClassPos].real;
+            int d = (int) round(dReal);
+            if (d < 1 || fabs(dReal - (double) d) > 2e-2) {
+                freeCharacter(chi);
+                continue;
+            }
+            ComplexNumber self = characterInnerProduct(chi, chi);
+            if (fabs(self.real - 1.0) > 3e-2 || fabs(self.imag) > 3e-2) {
+                freeCharacter(chi);
+                continue;
+            }
+
+            bool duplicate = false;
+            for (int p = 0; p < poolCount && !duplicate; p++) {
+                bool same = true;
+                for (int j = 0; j < r; j++) {
+                    if (fabs(pool[p]->values[j].real - chi->values[j].real) > 1e-6 ||
+                        fabs(pool[p]->values[j].imag - chi->values[j].imag) > 1e-6) {
+                        same = false;
+                        break;
+                    }
+                }
+                if (same) duplicate = true;
+            }
+
+            if (duplicate || poolCount >= r) {
+                freeCharacter(chi);
+            } else {
+                pool[poolCount++] = chi;
+            }
+        }
+        free(cand);
+
+        if (poolCount != r) continue;
+
+        // Sort by degree, then lexicographically by character values to get stable order.
+        for (int i = 1; i < poolCount; i++) {
+            for (int j = i; j > 0; j--) {
+                double da = pool[j]->values[idClassPos].real;
+                double db = pool[j - 1]->values[idClassPos].real;
+                bool swap = false;
+                if (da < db - 1e-9) swap = true;
+                else if (fabs(da - db) <= 1e-9) {
+                    for (int k = 0; k < r; k++) {
+                        double ar = pool[j]->values[k].real;
+                        double br = pool[j - 1]->values[k].real;
+                        if (fabs(ar - br) > 1e-9) { swap = ar > br; break; }
+                        double ai = pool[j]->values[k].imag;
+                        double bi = pool[j - 1]->values[k].imag;
+                        if (fabs(ai - bi) > 1e-9) { swap = ai > bi; break; }
+                    }
+                }
+                if (swap) {
+                    Character* tmp = pool[j];
+                    pool[j] = pool[j - 1];
+                    pool[j - 1] = tmp;
+                } else break;
+            }
+        }
+
+        bool valid = true;
+        int sumSq = 0;
+        for (int i = 0; i < poolCount; i++) {
+            double dReal = pool[i]->values[idClassPos].real;
+            int d = (int) round(dReal);
+            if (d < 1 || fabs(dReal - (double) d) > 2e-2) { valid = false; break; }
+            sumSq += d * d;
+            ComplexNumber self = characterInnerProduct(pool[i], pool[i]);
+            if (fabs(self.real - 1.0) > 3e-2 || fabs(self.imag) > 3e-2) { valid = false; break; }
+        }
+        if (valid && sumSq == G->card) {
+            for (int i = 0; i < poolCount && valid; i++) {
+                for (int j = i + 1; j < poolCount; j++) {
+                    ComplexNumber ip = characterInnerProduct(pool[i], pool[j]);
+                    if (fabs(ip.real) > 3e-2 || fabs(ip.imag) > 3e-2) {
+                        valid = false;
+                        break;
+                    }
+                }
+            }
+        } else {
+            valid = false;
+        }
+
+        if (!valid) {
+            for (int i = 0; i < poolCount; i++) freeCharacter(pool[i]);
+            for (int i = 0; i < r; i++) pool[i] = NULL;
+            poolCount = 0;
+            continue;
+        }
+
+        // Relabel in sorted order so chi-1, chi-2, ... matches printed order.
+        for (int i = 0; i < poolCount; i++) {
+            char label[32];
+            snprintf(label, sizeof(label), "chi-%d", i + 1);
+            char* fresh = malloc(strlen(label) + 1);
+            if (!fresh) continue;
+            strcpy(fresh, label);
+            free(pool[i]->repr);
+            pool[i]->repr = fresh;
+        }
+
+        out = pool;
+        outCount = poolCount;
+        pool = NULL;
+    }
+
+    free(c);
+
+    if (!out) {
+        if (pool) {
+            for (int i = 0; i < poolCount; i++) freeCharacter(pool[i]);
+            free(pool);
+        }
+        for (int i = 0; i < r; i++) freeMatrix(M[i]);
+        free(M);
+        for (int i = 0; i < r; i++) freeConjugacyClass(classes[i]);
+        free(classes);
+        return NULL;
+    }
+
+    for (int i = 0; i < r; i++) freeMatrix(M[i]);
+    free(M);
+    free(classes); // ConjugacyClass objects stay alive: each Character holds them via classesCopy
+
+    *count = outCount;
+    return out;
+}
+
+// Build the character table of G using the class-algebra method. Works for any finite
+// group whose class-algebra matrices have well-conditioned eigenvalues.
 CharacterTable* characterTable(Group* G) {
-    return NULL;
+    if (!G) return NULL;
+
+    int numIrreps;
+    Character** irreps = allIrreducibleCharacters(G, &numIrreps);
+    if (!irreps || numIrreps == 0) {
+        free(irreps);
+        return NULL;
+    }
+    int r = irreps[0]->numClasses;
+
+    // Build the table's own classes array (pointer copies, the Character objects share
+    // the same underlying ConjugacyClass*).
+    ConjugacyClass** classes = malloc(r * sizeof(ConjugacyClass*));
+    if (!classes) {
+        for (int i = 0; i < irreps[0]->numClasses; i++) freeConjugacyClass(irreps[0]->classes[i]);
+        for (int k = 0; k < numIrreps; k++) freeCharacter(irreps[k]);
+        free(irreps);
+        return NULL;
+    }
+    for (int i = 0; i < r; i++) classes[i] = irreps[0]->classes[i];
+
+    ComplexNumber** values = malloc(numIrreps * sizeof(ComplexNumber*));
+    if (!values) {
+        free(classes);
+        for (int i = 0; i < irreps[0]->numClasses; i++) freeConjugacyClass(irreps[0]->classes[i]);
+        for (int k = 0; k < numIrreps; k++) freeCharacter(irreps[k]);
+        free(irreps);
+        return NULL;
+    }
+    for (int k = 0; k < numIrreps; k++) {
+        values[k] = malloc(r * sizeof(ComplexNumber));
+        for (int j = 0; j < r; j++) values[k][j] = irreps[k]->values[j];
+    }
+
+    CharacterTable* T = constructCharacterTable(G, classes, irreps, values, r, numIrreps);
+    if (!T) {
+        for (int k = 0; k < numIrreps; k++) free(values[k]);
+        free(values);
+        free(classes);
+        for (int i = 0; i < irreps[0]->numClasses; i++) freeConjugacyClass(irreps[0]->classes[i]);
+        for (int k = 0; k < numIrreps; k++) freeCharacter(irreps[k]);
+        free(irreps);
+        return NULL;
+    }
+    return T;
+}
+
+/* ---------- Pretty-printing ---------- */
+
+static void formatChiValue(ComplexNumber c, char* out, size_t outSize) {
+    double tol = 1e-6;
+    double re = c.real;
+    double im = c.imag;
+    if (fabs(re - round(re)) < tol) re = round(re);
+    if (fabs(im - round(im)) < tol) im = round(im);
+    if (fabs(im) < tol) {
+        snprintf(out, outSize, "%g", re);
+    } else if (fabs(re) < tol) {
+        snprintf(out, outSize, "%gi", im);
+    } else {
+        snprintf(out, outSize, "%g%+gi", re, im);
+    }
+}
+
+static int intTextWidth(int x) {
+    char buf[32];
+    snprintf(buf, sizeof(buf), "%d", x);
+    return (int)strlen(buf);
+}
+
+static void printCenteredCell(const char* text, int width) {
+    int len = (int)strlen(text);
+    if (len >= width) {
+        printf(" %s ", text);
+        return;
+    }
+    int pad = width - len;
+    int left = pad / 2;
+    int right = pad - left;
+    printf(" ");
+    for (int i = 0; i < left; i++) putchar(' ');
+    printf("%s", text);
+    for (int i = 0; i < right; i++) putchar(' ');
+    printf(" ");
+}
+
+void printCharacterTable(CharacterTable* T) {
+    if (!T) { printf("(null character table)\n"); return; }
+    int n = T->numClasses;
+    int r = T->numIrreps;
+
+    int rowLabelWidth = (int)strlen("irrep");
+    for (int k = 0; k < r; k++) {
+        const char* lbl = (T->irreps[k] && T->irreps[k]->repr) ? T->irreps[k]->repr : "?";
+        int w = (int)strlen(lbl);
+        if (w > rowLabelWidth) rowLabelWidth = w;
+    }
+    if ((int)strlen("class rep") > rowLabelWidth) rowLabelWidth = (int)strlen("class rep");
+    if ((int)strlen("class size") > rowLabelWidth) rowLabelWidth = (int)strlen("class size");
+    if ((int)strlen("elt order") > rowLabelWidth) rowLabelWidth = (int)strlen("elt order");
+
+    int* colWidths = calloc((size_t)n, sizeof(int));
+    if (!colWidths) {
+        printf("(failed to allocate print buffer)\n");
+        return;
+    }
+    for (int j = 0; j < n; j++) {
+        int width = (int)strlen((T->classes[j] && T->classes[j]->rep && T->classes[j]->rep->repr)
+                                    ? T->classes[j]->rep->repr
+                                    : "?");
+        int sizeW = intTextWidth(T->classes[j]->size);
+        int ordW = intTextWidth(T->classes[j]->elementOrder);
+        if (sizeW > width) width = sizeW;
+        if (ordW > width) width = ordW;
+        for (int k = 0; k < r; k++) {
+            char val[64];
+            formatChiValue(T->values[k][j], val, sizeof(val));
+            int vw = (int)strlen(val);
+            if (vw > width) width = vw;
+        }
+        colWidths[j] = width;
+    }
+
+    printf("Character table of group (|G| = %d):\n\n", T->group->card);
+
+    printf("%-*s |", rowLabelWidth, "class rep");
+    for (int j = 0; j < n; j++) {
+        const char* rep = (T->classes[j] && T->classes[j]->rep && T->classes[j]->rep->repr)
+            ? T->classes[j]->rep->repr
+            : "?";
+        printCenteredCell(rep, colWidths[j]);
+    }
+    printf("\n");
+
+    printf("%-*s |", rowLabelWidth, "class size");
+    for (int j = 0; j < n; j++) {
+        char num[32];
+        snprintf(num, sizeof(num), "%d", T->classes[j]->size);
+        printCenteredCell(num, colWidths[j]);
+    }
+    printf("\n");
+
+    printf("%-*s |", rowLabelWidth, "elt order");
+    for (int j = 0; j < n; j++) {
+        char num[32];
+        snprintf(num, sizeof(num), "%d", T->classes[j]->elementOrder);
+        printCenteredCell(num, colWidths[j]);
+    }
+    printf("\n");
+
+    for (int i = 0; i < rowLabelWidth; i++) putchar('-');
+    printf("-+");
+    for (int j = 0; j < n; j++) {
+        for (int i = 0; i < colWidths[j] + 2; i++) putchar('-');
+    }
+    printf("\n");
+
+    for (int k = 0; k < r; k++) {
+        const char* lbl = T->irreps[k]->repr ? T->irreps[k]->repr : "?";
+        printf("%-*s |", rowLabelWidth, lbl);
+        for (int j = 0; j < n; j++) {
+            char val[64];
+            formatChiValue(T->values[k][j], val, sizeof(val));
+            printCenteredCell(val, colWidths[j]);
+        }
+        printf("\n");
+    }
+    printf("\n");
+    free(colWidths);
 }
 

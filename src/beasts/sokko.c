@@ -1,6 +1,7 @@
 #include<stdlib.h>
 #include<stdio.h>
 #include<math.h>
+#include<string.h>
 #include "hebi.h"
 #include "sokko.h"
 
@@ -151,16 +152,15 @@ bool elemEq(MatrixElement a, MatrixElement b, double tol) {
     return elemAbs(elemSub(a, b)) <= tol;
 }
 
-// Print a MatrixElement; local helper used by printMatrix
-static void printElem(MatrixElement e) {
+static void formatElem(MatrixElement e, char* out, size_t outSize) {
     if (!e.isComplex) {
-        printf("%g", e.value.real);
+        snprintf(out, outSize, "%g", e.value.real);
         return;
     }
     double re = e.value.complex.real;
     double im = e.value.complex.imag;
-    if (im >= 0) printf("%g+%gi", re, im);
-    else printf("%g-%gi", re, -im);
+    if (im >= 0) snprintf(out, outSize, "%g+%gi", re, im);
+    else snprintf(out, outSize, "%g-%gi", re, -im);
 }
 
 /* ---------- LU methods ----------- */
@@ -391,15 +391,40 @@ Matrix* constructMatrixFromArray(int numRows, int numCols, MatrixElement* data, 
 
 // Print the Matrix
 void printMatrix(Matrix* matrix) {
+    if (!matrix) {
+        printf("(null matrix)\n");
+        return;
+    }
+    int cols = matrix->numCols;
+    int rows = matrix->numRows;
+    int* widths = calloc((size_t)cols, sizeof(int));
+    if (!widths) {
+        printf("(failed to allocate print widths)\n");
+        return;
+    }
+
+    for (int j = 0; j < cols; j++) {
+        int width = 1;
+        for (int i = 0; i < rows; i++) {
+            char buf[64];
+            formatElem(matrix->data[i * cols + j], buf, sizeof(buf));
+            int w = (int)strlen(buf);
+            if (w > width) width = w;
+        }
+        widths[j] = width;
+    }
+
     for (int i = 0; i < matrix->numRows; i++) {
 	printf("| ");
-	for (int j = 0; j < matrix->numCols-1; j++) {
-	    printElem(matrix->data[i*matrix->numCols + j]);
-	    printf(", ");
+	for (int j = 0; j < matrix->numCols; j++) {
+	    char buf[64];
+	    formatElem(matrix->data[i * matrix->numCols + j], buf, sizeof(buf));
+	    printf("%*s", widths[j], buf);
+	    if (j + 1 < matrix->numCols) printf(" , ");
 	}
-	printElem(matrix->data[i*matrix->numCols + matrix->numCols-1]);
 	printf(" |\n");
     }
+    free(widths);
 }
 
 // Return a deep copy of a Matrix
@@ -1541,8 +1566,8 @@ Matrix** eigenvectors3x3(Matrix* matrix) {
  * generic matrices.
  */
 
-static const double EIGEN_TOL = 1e-12;
-static const double EIGEN_REAL_SNAP = 1e-9;
+static const double EIGEN_TOL = 1e-10;
+static const double EIGEN_REAL_SNAP = 1e-7;
 
 // Complex Givens rotation that maps (x, y) -> (r, 0) for r >= 0 real.
 // Uses c = conj(x)/r, s = conj(y)/r so G = [[c, s], [-conj(s), conj(c)]].
@@ -1609,7 +1634,7 @@ static void qrIterate(ComplexNumber* H, int n, ComplexNumber* eigs) {
     int p = n;
     int totalIter = 0;
     int sinceDeflate = 0;
-    int maxIter = 500 * n + 500;
+    int maxIter = 5000 * n + 5000;
 
     while (p > 1 && totalIter < maxIter) {
         // Try to deflate any small subdiagonal in [1, p-1]
@@ -1720,6 +1745,13 @@ static int complexNullVector(ComplexNumber* M, int n, ComplexNumber* v) {
     if (!pivotCol) return 0;
     for (int i = 0; i < n; i++) pivotCol[i] = -1;
 
+    double scale = 0.0;
+    for (int i = 0; i < n * n; i++) {
+        double a = complexAbs(M[i]);
+        if (a > scale) scale = a;
+    }
+    double pivotTol = EIGEN_TOL * fmax(1.0, scale) + 1e-12;
+
     int row = 0;
     for (int col = 0; col < n && row < n; col++) {
         // Partial pivot: largest |M[r, col]| for r in [row, n)
@@ -1729,7 +1761,7 @@ static int complexNullVector(ComplexNumber* M, int n, ComplexNumber* v) {
             double a = complexAbs(M[r*n + col]);
             if (a > best) { best = a; piv = r; }
         }
-        if (piv < 0 || best < EIGEN_TOL) continue;
+        if (piv < 0 || best < pivotTol) continue;
         if (piv != row) {
             for (int c = 0; c < n; c++) {
                 ComplexNumber t = M[row*n + c];

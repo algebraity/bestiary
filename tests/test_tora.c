@@ -818,6 +818,441 @@ void testConjugateRepresentation() {
     freeGroup(S3);
 }
 
+/* ---------- Tests for characters and character tables ---------- */
+
+// Helper: free a Character that was built by characterOfRepresentation, walking its
+// shared classes first.
+static void freeCharFromRep(Character* chi) {
+    if (!chi) return;
+    for (int i = 0; i < chi->numClasses; i++) freeConjugacyClass(chi->classes[i]);
+    freeCharacter(chi);
+}
+
+void testCharacterValue() {
+    SECTION("characterValue");
+
+    Group* S3 = constructSymmetricGroup(3);
+    Representation* triv = trivialRepresentation(S3);
+    Representation* std = standardRepresentation(S3);
+
+    int n;
+    ConjugacyClass** classes = getConjugacyClasses(S3, &n);
+    CHECK(n == 3, "S3 has 3 conjugacy classes");
+
+    // Trivial char: 1 on every class
+    bool trivOk = true;
+    for (int i = 0; i < n; i++) {
+        ComplexNumber v = characterValue(triv, classes[i]);
+        if (!(fabs(v.real - 1.0) < 1e-9 && fabs(v.imag) < 1e-9)) trivOk = false;
+    }
+    CHECK(trivOk, "trivial chi(C) = 1 on every class");
+
+    // Standard char on S3: dim 2, sums to (2, 0, -1) ordered identity / transposition / 3-cycle
+    // Since classes can be in any order, just compare against the trace at the rep
+    bool stdOk = true;
+    for (int i = 0; i < n; i++) {
+        ComplexNumber v = characterValue(std, classes[i]);
+        ComplexNumber t = elemToComplex(trace(std->images[classes[i]->rep->index]));
+        if (!complexEq(v, t, 1e-9)) stdOk = false;
+    }
+    CHECK(stdOk, "characterValue equals trace at class rep");
+
+    // Sum over G of |chi(g)|^2 = |G| * <chi, chi>; for std it should equal 6 (irreducible)
+    double sumSq = 0.0;
+    for (int g = 0; g < S3->card; g++) {
+        ComplexNumber t = elemToComplex(trace(std->images[g]));
+        sumSq += t.real * t.real + t.imag * t.imag;
+    }
+    CHECK(fabs(sumSq - (double) S3->card) < 1e-6, "sum |chi_std(g)|^2 = |G|");
+
+    // NULL handling
+    ComplexNumber v0 = characterValue(NULL, classes[0]);
+    CHECK(fabs(v0.real) < 1e-12 && fabs(v0.imag) < 1e-12, "NULL rep -> 0");
+
+    for (int i = 0; i < n; i++) freeConjugacyClass(classes[i]);
+    free(classes);
+    freeRepresentation(std);
+    freeRepresentation(triv);
+    freeGroup(S3);
+}
+
+void testCharacterOfRepresentation() {
+    SECTION("characterOfRepresentation");
+
+    CHECK(characterOfRepresentation(NULL) == NULL, "NULL input");
+
+    Group* S3 = constructSymmetricGroup(3);
+    Representation* std = standardRepresentation(S3);
+    Character* chi = characterOfRepresentation(std);
+    CHECK(chi != NULL, "S3 std character built");
+    CHECK(chi->group == S3, "group pointer set");
+    CHECK(chi->numClasses == 3, "3 class values");
+    CHECK(strcmp(chi->repr, std->repr) == 0, "repr copied");
+
+    // chi(identity) = dim
+    bool idOk = false;
+    for (int i = 0; i < chi->numClasses; i++) {
+        if (chi->classes[i]->rep->index == 0) {
+            idOk = fabs(chi->values[i].real - (double) std->dim) < 1e-9;
+            break;
+        }
+    }
+    CHECK(idOk, "chi at identity class equals dim");
+
+    freeCharFromRep(chi);
+    freeRepresentation(std);
+    freeGroup(S3);
+}
+
+void testCharacterInnerProduct() {
+    SECTION("characterInnerProduct");
+
+    ComplexNumber zero = characterInnerProduct(NULL, NULL);
+    CHECK(fabs(zero.real) < 1e-12 && fabs(zero.imag) < 1e-12, "NULL -> 0");
+
+    Group* S3 = constructSymmetricGroup(3);
+
+    Representation* triv = trivialRepresentation(S3);
+    Representation* std = standardRepresentation(S3);
+    Representation* sgn = signRepresentation(S3);
+
+    Character* chiT = characterOfRepresentation(triv);
+    Character* chiS = characterOfRepresentation(std);
+    Character* chiSgn = characterOfRepresentation(sgn);
+
+    // <triv, triv> = 1
+    ComplexNumber tt = characterInnerProduct(chiT, chiT);
+    CHECK(fabs(tt.real - 1.0) < 1e-6 && fabs(tt.imag) < 1e-6, "<triv,triv> = 1");
+
+    // <std, std> = 1 (irreducible)
+    ComplexNumber ss = characterInnerProduct(chiS, chiS);
+    CHECK(fabs(ss.real - 1.0) < 1e-6 && fabs(ss.imag) < 1e-6, "<std,std> = 1");
+
+    // <triv, sgn> = 0 (orthogonal irreps)
+    ComplexNumber ts = characterInnerProduct(chiT, chiSgn);
+    CHECK(fabs(ts.real) < 1e-6 && fabs(ts.imag) < 1e-6, "<triv,sgn> = 0");
+
+    // <std, triv> = 0
+    ComplexNumber st = characterInnerProduct(chiS, chiT);
+    CHECK(fabs(st.real) < 1e-6 && fabs(st.imag) < 1e-6, "<std,triv> = 0");
+
+    // <reg, triv> = 1 (regular rep contains trivial exactly once)
+    Representation* reg = regularRepresentation(S3);
+    Character* chiReg = characterOfRepresentation(reg);
+    ComplexNumber rt = characterInnerProduct(chiReg, chiT);
+    CHECK(fabs(rt.real - 1.0) < 1e-6 && fabs(rt.imag) < 1e-6, "<reg,triv> = 1");
+
+    // <reg, std> = dim std = 2  (regular rep contains std with multiplicity dim std)
+    ComplexNumber rs = characterInnerProduct(chiReg, chiS);
+    CHECK(fabs(rs.real - 2.0) < 1e-6 && fabs(rs.imag) < 1e-6, "<reg,std> = 2");
+
+    freeCharFromRep(chiT);
+    freeCharFromRep(chiS);
+    freeCharFromRep(chiSgn);
+    freeCharFromRep(chiReg);
+    freeRepresentation(triv);
+    freeRepresentation(std);
+    freeRepresentation(sgn);
+    freeRepresentation(reg);
+    freeGroup(S3);
+}
+
+void testIsIrreducible() {
+    SECTION("isIrreducible");
+
+    CHECK(isIrreducible(NULL) == false, "NULL -> false");
+
+    Group* S3 = constructSymmetricGroup(3);
+    Representation* triv = trivialRepresentation(S3);
+    Representation* std = standardRepresentation(S3);
+    Representation* sgn = signRepresentation(S3);
+    Representation* reg = regularRepresentation(S3);
+
+    CHECK(isIrreducible(triv), "S3 trivial is irreducible");
+    CHECK(isIrreducible(std), "S3 standard is irreducible");
+    CHECK(isIrreducible(sgn), "S3 sign is irreducible");
+    CHECK(!isIrreducible(reg), "S3 regular is reducible");
+
+    Representation* sym = symmetricProduct(std);
+    Representation* wed = wedgeProduct(std);
+    CHECK(isIrreducible(wed), "S3 Wedge^2(std) is irreducible (= sgn)");
+    CHECK(!isIrreducible(sym), "S3 Sym^2(std) is reducible");
+
+    freeRepresentation(sym);
+    freeRepresentation(wed);
+    freeRepresentation(triv);
+    freeRepresentation(std);
+    freeRepresentation(sgn);
+    freeRepresentation(reg);
+    freeGroup(S3);
+}
+
+void testCharacterTable() {
+    SECTION("characterTable / printCharacterTable");
+
+    CHECK(characterTable(NULL) == NULL, "NULL input");
+
+    // Z_3: abelian, 3 classes, 3 irreps all 1D, sum d^2 = 3
+    Group* Z3 = constructZnGroup(3);
+    CharacterTable* T = characterTable(Z3);
+    CHECK(T != NULL, "Z3: table built");
+    CHECK(T->numClasses == 3, "Z3: 3 classes");
+    CHECK(T->numIrreps == 3, "Z3: 3 irreps found");
+    int sumSq = 0;
+    for (int k = 0; k < T->numIrreps; k++) {
+        int d = (int) round(T->values[k][0].real);
+        sumSq += d * d;
+    }
+    CHECK(sumSq == 3, "Z3: sum of d^2 = |G|");
+
+    // Orthogonality: <chi_i, chi_j> = delta_ij
+    bool orthOk = true;
+    for (int i = 0; i < T->numIrreps; i++) {
+        for (int j = 0; j < T->numIrreps; j++) {
+            ComplexNumber ip = characterInnerProduct(T->irreps[i], T->irreps[j]);
+            double expected = (i == j) ? 1.0 : 0.0;
+            if (!(fabs(ip.real - expected) < 1e-6 && fabs(ip.imag) < 1e-6)) orthOk = false;
+        }
+    }
+    CHECK(orthOk, "Z3: irreps are orthonormal");
+
+    printf("\n--- printCharacterTable(Z3) ---\n");
+    printCharacterTable(T);
+
+    for (int k = 0; k < T->numIrreps; k++) freeCharacter(T->irreps[k]);
+    for (int i = 0; i < T->numClasses; i++) freeConjugacyClass(T->classes[i]);
+    freeCharacterTable(T);
+    freeGroup(Z3);
+
+    // S_3: 3 classes, 3 irreps (trivial 1D, sign 1D, std 2D), 1 + 1 + 4 = 6
+    Group* S3 = constructSymmetricGroup(3);
+    T = characterTable(S3);
+    CHECK(T != NULL, "S3: table built");
+    CHECK(T->numClasses == 3, "S3: 3 classes");
+    CHECK(T->numIrreps == 3, "S3: all 3 irreps found");
+    sumSq = 0;
+    for (int k = 0; k < T->numIrreps; k++) {
+        int d = (int) round(T->values[k][0].real);
+        sumSq += d * d;
+    }
+    CHECK(sumSq == 6, "S3: sum of d^2 = |G|");
+
+    orthOk = true;
+    for (int i = 0; i < T->numIrreps; i++) {
+        for (int j = 0; j < T->numIrreps; j++) {
+            ComplexNumber ip = characterInnerProduct(T->irreps[i], T->irreps[j]);
+            double expected = (i == j) ? 1.0 : 0.0;
+            if (!(fabs(ip.real - expected) < 1e-6 && fabs(ip.imag) < 1e-6)) orthOk = false;
+        }
+    }
+    CHECK(orthOk, "S3: irreps are orthonormal");
+
+    printf("\n--- printCharacterTable(S3) ---\n");
+    printCharacterTable(T);
+
+    for (int k = 0; k < T->numIrreps; k++) freeCharacter(T->irreps[k]);
+    for (int i = 0; i < T->numClasses; i++) freeConjugacyClass(T->classes[i]);
+    freeCharacterTable(T);
+    freeGroup(S3);
+}
+
+void testDecomposeRepresentation() {
+    SECTION("decomposeRepresentation");
+
+    CHECK(decomposeRepresentation(NULL, NULL) == NULL, "NULL inputs");
+
+    Group* S3 = constructSymmetricGroup(3);
+    CharacterTable* T = characterTable(S3);
+    CHECK(T != NULL && T->numIrreps == 3, "S3 table built");
+
+    // Trivial rep decomposes to (1, 0, 0) (or whichever index is the trivial irrep)
+    Representation* triv = trivialRepresentation(S3);
+    int* m = decomposeRepresentation(triv, T);
+    int sumTriv = 0;
+    int oneCount = 0;
+    for (int i = 0; i < T->numIrreps; i++) { sumTriv += m[i]; if (m[i] == 1) oneCount++; }
+    CHECK(sumTriv == 1 && oneCount == 1, "trivial decomposes as one irrep with multiplicity 1");
+    free(m);
+    freeRepresentation(triv);
+
+    // Standard rep is irreducible -> exactly one entry equals 1, rest 0
+    Representation* std = standardRepresentation(S3);
+    m = decomposeRepresentation(std, T);
+    int sumStd = 0;
+    oneCount = 0;
+    for (int i = 0; i < T->numIrreps; i++) { sumStd += m[i]; if (m[i] == 1) oneCount++; }
+    CHECK(sumStd == 1 && oneCount == 1, "S3 std rep is irreducible");
+    free(m);
+    freeRepresentation(std);
+
+    // Regular rep: each irrep V_i appears with multiplicity dim(V_i). For S3 the
+    // dimensions are (1, 1, 2). The multiplicity vector matches the dim vector.
+    Representation* reg = regularRepresentation(S3);
+    m = decomposeRepresentation(reg, T);
+    int totalDim = 0;
+    bool dimMatch = true;
+    for (int i = 0; i < T->numIrreps; i++) {
+        int d = (int) round(T->values[i][0].real);
+        if (m[i] != d) dimMatch = false;
+        totalDim += m[i] * d;
+    }
+    CHECK(dimMatch, "regular rep multiplicities equal dimensions of irreps");
+    CHECK(totalDim == S3->card, "sum of n_i * dim(V_i) = |G|");
+    free(m);
+    freeRepresentation(reg);
+
+    // Sym^2(std) on S3: contains trivial + std (both with multiplicity 1)
+    Representation* stdRep = standardRepresentation(S3);
+    Representation* sym = symmetricProduct(stdRep);
+    m = decomposeRepresentation(sym, T);
+    int totalSym = 0;
+    for (int i = 0; i < T->numIrreps; i++) totalSym += m[i] * (int) round(T->values[i][0].real);
+    CHECK(totalSym == sym->dim, "sum n_i * dim(V_i) = dim(Sym^2 std)");
+    int twoCount = 0;
+    for (int i = 0; i < T->numIrreps; i++) if (m[i] >= 1) twoCount++;
+    CHECK(twoCount == 2, "S3 Sym^2 std splits into 2 distinct irreps");
+    free(m);
+    freeRepresentation(sym);
+    freeRepresentation(stdRep);
+
+    for (int k = 0; k < T->numIrreps; k++) freeCharacter(T->irreps[k]);
+    for (int i = 0; i < T->numClasses; i++) freeConjugacyClass(T->classes[i]);
+    freeCharacterTable(T);
+    freeGroup(S3);
+}
+
+void testCharacterTableHardCases() {
+    SECTION("characterTable on S4 and Q8");
+
+    // S_4: 5 classes, irreducible dimensions (1, 1, 2, 3, 3), sum of d^2 = 24
+    Group* S4 = constructSymmetricGroup(4);
+    CharacterTable* T = characterTable(S4);
+    CHECK(T != NULL, "S4: table built");
+    CHECK(T->numClasses == 5, "S4: 5 conjugacy classes");
+    CHECK(T->numIrreps == 5, "S4: all 5 irreps recovered");
+
+    int sumSq = 0;
+    int dimsHistogram[10] = {0};
+    for (int k = 0; k < T->numIrreps; k++) {
+        int d = (int) round(T->values[k][0].real);
+        sumSq += d * d;
+        if (d >= 0 && d < 10) dimsHistogram[d]++;
+    }
+    CHECK(sumSq == 24, "S4: sum d^2 = 24");
+    CHECK(dimsHistogram[1] == 2 && dimsHistogram[2] == 1 && dimsHistogram[3] == 2,
+          "S4: dimensions (1, 1, 2, 3, 3)");
+
+    bool orthOk = true;
+    for (int i = 0; i < T->numIrreps; i++) {
+        for (int j = 0; j < T->numIrreps; j++) {
+            ComplexNumber ip = characterInnerProduct(T->irreps[i], T->irreps[j]);
+            double expected = (i == j) ? 1.0 : 0.0;
+            if (!(fabs(ip.real - expected) < 1e-4 && fabs(ip.imag) < 1e-4)) orthOk = false;
+        }
+    }
+    CHECK(orthOk, "S4: irreps orthonormal");
+
+    printf("\n--- printCharacterTable(S4) ---\n");
+    printCharacterTable(T);
+
+    // Spot-check: regular rep decomposes with multiplicities = dimensions
+    Representation* reg = regularRepresentation(S4);
+    int* m = decomposeRepresentation(reg, T);
+    bool regOk = true;
+    for (int k = 0; k < T->numIrreps; k++) {
+        int d = (int) round(T->values[k][0].real);
+        if (m[k] != d) regOk = false;
+    }
+    CHECK(regOk, "S4: reg rep multiplicities = dims");
+    free(m);
+    freeRepresentation(reg);
+
+    for (int k = 0; k < T->numIrreps; k++) freeCharacter(T->irreps[k]);
+    for (int i = 0; i < T->numClasses; i++) freeConjugacyClass(T->classes[i]);
+    freeCharacterTable(T);
+    freeGroup(S4);
+
+    // Q_8: 5 conjugacy classes, dimensions (1, 1, 1, 1, 2), sum d^2 = 8
+    Group* Q8 = constructQ8();
+    T = characterTable(Q8);
+    CHECK(T != NULL, "Q8: table built");
+    CHECK(T->numClasses == 5, "Q8: 5 conjugacy classes");
+    CHECK(T->numIrreps == 5, "Q8: 5 irreps");
+    sumSq = 0;
+    int oneCount = 0, twoCount = 0;
+    for (int k = 0; k < T->numIrreps; k++) {
+        int d = (int) round(T->values[k][0].real);
+        sumSq += d * d;
+        if (d == 1) oneCount++;
+        if (d == 2) twoCount++;
+    }
+    CHECK(sumSq == 8, "Q8: sum d^2 = 8");
+    CHECK(oneCount == 4 && twoCount == 1, "Q8: dimensions (1,1,1,1,2)");
+
+    printf("\n--- printCharacterTable(Q8) ---\n");
+    printCharacterTable(T);
+
+    for (int k = 0; k < T->numIrreps; k++) freeCharacter(T->irreps[k]);
+    for (int i = 0; i < T->numClasses; i++) freeConjugacyClass(T->classes[i]);
+    freeCharacterTable(T);
+    freeGroup(Q8);
+
+    // Z2 x Z2 x Z2 (abelian): 8 classes, all irreps 1D
+    int vals[] = {2, 2, 2};
+    Group* V8 = constructZnProductGroup(vals, 3);
+    T = characterTable(V8);
+    CHECK(T != NULL, "(Z2)^3: table built");
+    CHECK(T->numClasses == 8, "(Z2)^3: 8 classes");
+    CHECK(T->numIrreps == 8, "(Z2)^3: 8 irreps");
+    sumSq = 0;
+    for (int k = 0; k < T->numIrreps; k++) {
+        int d = (int) round(T->values[k][0].real);
+        sumSq += d * d;
+    }
+    CHECK(sumSq == 8, "(Z2)^3: sum d^2 = 8 (all 1D)");
+
+    for (int k = 0; k < T->numIrreps; k++) freeCharacter(T->irreps[k]);
+    for (int i = 0; i < T->numClasses; i++) freeConjugacyClass(T->classes[i]);
+    freeCharacterTable(T);
+    freeGroup(V8);
+}
+
+void testAllIrreducibleCharacters() {
+    SECTION("allIrreducibleCharacters");
+
+    int count = -1;
+    CHECK(allIrreducibleCharacters(NULL, &count) == NULL, "NULL group");
+
+    Group* D5 = constructDihedralGroup(5);
+    Character** chars = allIrreducibleCharacters(D5, &count);
+    CHECK(chars != NULL, "D5: characters built");
+    // D_5 has 4 conjugacy classes and 4 irreps: dims (1, 1, 2, 2)
+    CHECK(count == 4, "D5: 4 irreps");
+    int sumSq = 0;
+    for (int k = 0; k < count; k++) {
+        int d = (int) round(chars[k]->values[0].real);
+        sumSq += d * d;
+    }
+    CHECK(sumSq == 10, "D5: sum d^2 = |D_5| = 10");
+
+    // Orthonormality
+    bool ok = true;
+    for (int i = 0; i < count; i++) {
+        for (int j = 0; j < count; j++) {
+            ComplexNumber ip = characterInnerProduct(chars[i], chars[j]);
+            double expected = (i == j) ? 1.0 : 0.0;
+            if (!(fabs(ip.real - expected) < 1e-4 && fabs(ip.imag) < 1e-4)) ok = false;
+        }
+    }
+    CHECK(ok, "D5: orthonormal");
+
+    // Cleanup: walk first character's classes
+    for (int i = 0; i < chars[0]->numClasses; i++) freeConjugacyClass(chars[0]->classes[i]);
+    for (int k = 0; k < count; k++) freeCharacter(chars[k]);
+    free(chars);
+    freeGroup(D5);
+}
+
 /* ---------- Main ---------- */
 
 int main(void) {
@@ -841,6 +1276,14 @@ int main(void) {
     testSignRepresentation();
     testDualRepresentation();
     testConjugateRepresentation();
+    testCharacterValue();
+    testCharacterOfRepresentation();
+    testCharacterInnerProduct();
+    testIsIrreducible();
+    testCharacterTable();
+    testDecomposeRepresentation();
+    testCharacterTableHardCases();
+    testAllIrreducibleCharacters();
 
     printf("\n==============================\n");
     printf("Tests: %d/%d passed\n", testsPassed, testsRun);
