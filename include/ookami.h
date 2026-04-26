@@ -20,6 +20,9 @@ int comp(const void* a, const void* b);
 void normalizeSet(long long* set, int* card);
 void printSet(CombSet* combset);
 CombSet* constructCombset(long long* baseSet, int card);
+CombSet* constructRangeSet(long long start, long long end, long long step);
+CombSet* constructArithmeticProgressionSet(long long first, long long diff, int terms);
+CombSet* constructGeometricProgressionSet(long long first, long long ratio, int terms);
 void freeCombset(CombSet* combset);
 CombSet* copyCombset(CombSet* combset);
 bool compCombset(CombSet* A, CombSet* B);
@@ -39,6 +42,7 @@ CombSet* dds(CombSet* combset);
 CombSet* kdds(CombSet* combset, int k);
 CombSet* mds(CombSet* combset);
 CombSet* kmds(CombSet* combset, int k);
+CombSet* subsetSums(CombSet* combset, int subsetSize);
 CombSet* setIntersection(CombSet* A, CombSet* B);
 CombSet* setUnion(CombSet* A, CombSet* B);
 

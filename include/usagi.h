@@ -118,6 +118,8 @@ Ring* constructZnRing(int n);
 Ring* constructZnProductRing(int* vals, int k);
 Ring* primeFiniteField(int p);
 Ring* constructFiniteField(int p, int k);
+Group* constructAddGroup(Ring* R);
+Group* constructUnitGroup(Ring* R);
 bool isPrime(int p);
 
 /* ---------- Compare methods ---------- */

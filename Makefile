@@ -1,12 +1,67 @@
 .DEFAULT_GOAL := all
 
-CC       ?= gcc
+PLATFORM ?= linux
 CFLAGS   ?= -Wall -Wextra -O2
-CPPFLAGS += -Iinclude
+CXXFLAGS ?= -std=c++17 -Wall -Wextra -O2
+LDFLAGS  ?=
 DEPFLAGS  = -MMD -MP
 
-OBJDIR := build/obj
-BINDIR := build/bin
+ifeq ($(PLATFORM),windows)
+  ifeq ($(origin CC),default)
+    CC := x86_64-w64-mingw32-gcc
+  endif
+  ifeq ($(origin CXX),default)
+    CXX := x86_64-w64-mingw32-g++
+  endif
+	ifneq ($(filter undefined default,$(origin WX_CONFIG)),)
+		ifneq ($(wildcard /usr/x86_64-w64-mingw32/bin/wx-config),)
+			WX_CONFIG := /usr/x86_64-w64-mingw32/bin/wx-config
+		else
+			WX_CONFIG := x86_64-w64-mingw32-wx-config
+		endif
+	endif
+  EXEEXT := .exe
+  OBJDIR := build/obj/windows
+  BINDIR := build/bin/windows
+	DISTDIR := build/dist/windows
+	WINDOWS_DLL_DIR := /usr/x86_64-w64-mingw32/bin
+	WINDOWS_RUNTIME_DLLS := \
+		libexpat-1.dll \
+		libjpeg-8.dll \
+		libpng16-16.dll \
+		libtiff-6.dll \
+		zlib1.dll \
+		libgcc_s_seh-1.dll \
+		libwinpthread-1.dll \
+		libssp-0.dll \
+		liblzma-5.dll
+	WINDOWS_RUNTIME_BINS := $(addprefix $(BINDIR)/,$(WINDOWS_RUNTIME_DLLS))
+	WINDOWS_BUNDLE_DIR := $(DISTDIR)/bestiary
+	WINDOWS_INSTALLER_FILES := packaging/windows/install.bat packaging/windows/README-WINDOWS.txt
+	CPPFLAGS += -Iinclude -Ithird_party/linenoise -DBST_PLATFORM_WINDOWS -DWINVER=0x0A00 -D_WIN32_WINNT=0x0A00
+  LDFLAGS += -static -static-libgcc
+  LDLIBS := -lm
+  GUI_LIBS :=
+  LINE_INPUT_SRCS := src/platform/line_input_linenoise.c third_party/linenoise/linenoise.c
+else
+  ifeq ($(origin CC),default)
+    CC := gcc
+  endif
+  ifeq ($(origin CXX),default)
+    CXX := g++
+  endif
+  WX_CONFIG ?= wx-config
+  EXEEXT :=
+  OBJDIR := build/obj/linux
+  BINDIR := build/bin/linux
+	DISTDIR := build/dist/linux
+	WINDOWS_RUNTIME_BINS :=
+	WINDOWS_INSTALLER_FILES :=
+  CPPFLAGS += -Iinclude
+  LDLIBS := -lm -lreadline
+  GUI_LIBS := -lutil
+  LINE_INPUT_SRCS := src/platform/line_input_readline.c
+endif
 
 BEAST_SRCS = \
 	src/beasts/hebi.c \
@@ -21,10 +76,12 @@ CORE_SRCS = \
 	src/core/lexer.c \
 	src/core/ast.c \
 	src/core/parser.c \
+	src/core/script.c \
 	src/core/value.c \
 	src/core/eval.c
 
 REPL_SRC = src/repl.c
+GUI_SRC = src/gui/bestiary_gui.cpp
 
 TEST_SRCS = \
 	tests/test_sokko.c \
@@ -37,55 +94,120 @@ TEST_SRCS = \
 BEAST_OBJS = $(patsubst src/%.c,$(OBJDIR)/src/%.o,$(BEAST_SRCS))
 CORE_OBJS = $(patsubst src/%.c,$(OBJDIR)/src/%.o,$(CORE_SRCS))
 REPL_OBJ = $(patsubst src/%.c,$(OBJDIR)/src/%.o,$(REPL_SRC))
+GUI_OBJ = $(patsubst src/%.cpp,$(OBJDIR)/src/%.o,$(GUI_SRC))
+LINE_INPUT_OBJS = $(patsubst %.c,$(OBJDIR)/%.o,$(LINE_INPUT_SRCS))
 TEST_OBJS = $(patsubst tests/%.c,$(OBJDIR)/tests/%.o,$(TEST_SRCS))
 
-REPL_BIN := $(BINDIR)/repl
+APP_BIN := $(BINDIR)/bestiary$(EXEEXT)
+REPL_BIN := $(BINDIR)/repl$(EXEEXT)
+GUI_BIN := $(BINDIR)/bestiary-gui$(EXEEXT)
+GUI_ASSETS := $(BINDIR)/bestiary-banner.png
 TEST_BINS = \
-	$(BINDIR)/test_sokko \
-	$(BINDIR)/test_usagi \
-	$(BINDIR)/test_poni \
-	$(BINDIR)/test_ookami \
-	$(BINDIR)/test_tora \
-	$(BINDIR)/test_neko
+	$(BINDIR)/test_sokko$(EXEEXT) \
+	$(BINDIR)/test_usagi$(EXEEXT) \
+	$(BINDIR)/test_poni$(EXEEXT) \
+	$(BINDIR)/test_ookami$(EXEEXT) \
+	$(BINDIR)/test_tora$(EXEEXT) \
+	$(BINDIR)/test_neko$(EXEEXT)
 
-DEPFILES = $(BEAST_OBJS:.o=.d) $(CORE_OBJS:.o=.d) $(REPL_OBJ:.o=.d) $(TEST_OBJS:.o=.d)
+DEPFILES = $(BEAST_OBJS:.o=.d) $(CORE_OBJS:.o=.d) $(REPL_OBJ:.o=.d) $(GUI_OBJ:.o=.d) $(LINE_INPUT_OBJS:.o=.d) $(TEST_OBJS:.o=.d)
 
-.PHONY: all repl beasts pipeline tests clean
+.PHONY: all bestiary repl gui linux linux-gui windows windows-gui windows-bundle bundle release release-gui beasts pipeline tests clean
 
-all: repl
+all: bestiary repl
+
+bestiary: $(APP_BIN)
 
 repl: $(REPL_BIN)
 
+gui: $(GUI_BIN) $(GUI_ASSETS) $(WINDOWS_RUNTIME_BINS)
+
+linux:
+	$(MAKE) PLATFORM=linux bestiary repl
+
+linux-gui:
+	$(MAKE) PLATFORM=linux gui
+
+windows:
+	$(MAKE) PLATFORM=windows bestiary repl
+
+windows-gui:
+	$(MAKE) PLATFORM=windows gui
+
+windows-bundle:
+	$(MAKE) PLATFORM=windows bundle
+
+release: linux windows
+
+release-gui: linux-gui windows-gui
+
+bundle: $(WINDOWS_BUNDLE_DIR)
+
 beasts: $(BEAST_OBJS)
 
-pipeline: $(CORE_OBJS) $(REPL_OBJ)
+pipeline: $(CORE_OBJS) $(REPL_OBJ) $(LINE_INPUT_OBJS)
 
 tests: $(TEST_BINS)
 
-$(REPL_BIN): $(CORE_OBJS) $(REPL_OBJ) $(BEAST_OBJS) | $(BINDIR)
-	$(CC) $(CFLAGS) -o $@ $^ -lm -lreadline
+$(APP_BIN): $(CORE_OBJS) $(REPL_OBJ) $(LINE_INPUT_OBJS) $(BEAST_OBJS) | $(BINDIR)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
-$(BINDIR)/test_sokko: $(OBJDIR)/tests/test_sokko.o $(OBJDIR)/src/beasts/sokko.o $(OBJDIR)/src/beasts/hebi.o | $(BINDIR)
-	$(CC) $(CFLAGS) -o $@ $^ -lm
+$(REPL_BIN): $(APP_BIN) | $(BINDIR)
+	cp $< $@
 
-$(BINDIR)/test_usagi: $(OBJDIR)/tests/test_usagi.o $(OBJDIR)/src/beasts/usagi.o | $(BINDIR)
-	$(CC) $(CFLAGS) -o $@ $^ -lm
+$(GUI_BIN): $(GUI_OBJ) $(APP_BIN) | $(BINDIR)
+	@command -v $(WX_CONFIG) >/dev/null 2>&1 || { echo "wxWidgets config tool not found: $(WX_CONFIG)"; echo "Install wxWidgets development packages or set WX_CONFIG=/path/to/wx-config."; exit 1; }
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $(GUI_OBJ) `$(WX_CONFIG) --libs` $(GUI_LIBS)
 
-$(BINDIR)/test_poni: $(OBJDIR)/tests/test_poni.o $(OBJDIR)/src/beasts/poni.o $(OBJDIR)/src/beasts/sokko.o $(OBJDIR)/src/beasts/hebi.o | $(BINDIR)
-	$(CC) $(CFLAGS) -o $@ $^ -lm
+$(GUI_ASSETS): bestiary-banner.png | $(BINDIR)
+	cp $< $@
 
-$(BINDIR)/test_ookami: $(OBJDIR)/tests/test_ookami.o $(OBJDIR)/src/beasts/ookami.o $(OBJDIR)/src/beasts/hebi.o | $(BINDIR)
-	$(CC) $(CFLAGS) -o $@ $^ -lm
+$(WINDOWS_BUNDLE_DIR): $(APP_BIN) $(REPL_BIN) $(GUI_BIN) $(GUI_ASSETS) $(WINDOWS_RUNTIME_BINS) $(WINDOWS_INSTALLER_FILES)
+	@if [ "$(PLATFORM)" != "windows" ]; then \
+		echo "bundle is only supported with PLATFORM=windows"; \
+		exit 1; \
+	fi
+	@mkdir -p $@
+	cp $(APP_BIN) $(REPL_BIN) $(GUI_BIN) $(GUI_ASSETS) $(WINDOWS_RUNTIME_BINS) $@/
+	cp $(WINDOWS_INSTALLER_FILES) $@/
 
-$(BINDIR)/test_tora: $(OBJDIR)/tests/test_tora.o $(OBJDIR)/src/beasts/tora.o $(OBJDIR)/src/beasts/sokko.o $(OBJDIR)/src/beasts/usagi.o $(OBJDIR)/src/beasts/hebi.o | $(BINDIR)
-	$(CC) $(CFLAGS) -o $@ $^ -lm
+$(BINDIR)/%.dll: | $(BINDIR)
+	@if [ "$(PLATFORM)" != "windows" ]; then \
+		echo "Windows runtime DLL staging is only supported with PLATFORM=windows"; \
+		exit 1; \
+	fi
+	@if [ ! -f "$(WINDOWS_DLL_DIR)/$*.dll" ]; then \
+		echo "missing Windows runtime DLL: $(WINDOWS_DLL_DIR)/$*.dll"; \
+		exit 1; \
+	fi
+	cp "$(WINDOWS_DLL_DIR)/$*.dll" "$@"
 
-$(BINDIR)/test_neko: $(OBJDIR)/tests/test_neko.o $(OBJDIR)/src/beasts/neko.o | $(BINDIR)
-	$(CC) $(CFLAGS) -o $@ $^ -lm
+$(BINDIR)/test_sokko$(EXEEXT): $(OBJDIR)/tests/test_sokko.o $(OBJDIR)/src/beasts/sokko.o $(OBJDIR)/src/beasts/hebi.o | $(BINDIR)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ -lm
+
+$(BINDIR)/test_usagi$(EXEEXT): $(OBJDIR)/tests/test_usagi.o $(OBJDIR)/src/beasts/usagi.o | $(BINDIR)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ -lm
+
+$(BINDIR)/test_poni$(EXEEXT): $(OBJDIR)/tests/test_poni.o $(OBJDIR)/src/beasts/poni.o $(OBJDIR)/src/beasts/sokko.o $(OBJDIR)/src/beasts/hebi.o | $(BINDIR)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ -lm
+
+$(BINDIR)/test_ookami$(EXEEXT): $(OBJDIR)/tests/test_ookami.o $(OBJDIR)/src/beasts/ookami.o $(OBJDIR)/src/beasts/hebi.o | $(BINDIR)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ -lm
+
+$(BINDIR)/test_tora$(EXEEXT): $(OBJDIR)/tests/test_tora.o $(OBJDIR)/src/beasts/tora.o $(OBJDIR)/src/beasts/sokko.o $(OBJDIR)/src/beasts/usagi.o $(OBJDIR)/src/beasts/hebi.o | $(BINDIR)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ -lm
+
+$(BINDIR)/test_neko$(EXEEXT): $(OBJDIR)/tests/test_neko.o $(OBJDIR)/src/beasts/neko.o | $(BINDIR)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ -lm
 
 $(OBJDIR)/%.o: %.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
+
+$(OBJDIR)/%.o: %.cpp
+	@command -v $(WX_CONFIG) >/dev/null 2>&1 || { echo "wxWidgets config tool not found: $(WX_CONFIG)"; echo "Install wxWidgets development packages or set WX_CONFIG=/path/to/wx-config."; exit 1; }
+	@mkdir -p $(dir $@)
+	$(CXX) $(CPPFLAGS) `$(WX_CONFIG) --cxxflags` $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@
 
 $(BINDIR):
 	@mkdir -p $@

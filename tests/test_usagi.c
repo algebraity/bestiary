@@ -2274,6 +2274,42 @@ static void test_trivialRing(void) {
 
 /* ---------- subring and ideal tests ---------- */
 
+static void test_ring_induced_groups(void) {
+    printf("\n=== ring induced groups ===\n");
+
+    Ring* Z6 = make_Zn_ring(6);
+    Group* addZ6 = constructAddGroup(Z6);
+    CHECK(addZ6 != NULL, "constructAddGroup(Z/6Z) succeeds");
+    CHECK(addZ6 && addZ6->card == 6, "additive group of Z/6Z has order 6");
+    CHECK(addZ6 && strcmp(addZ6->elements[0]->repr, "0") == 0, "additive group preserves ring element reprs");
+    CHECK(addZ6 && groupMult(addZ6->elements[2], addZ6->elements[5])->index == 1, "additive group uses ring addition table");
+
+    Group* unitZ6 = constructUnitGroup(Z6);
+    CHECK(unitZ6 != NULL, "constructUnitGroup(Z/6Z) succeeds");
+    CHECK(unitZ6 && unitZ6->card == 2, "unit group of Z/6Z has order 2");
+    CHECK(unitZ6 && strcmp(unitZ6->elements[0]->repr, "1") == 0, "unit group identity is 1");
+    CHECK(unitZ6 && strcmp(unitZ6->elements[1]->repr, "5") == 0, "unit group includes 5 in Z/6Z");
+    CHECK(unitZ6 && groupMult(unitZ6->elements[1], unitZ6->elements[1])->index == 0, "5*5 = 1 in the unit group of Z/6Z");
+
+    Ring* Z5 = make_Zn_ring(5);
+    Group* unitZ5 = constructUnitGroup(Z5);
+    CHECK(unitZ5 != NULL, "constructUnitGroup(Z/5Z) succeeds");
+    CHECK(unitZ5 && unitZ5->card == 4, "unit group of Z/5Z has order 4");
+    CHECK(unitZ5 && isCyclicGroup(unitZ5), "unit group of Z/5Z is cyclic");
+
+    Ring* triv = make_Zn_ring(1);
+    CHECK(constructUnitGroup(triv) == NULL, "constructUnitGroup rejects ring without multiplicative identity");
+    CHECK(constructAddGroup(NULL) == NULL, "constructAddGroup(NULL) returns NULL");
+    CHECK(constructUnitGroup(NULL) == NULL, "constructUnitGroup(NULL) returns NULL");
+
+    freeGroup(addZ6);
+    freeGroup(unitZ6);
+    freeGroup(unitZ5);
+    freeRing(Z6);
+    freeRing(Z5);
+    freeRing(triv);
+}
+
 static void test_subrings(void) {
     printf("\n=== constructSubring / cmpSubrings ===\n");
 
@@ -3463,6 +3499,7 @@ int main(void) {
     test_constructProductRing();
     test_kfoldProductRing();
     test_trivialRing();
+    test_ring_induced_groups();
     test_subrings();
     test_ideals();
     test_ring_homomorphisms();

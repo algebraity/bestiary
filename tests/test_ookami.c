@@ -4,8 +4,22 @@
 #include <math.h>
 #include "ookami.h"
 
+static int failures = 0;
+
 static void section(const char* title) {
     printf("\n===== %s =====\n", title);
+}
+
+static void expectSetEquals(const char* name, CombSet* set, const long long* expected, int count) {
+    CombSet* target = count > 0 ? constructCombset((long long*)expected, count) : NULL;
+    int ok = 0;
+
+    if (!set && !target) ok = 1;
+    else if (set && target) ok = compCombset(set, target);
+
+    printf("[CHECK] %s: %s\n", name, ok ? "PASS" : "FAIL");
+    if (!ok) failures++;
+    if (target) freeCombset(target);
 }
 
 int main(void) {
@@ -22,12 +36,28 @@ int main(void) {
     CombSet* AP = constructCombset(ap, 5);
     CombSet* GP = constructCombset(gp, 4);
     CombSet* D  = constructCombset(dup, 6);
+    CombSet* R  = constructRangeSet(2, 8, 2);
+    CombSet* APc = constructArithmeticProgressionSet(2, 3, 5);
+    CombSet* GPc = constructGeometricProgressionSet(2, 3, 4);
+    CombSet* SS = subsetSums(A, -1);
+    CombSet* SS2 = subsetSums(A, 2);
 
     printf("A  = "); printSet(A);
     printf("B  = "); printSet(B);
     printf("AP = "); printSet(AP);
     printf("GP = "); printSet(GP);
     printf("D  = "); printSet(D);  // should be normalized to {1,2,3,5}
+    printf("R  = "); printSet(R);
+    printf("APc = "); printSet(APc);
+    printf("GPc = "); printSet(GPc);
+    printf("subsetSums(A) = "); printSet(SS);
+    printf("subsetSums(A,2) = "); printSet(SS2);
+
+    expectSetEquals("rangeSet(2,8,2)", R, (long long[]){2, 4, 6, 8}, 4);
+    expectSetEquals("AP constructor", APc, ap, 5);
+    expectSetEquals("GP constructor", GPc, gp, 4);
+    expectSetEquals("subsetSums(A)", SS, (long long[]){0, 1, 2, 3, 4, 5, 6}, 7);
+    expectSetEquals("subsetSums(A,2)", SS2, (long long[]){3, 4, 5}, 3);
 
     CombSet* Acopy = copyCombset(A);
     printf("copy(A) = "); printSet(Acopy);
@@ -163,6 +193,11 @@ int main(void) {
     freeCombset(A3add); freeCombset(A3sub); freeCombset(A3mul);
     freeCombset(C);
     freeCombset(Acopy);
+    freeCombset(R); freeCombset(APc); freeCombset(GPc); freeCombset(SS); freeCombset(SS2);
     freeCombset(A); freeCombset(B); freeCombset(AP); freeCombset(GP); freeCombset(D);
+    if (failures != 0) {
+        printf("\nOOKAMI constructor checks failed: %d\n", failures);
+        return 1;
+    }
     return 0;
 }

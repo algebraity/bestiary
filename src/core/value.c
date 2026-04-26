@@ -566,6 +566,7 @@ const char* valKindName(ValueKind k) {
         case VAL_IDEAL:         return "ideal";
         case VAL_RING_HOMOMORPHISM: return "ring_homomorphism";
         case VAL_BODY:          return "body";
+        case VAL_BODY_SYSTEM:   return "body_system";
         case VAL_FORCE:         return "force";
     }
     return "?";
@@ -620,6 +621,26 @@ void valPrint(Value v) {
             printf("; velocity=");
             printInlineVector(body->velocity);
             printf("; forces=%d>", body->nForces);
+            break;
+        }
+        case VAL_BODY_SYSTEM: {
+            BodySystem* system = (BodySystem*)v.as.ptr;
+            if (!system) { printf("<bodySystem null>"); break; }
+            printf("<bodySystem bodies=%d; sample=[", system->nBodies);
+            int limit = system->nBodies < 3 ? system->nBodies : 3;
+            for (int i = 0; i < limit; i++) {
+                if (i) printf(", ");
+                Body* body = system->bodies ? system->bodies[i] : NULL;
+                if (!body) {
+                    printf("null");
+                    continue;
+                }
+                printf("{m=%g,pos=", body->mass);
+                printInlineVector(body->pos);
+                printf("}");
+            }
+            if (system->nBodies > limit) printf(", ...");
+            printf("]>");
             break;
         }
         case VAL_FORCE: {

@@ -6,6 +6,7 @@
 #include "sokko.h"
 
 #define A_GRAVITY 9.80665
+#define A_BIG_G 6.67430e-11
 #define MAX_FORCES 20
 
 /* --------- Definitions of structs ---------- */
@@ -23,6 +24,11 @@ typedef struct Body {
     Force** forces;
     int nForces;
 } Body;
+
+typedef struct BodySystem {
+    Body** bodies;
+    int nBodies;
+} BodySystem;
 
 typedef struct ProjectileInfo {
     double range;
@@ -53,6 +59,13 @@ Vector* accelerationFromForce(Body* body);
 Force* gravityForce(Body* body);
 Force* normalForce(Body* body, Vector* surfaceNormal);
 Force* frictionForce(Force* normal, double mu, Vector* direction);
+Force* springForce(Body* body, Vector* anchor, double k, double restLength);
+Force* dragForce(Body* body, double coeff);
+Force* gravitationalForce(Body* body, Body* other);
+Body* stepBody(Body* body, double timeStep);
+BodySystem* constructBodySystem(Body** bodies, int nBodies);
+BodySystem* stepBodySystem(BodySystem* system, double timeStep);
+BodySystem* simulateBodySystem(BodySystem* system, double timeStep, int steps);
 
 /* ---------- Conservation quantities ----------- */
 double momentumMagnitude(Body* body);
@@ -60,6 +73,8 @@ Vector* momentumVector(Body* body);
 double kineticEnergy(Body* body);
 double gravPotentialEnergy(Body* body, double height);
 double springPotentialEnergy(double k, double x);
+Vector* totalMomentum(BodySystem* system);
+double totalEnergy(BodySystem* system);
 double work(Force* F, Vector* disp);
 double power(Force* F, Vector* vel);
 double impulseMagnitude(Force* F, double time);

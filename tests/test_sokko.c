@@ -11,6 +11,10 @@
 #include "hebi.h"
 #include "sokko.h"
 
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
 /* ---------- Test infrastructure ---------- */
 
 static int testsRun = 0;
@@ -228,6 +232,21 @@ void testComplexArith() {
     // cbrt(i) = cos(pi/6) + i sin(pi/6) = sqrt(3)/2 + i/2
     CHECK(approx(cbrtI.real, sqrt(3)/2, 1e-12), "Re(cbrt(i)) = sqrt(3)/2");
     CHECK(approx(cbrtI.imag, 0.5, 1e-12), "Im(cbrt(i)) = 1/2");
+
+    ComplexNumber expIpi = complexExp((ComplexNumber){0, M_PI});
+    CHECK(approx(expIpi.real, -1.0, 1e-12) && approx(expIpi.imag, 0.0, 1e-12), "exp(i*pi) = -1");
+
+    ComplexNumber logNeg1 = complexLog((ComplexNumber){-1, 0});
+    CHECK(approx(logNeg1.real, 0.0, 1e-12) && approx(logNeg1.imag, M_PI, 1e-12), "log(-1) = i*pi");
+
+    ComplexNumber sinI = complexSin((ComplexNumber){0, 1});
+    CHECK(approx(sinI.real, 0.0, 1e-12) && approx(sinI.imag, sinh(1.0), 1e-12), "sin(i) = i sinh(1)");
+
+    ComplexNumber cosI = complexCos((ComplexNumber){0, 1});
+    CHECK(approx(cosI.real, cosh(1.0), 1e-12) && approx(cosI.imag, 0.0, 1e-12), "cos(i) = cosh(1)");
+
+    ComplexNumber tanI = complexTan((ComplexNumber){0, 1});
+    CHECK(approx(tanI.real, 0.0, 1e-12) && approx(tanI.imag, tanh(1.0), 1e-12), "tan(i) = i tanh(1)");
 
     CHECK(complexEq((ComplexNumber){1, 2}, (ComplexNumber){1 + 1e-15, 2}, 1e-12), "complexEq within tol");
     CHECK(!complexEq((ComplexNumber){1, 2}, (ComplexNumber){1, 3}, 1e-12), "complexEq beyond tol");

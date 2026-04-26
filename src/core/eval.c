@@ -12,6 +12,7 @@
 #include "ookami.h"
 #include "parser.h"
 #include "poni.h"
+#include "script.h"
 #include "sokko.h"
 #include "tora.h"
 #include "usagi.h"
@@ -83,11 +84,333 @@ void envSet(Env* env, const char* name, Value v) {
 
 static CommandEntry* g_commands = NULL;
 
+typedef struct {
+    const char* name;
+    const char* purpose;
+    const char* values;
+    const char* returns;
+} BuiltinDoc;
+
+static const BuiltinDoc BUILTIN_DOCS[] = {
+    { "help", "Displays command usage, accepted value types, and return type.", "zero arguments to list commands, or one command name as a Symbol or String", "String" },
+    { "run", "Runs a text file as a Bestiary script, evaluating each nonblank line in the current context.", "String filename, or an unquoted filename in braces such as \\run{script.bsy}", "String summary, or Error if the file cannot be opened" },
+    { "+", "Adds compatible values.", "Int/Fraction/Decimal/Complex with numeric; Matrix with same-size Matrix; Vector with same-dimension Vector; CombSet with Int for translation; CombSet with CombSet for sumset; RingElement with RingElement from the same Ring; Ideal with Ideal from the same Ring and side; Symbol/NEKO expression/numeric for symbolic addition", "same family as the operands, or numeric/symbolic result" },
+    { "-", "Subtracts compatible values.", "Int/Fraction/Decimal/Complex with numeric; Matrix with same-size Matrix; Vector with same-dimension Vector; CombSet with CombSet for difference set; RingElement with RingElement from the same Ring; Symbol/NEKO expression/numeric for symbolic subtraction", "same family as the operands, or numeric/symbolic result" },
+    { "*", "Multiplies compatible values.", "numeric with numeric; Matrix with compatible Matrix; Matrix with compatible Vector; Vector with Vector for dot product; Vector/Matrix with numeric scalar; CombSet with CombSet for product set; CombSet with Int for dilation; Int with CombSet for repeated sum/difference set; GroupElement with GroupElement from the same Group; RingElement with RingElement from the same Ring; RingElement with Int; Ideal with Ideal from the same Ring and side; Symbol/NEKO expression/numeric for symbolic multiplication", "same family as the operation, numeric scalar for dot products, or symbolic expression" },
+    { "/", "Divides compatible values.", "numeric numerator and nonzero numeric denominator; Group by normal SubGroup for quotient group; Ring by Ideal for quotient ring; GroupElement by GroupElement from the same Group; RingElement by invertible RingElement from the same Ring; Symbol/NEKO expression/numeric for symbolic quotient", "numeric, Group, Ring, GroupElement, RingElement, or NEKO expression" },
+    { "==", "Tests two Bestiary values for equality.", "two values of comparable Bestiary kinds", "Bool" },
+    { "u-", "Negates one value.", "numeric value, Vector, RingElement, CombSet, Symbol, or NEKO expression", "same kind as the input, or NEKO expression" },
+    { "u+", "Returns one value unchanged.", "any single Bestiary value", "same value kind as the input" },
+    { "^", "Raises a supported base to a power or applies a matrix superscript.", "numeric base with numeric exponent; Matrix with Int exponent or Symbol T/t; CombSet with positive Int exponent; GroupElement with Int exponent; RingElement with Int exponent; Symbol/NEKO expression/numeric for symbolic power", "numeric, Matrix, CombSet, GroupElement, RingElement, or NEKO expression" },
+    { "pi", "Returns the mathematical constant pi.", "no values", "Decimal" },
+    { "e", "Returns Euler's number.", "no values", "Decimal" },
+    { "phi", "Returns the golden ratio.", "no values", "Decimal" },
+    { "frac", "Constructs an exact rational fraction.", "Int numerator and Int denominator", "Fraction, or Int when normalized elsewhere" },
+    { "sqrt", "Computes or constructs a principal square root.", "Int, Fraction, Decimal, Complex, Symbol, or NEKO expression", "Int/Fraction when exact, Decimal or Complex when numeric, or NEKO expression" },
+    { "cbrt", "Computes a principal cube root.", "Int, Fraction, Decimal, or Complex", "Decimal or Complex" },
+    { "conj", "Computes complex conjugation.", "Int, Fraction, Decimal, or Complex", "same scalar family, or Complex" },
+    { "abs", "Computes an absolute value or constructs abs(x).", "Int, Fraction, Decimal, Complex, Symbol, or NEKO expression", "Int/Fraction for exact real input, Decimal for numeric magnitude, or NEKO expression" },
+    { "arg", "Computes the principal complex argument.", "Int, Fraction, Decimal, or Complex", "Decimal" },
+    { "re", "Extracts the real part of a scalar.", "Int, Fraction, Decimal, or Complex", "same scalar family for real input, Decimal for Complex input" },
+    { "im", "Extracts the imaginary part of a scalar.", "Int, Fraction, Decimal, or Complex", "Int 0 for real input, Decimal for Complex input" },
+    { "poly", "Parses a polynomial in x into a NEKO expression.", "String such as \"x^2 + 3x - 1\"", "NEKO expression" },
+    { "sin", "Computes sine or constructs sin(x).", "zero values for sin(x), or one numeric/Complex/Symbol/NEKO expression", "Decimal or Complex for numeric input, NEKO expression for symbolic input" },
+    { "cos", "Computes cosine or constructs cos(x).", "zero values for cos(x), or one numeric/Complex/Symbol/NEKO expression", "Decimal or Complex for numeric input, NEKO expression for symbolic input" },
+    { "tan", "Computes tangent or constructs tan(x).", "zero values for tan(x), or one numeric/Complex/Symbol/NEKO expression", "Decimal or Complex for numeric input, NEKO expression for symbolic input" },
+    { "asin", "Computes inverse sine or constructs asin(x).", "zero values for asin(x), or one numeric/Complex/Symbol/NEKO expression", "Decimal or Complex for numeric input, NEKO expression for symbolic input" },
+    { "acos", "Computes inverse cosine or constructs acos(x).", "zero values for acos(x), or one numeric/Complex/Symbol/NEKO expression", "Decimal or Complex for numeric input, NEKO expression for symbolic input" },
+    { "atan", "Computes inverse tangent or constructs atan(x).", "zero values for atan(x), or one numeric/Complex/Symbol/NEKO expression", "Decimal or Complex for numeric input, NEKO expression for symbolic input" },
+    { "exp", "Computes e^x or constructs exp(x).", "zero values for exp(x), or one numeric/Complex/Symbol/NEKO expression", "Decimal or Complex for numeric input, NEKO expression for symbolic input" },
+    { "log", "Computes natural logarithm or constructs log(x).", "zero values for log(x), or one numeric/Complex/Symbol/NEKO expression", "Decimal or Complex for numeric input, NEKO expression for symbolic input" },
+    { "derivative", "Differentiates a NEKO expression with respect to x by default, or with respect to an explicit variable.", "Symbol, numeric value, or NEKO expression convertible to a NEKO expression, optionally followed by a Symbol or String variable name", "NEKO expression" },
+    { "partialDerivative", "Differentiates a NEKO expression with respect to an explicit variable.", "Symbol, numeric value, or NEKO expression convertible to a NEKO expression, then a Symbol or String variable name", "NEKO expression" },
+    { "gradient", "Computes the gradient of a scalar NEKO expression.", "Symbol, numeric value, or NEKO expression convertible to a NEKO expression, optionally followed by one Symbol/String variable or a List of Symbol/String variables for coordinate order", "List of NEKO expressions" },
+    { "hessian", "Computes the Hessian matrix of a scalar NEKO expression.", "Symbol, numeric value, or NEKO expression convertible to a NEKO expression, optionally followed by one Symbol/String variable or a List of Symbol/String variables for coordinate order", "List of List of NEKO expressions" },
+    { "laplacian", "Computes the Laplacian of a scalar NEKO expression.", "Symbol, numeric value, or NEKO expression convertible to a NEKO expression, optionally followed by one Symbol/String variable or a List of Symbol/String variables", "NEKO expression" },
+    { "int", "Integrates a NEKO expression with respect to x by default, optionally over numeric bounds, or with respect to an explicit variable.", "expression alone for symbolic integration in x; expression and Symbol/String variable for symbolic integration in that variable; expression plus numeric lower and upper bounds for definite integration in x; or expression, variable, lower bound, upper bound for definite integration in that variable", "NEKO expression for symbolic integrals, Decimal for definite integrals" },
+    { "integral", "Alias for int.", "expression alone for symbolic integration in x; expression and Symbol/String variable for symbolic integration in that variable; expression plus numeric lower and upper bounds for definite integration in x; or expression, variable, lower bound, upper bound for definite integration in that variable", "NEKO expression for symbolic integrals, Decimal for definite integrals" },
+    { "eval", "Evaluates a NEKO expression at a numeric value, using x by default or an explicit variable.", "expression and numeric value, or expression, Symbol/String variable, and numeric value", "Decimal" },
+    { "roots", "Finds roots of a supported expression in x.", "Symbol/numeric/NEKO expression", "List of Decimal or Complex roots" },
+    { "factorPoly", "Factors a polynomial in x over real roots currently found by the real factorer.", "Symbol/numeric/NEKO expression representing a polynomial in x", "NEKO expression" },
+    { "factorPolyReal", "Factors a polynomial in x over real roots.", "Symbol/numeric/NEKO expression representing a polynomial in x", "NEKO expression" },
+    { "factorPolyComplex", "Factors a polynomial in x over complex roots.", "Symbol/numeric/NEKO expression representing a polynomial in x", "Symbol containing a formatted complex factorization" },
+    { "funcArea", "Computes the signed area between a function and zero on an interval.", "NEKO expression, numeric lower bound, numeric upper bound", "Decimal" },
+    { "funcMax", "Finds a numeric maximum on the default interval [-100, 100].", "Symbol/numeric/NEKO expression", "List [x, value] of Decimals" },
+    { "funcMin", "Finds a numeric minimum on the default interval [-100, 100].", "Symbol/numeric/NEKO expression", "List [x, value] of Decimals" },
+    { "constraint", "Converts an expression into a NEKO constraint expression for optimize commands.", "Symbol/numeric/NEKO expression", "NEKO expression" },
+    { "minimize", "Minimizes an objective expression on [-100, 100], optionally with constraints.", "objective Symbol/numeric/NEKO expression, optionally one constraint expression or a List of constraint expressions", "List [x, value] of Decimals" },
+    { "maximize", "Maximizes an objective expression on [-100, 100], optionally with constraints.", "objective Symbol/numeric/NEKO expression, optionally one constraint expression or a List of constraint expressions", "List [x, value] of Decimals" },
+    { "solveODE", "Solves or evaluates a supported scalar ordinary differential equation.", "String equation such as \"y'=y\" with optional initial-condition parameters and optional target x", "NEKO expression, Symbol relation, or Decimal evaluation" },
+    { "solveODESystem", "Evaluates a supported constant-coefficient first-order ODE system.", "List of String equations like [\"x'=y\", \"y'=-x\"]", "List of Decimal values" },
+    { "iMatrix", "Constructs an identity matrix.", "positive Int dimension", "Matrix" },
+    { "zeroMatrix", "Constructs a square zero matrix.", "positive Int dimension", "Matrix" },
+    { "isSquare", "Tests whether a matrix is square.", "Matrix", "Bool" },
+    { "isSymmetric", "Tests whether a matrix equals its transpose.", "Matrix", "Bool" },
+    { "isAntisymmetric", "Tests whether a matrix equals the negative of its transpose.", "Matrix", "Bool" },
+    { "isUnitary", "Tests whether a square matrix is unitary.", "Matrix", "Bool" },
+    { "isOrthogonal", "Tests whether a square real matrix is orthogonal.", "Matrix", "Bool" },
+    { "rank", "Computes matrix rank.", "Matrix", "Int" },
+    { "nullity", "Computes matrix nullity.", "Matrix", "Int" },
+    { "trace", "Computes the trace of a square matrix.", "square Matrix", "Int, Decimal, Fraction, or Complex scalar" },
+    { "frobeniusNorm", "Computes the Frobenius norm of a matrix.", "Matrix", "Decimal" },
+    { "det", "Computes the determinant of a square matrix.", "square Matrix", "Int, Decimal, Fraction, or Complex scalar" },
+    { "copy", "Creates a deep copy of a matrix.", "Matrix", "Matrix" },
+    { "transpose", "Computes the transpose of a matrix.", "Matrix", "Matrix" },
+    { "adjoint", "Computes the conjugate transpose of a matrix.", "Matrix", "Matrix" },
+    { "inverse", "Computes the inverse of an invertible square matrix.", "invertible square Matrix", "Matrix" },
+    { "rref", "Computes the row-reduced echelon form of a matrix.", "Matrix", "Matrix" },
+    { "eigenvalues", "Computes eigenvalues of a supported square matrix.", "square Matrix", "List of numeric or Complex values" },
+    { "eigenvectors", "Computes eigenvectors of a supported square matrix.", "square Matrix", "List of Vector values or none entries" },
+    { "columnReduce", "Computes the column-reduced form of a matrix.", "Matrix", "Matrix" },
+    { "rowSpace", "Computes a basis for the row space of a matrix.", "Matrix", "List of Vector values" },
+    { "columnSpace", "Computes a basis for the column space of a matrix.", "Matrix", "List of Vector values" },
+    { "solveLinEq", "Solves A*x=b.", "square Matrix A and compatible column Vector or Matrix b", "Vector when the solution has one column, otherwise Matrix" },
+    { "l2Norm", "Computes vector Euclidean norm, or set cardinality for a CombSet.", "Vector or CombSet", "Decimal for Vector, Int for CombSet" },
+    { "normalize", "Normalizes a nonzero vector.", "Vector", "Vector" },
+    { "vdist", "Computes Euclidean distance between two vectors.", "two same-dimension Vectors, or one List containing two Vectors", "Decimal" },
+    { "vangle", "Computes the angle in radians between two nonzero vectors.", "two compatible nonzero Vectors, or one List containing two Vectors", "Decimal" },
+    { "vproj", "Projects one vector onto another.", "two compatible Vectors, or one List containing two Vectors", "Vector" },
+    { "cdot", "Computes the vector dot product.", "two same-dimension Vectors", "Int, Decimal, Fraction, or Complex scalar" },
+    { "charIP", "Computes an inner product for characters, representations, or vectors.", "two Characters, two Representations, or two same-dimension Vectors", "Int, Decimal, Fraction, or Complex scalar" },
+    { "times", "Computes a cross product or direct product.", "two 3D Vectors, two Groups, or two Rings", "Vector for Vectors, Group for Groups, Ring for Rings" },
+    { "otimes", "Computes the tensor product of two matrices.", "Matrix and Matrix", "Matrix" },
+    { "cap", "Computes the intersection of two finite integer sets.", "CombSet and CombSet", "CombSet" },
+    { "cup", "Computes the union of two finite integer sets.", "CombSet and CombSet", "CombSet" },
+    { "isSubset", "Tests whether the first finite integer set is a subset of the second.", "CombSet candidate subset and CombSet candidate superset", "Bool" },
+    { "diameter", "Computes max(A)-min(A) for a nonempty finite integer set.", "nonempty CombSet", "Int" },
+    { "dconst", "Computes the additive doubling constant |A+A|/|A|.", "nonempty CombSet", "Int or Fraction" },
+    { "density", "Computes set density inside its integer span.", "nonempty CombSet", "Int or Fraction" },
+    { "rangeSet", "Constructs a finite integer range as a CombSet.", "Int start, Int end, and optional nonzero Int step; when step is omitted it defaults to 1 or -1 based on endpoint order", "CombSet" },
+    { "AP", "Constructs an arithmetic progression as a finite integer set.", "Int first term, Int common difference, Int number of terms >= 0", "CombSet" },
+    { "GP", "Constructs a geometric progression as a finite integer set.", "Int first term, Int common ratio, Int number of terms >= 0", "CombSet" },
+    { "subsetSums", "Computes subset sums of a finite integer set.", "CombSet, optionally followed by Int subset size k >= 0", "CombSet" },
+    { "translate", "Translates every element of a finite integer set by an integer.", "CombSet and Int translation", "CombSet" },
+    { "dilate", "Multiplies every element of a finite integer set by an integer.", "CombSet and Int scale", "CombSet" },
+    { "append", "Adds an integer to a finite integer set.", "CombSet and Int element", "CombSet" },
+    { "remove", "Removes an integer from a finite integer set.", "CombSet and Int element already in the set", "CombSet" },
+    { "adsCard", "Counts the additive sumset A+A.", "CombSet", "Int" },
+    { "ddsCard", "Counts the difference set A-A.", "CombSet", "Int" },
+    { "mdsCard", "Counts the product set A*A.", "CombSet", "Int" },
+    { "isAP", "Tests whether a finite integer set is an arithmetic progression.", "CombSet", "Bool" },
+    { "isGP", "Tests whether a finite integer set is a geometric progression.", "CombSet", "Bool" },
+    { "ruzsaDistance", "Computes Ruzsa distance between two finite integer sets.", "CombSet and CombSet", "Decimal" },
+    { "ruzsaDistancePositive", "Computes positive Ruzsa distance between two finite integer sets.", "CombSet and CombSet", "Decimal" },
+    { "repAdd", "Counts ordered additive representations a+b=x.", "CombSet A and Int x", "Int" },
+    { "kRepAdd", "Counts ordered k-fold additive representations summing to x.", "CombSet A, Int k >= 1, and Int x", "Int" },
+    { "repDiff", "Counts ordered difference representations a-b=x.", "CombSet A and Int x", "Int" },
+    { "kRepDiff", "Counts ordered k-fold difference representations equal to x.", "CombSet A, Int k >= 1, and Int x", "Int" },
+    { "repMult", "Counts ordered multiplicative representations a*b=x.", "CombSet A and Int x", "Int" },
+    { "kRepMult", "Counts ordered k-fold multiplicative representations equal to x.", "CombSet A, Int k >= 1, and Int x", "Int" },
+    { "energyAdd", "Computes additive energy.", "CombSet", "Int" },
+    { "kEnergyAdd", "Computes k-fold additive energy.", "CombSet and Int k >= 1", "Int" },
+    { "energyDiff", "Computes difference energy.", "CombSet", "Int" },
+    { "kEnergyDiff", "Computes k-fold difference energy.", "CombSet and Int k >= 1", "Int" },
+    { "energyMult", "Computes multiplicative energy.", "CombSet", "Int" },
+    { "kEnergyMult", "Computes k-fold multiplicative energy.", "CombSet and Int k >= 1", "Int" },
+    { "force", "Constructs a force vector with a name and tail position.", "String name, Vector force, Vector tail position", "Force" },
+    { "body", "Constructs a physics body.", "numeric mass, Vector position, Vector velocity", "Body" },
+    { "bodySystem", "Constructs a shallow system of bodies for simulation commands.", "one or more Body values, or a List of Body values", "BodySystem" },
+    { "addForce", "Attaches a force to a body.", "Body and Force", "Body" },
+    { "removeForce", "Removes an attached force from a body.", "Body and Force already attached to that Body", "Body" },
+    { "displacement", "Computes final position minus initial position.", "two same-dimension position Vectors", "Vector" },
+    { "avgVelocity", "Computes average velocity from two positions and elapsed time.", "initial position Vector, final position Vector, numeric time > 0", "Vector" },
+    { "avgAccel", "Computes constant acceleration from two positions, initial velocity, and elapsed time.", "initial position Vector, final position Vector, initial velocity Vector, numeric time > 0", "Vector" },
+    { "velocityAtTime", "Computes velocity after constant acceleration for a time.", "initial velocity Vector, acceleration Vector, numeric time >= 0", "Vector" },
+    { "positionAtTime", "Computes position after constant velocity and acceleration for a time.", "initial position Vector, velocity Vector, acceleration Vector, numeric time >= 0", "Vector" },
+    { "speedAtPosition", "Computes a speed-related vector at a target position under constant acceleration.", "initial position Vector, velocity Vector, acceleration Vector, target position Vector", "Vector" },
+    { "velocityAtPosition", "Computes velocity at a reachable target position under constant acceleration.", "initial position Vector, velocity Vector, acceleration Vector, target position Vector", "Vector" },
+    { "projectileInfo", "Computes projectile range, peak height, and flight time.", "numeric initial speed, numeric launch angle in degrees, numeric initial height", "Symbol summary" },
+    { "centripetalAcceleration", "Computes v^2/r.", "numeric velocity >= 0 and numeric radius > 0", "Decimal" },
+    { "angularVelocity", "Computes v/r.", "numeric velocity >= 0 and numeric radius > 0", "Decimal" },
+    { "netForce", "Sums all forces attached to a body.", "Body", "Vector" },
+    { "accelerationFromForce", "Computes acceleration from a body's net force and mass.", "Body", "Vector" },
+    { "gravityForce", "Constructs the gravitational force acting on a body.", "Body", "Force" },
+    { "normalForce", "Constructs a normal force for a body and surface normal.", "Body and Vector surface normal", "Force" },
+    { "frictionForce", "Constructs a friction force from a normal force, coefficient, and direction.", "Force normal force, numeric mu >= 0, Vector direction", "Force" },
+    { "springForce", "Constructs a Hooke's-law spring force on a body.", "Body, Vector anchor position, numeric spring constant k >= 0, and optional numeric rest length >= 0", "Force" },
+    { "dragForce", "Constructs a linear drag force opposing a body's velocity.", "Body and numeric drag coefficient >= 0", "Force" },
+    { "gravitationalForce", "Constructs the Newtonian gravitational force on the first body due to the second.", "Body source and Body attractor with distinct positions", "Force" },
+    { "stepBody", "Advances one body by a time step using its currently attached forces.", "Body and numeric time step dt >= 0", "Body" },
+    { "step", "Advances a body system by one time step using each body's currently attached forces.", "BodySystem and numeric time step dt >= 0", "BodySystem" },
+    { "simulate", "Advances a body system for a fixed number of equal time steps.", "BodySystem, numeric time step dt >= 0, and Int steps >= 0", "BodySystem" },
+    { "momentum", "Computes momentum vector m*v.", "Body", "Vector" },
+    { "kineticEnergy", "Computes translational kinetic energy.", "Body", "Decimal" },
+    { "totalMomentum", "Computes total linear momentum of a body system.", "BodySystem", "Vector" },
+    { "totalEnergy", "Computes kinetic plus mgy energy for a body system in the default vertical field.", "BodySystem", "Decimal" },
+    { "gravPotentialEnergy", "Computes gravitational potential energy mgh.", "Body and numeric height", "Decimal" },
+    { "springPotentialEnergy", "Computes spring potential energy.", "numeric spring constant k >= 0 and numeric displacement x >= 0", "Decimal" },
+    { "work", "Computes work as force dot displacement.", "Force and compatible displacement Vector", "Decimal" },
+    { "power", "Computes power as force dot velocity.", "Force and compatible velocity Vector", "Decimal" },
+    { "impulse", "Computes impulse vector force*time.", "Force and numeric time >= 0", "Vector" },
+    { "centerOfMass", "Computes center of mass for bodies.", "one or more Body values, or a List of Body values", "Vector" },
+    { "centerOfMassVelocity", "Computes center-of-mass velocity for bodies.", "one or more Body values, or a List of Body values", "Vector" },
+    { "elasticCollision", "Applies a one-dimensional elastic collision update.", "two Body values, or one List containing two Body values", "List [Body, Body]" },
+    { "inelasticCollision", "Applies a one-dimensional inelastic collision update.", "two Body values, or one List containing two Body values", "List [Body, Body]" },
+    { "momentOfInertiaPoint", "Computes moment of inertia for a point mass.", "numeric mass >= 0 and numeric radius >= 0", "Decimal" },
+    { "momentOfInertiaRod", "Computes moment of inertia for a rod about its center.", "numeric mass >= 0 and numeric length >= 0", "Decimal" },
+    { "momentOfInertiaDisk", "Computes moment of inertia for a disk.", "numeric mass >= 0 and numeric radius >= 0", "Decimal" },
+    { "parallelAxis", "Applies the parallel-axis theorem.", "numeric I_cm >= 0, numeric mass >= 0, numeric displacement", "Decimal" },
+    { "torque", "Computes torque about a pivot.", "Force and compatible pivot Vector", "Vector" },
+    { "angularMomentum", "Computes angular momentum about a pivot.", "Body and compatible pivot Vector", "Vector" },
+    { "rotationalKineticEnergy", "Computes rotational kinetic energy.", "numeric moment of inertia I >= 0 and numeric angular velocity", "Decimal" },
+    { "angularAccelerationFromTorque", "Computes angular acceleration from torque and moment of inertia.", "numeric net torque and numeric moment of inertia I > 0", "Decimal" },
+    { "ZnGroup", "Constructs the cyclic group Z/nZ under addition.", "Int modulus n >= 1", "Group" },
+    { "ZnProductGroup", "Constructs a direct product of cyclic groups.", "Vector of integer moduli, each >= 1", "Group" },
+    { "Sn", "Constructs the symmetric group S_n.", "Int degree n >= 1", "Group" },
+    { "An", "Constructs the alternating group A_n.", "Int degree n >= 1", "Group" },
+    { "Dn", "Constructs the dihedral group D_n.", "Int degree n >= 1", "Group" },
+    { "ZnRing", "Constructs the ring Z/nZ.", "Int modulus n >= 1", "Ring" },
+    { "ZnProductRing", "Constructs a direct product of modular rings.", "Vector of integer moduli, each >= 1", "Ring" },
+    { "primeField", "Constructs the prime finite field F_p.", "prime Int p >= 2", "Ring" },
+    { "finiteField", "Constructs a finite field F_{p^k}.", "prime Int p >= 2 and Int k >= 0", "Ring" },
+    { "addGroup", "Constructs the additive group of a ring.", "Ring", "Group" },
+    { "unitGroup", "Constructs the multiplicative unit group of a ring.", "Ring with multiplicative identity", "Group" },
+    { "Q8", "Constructs the quaternion group Q8.", "no values", "Group" },
+    { "isPrime", "Tests whether an integer is prime.", "Int", "Bool" },
+    { "factorial", "Computes n factorial.", "Int n >= 0", "Int" },
+    { "listElements", "Lists the elements of a group or ring.", "Group or Ring", "List of GroupElement values for a Group, or RingElement values for a Ring" },
+    { "numElements", "Counts the elements of a group or ring.", "Group or Ring", "Int" },
+    { "getElement", "Retrieves an element by its printed representation.", "Group or Ring, then String representation", "GroupElement for Group input, RingElement for Ring input" },
+    { "groupElementConjugate", "Computes g*h*g^-1 for group elements.", "GroupElement conjugator and GroupElement target from the same Group", "GroupElement" },
+    { "groupCommutator", "Computes the commutator of two group elements.", "two GroupElement values from the same Group", "GroupElement" },
+    { "elementOrderGroup", "Computes the order of a group element.", "GroupElement", "Int" },
+    { "additiveOrder", "Computes the additive order of a ring element.", "RingElement", "Int" },
+    { "multiplicativeOrder", "Computes the multiplicative order of a ring element.", "RingElement", "Int" },
+    { "isInGroup", "Tests whether a group element belongs to a group.", "Group and GroupElement", "Bool" },
+    { "isGroupIdentity", "Tests whether a group element is the identity of a group.", "Group and GroupElement", "Bool" },
+    { "groupIdentity", "Returns the identity element of a group.", "Group", "GroupElement" },
+    { "isAddIdentity", "Tests whether a ring element is the additive identity of a ring.", "Ring and RingElement", "Bool" },
+    { "isMultIdentity", "Tests whether a ring element is the multiplicative identity of a ring.", "Ring and RingElement", "Bool" },
+    { "hasMultIdentity", "Tests whether a ring has a multiplicative identity.", "Ring", "Bool" },
+    { "elementsCommute", "Tests whether two group elements commute.", "two GroupElement values from the same Group", "Bool" },
+    { "isTrivialGroup", "Tests whether a group has exactly one element.", "Group", "Bool" },
+    { "isTrivialRing", "Tests whether a ring has exactly one element.", "Ring", "Bool" },
+    { "trivialGroup", "Constructs the one-element group.", "no values", "Group" },
+    { "trivialRing", "Constructs the one-element ring.", "no values", "Ring" },
+    { "groupInfo", "Formats information about a group.", "Group", "Symbol summary" },
+    { "ringInfo", "Formats information about a ring.", "Ring", "Symbol summary" },
+    { "groupElementInfo", "Formats information about a group element.", "GroupElement", "Symbol summary" },
+    { "ringElementInfo", "Formats information about a ring element.", "RingElement", "Symbol summary" },
+    { "isSubgroup", "Tests whether a subgroup is a subgroup of a group.", "Group and SubGroup", "Bool" },
+    { "isNormalSubgroup", "Tests whether a subgroup is normal in a group.", "Group and SubGroup", "Bool" },
+    { "trivialSubgroup", "Constructs the trivial subgroup object.", "no values", "SubGroup" },
+    { "isTrivialSubgroup", "Tests whether a subgroup is trivial.", "SubGroup", "Bool" },
+    { "groupCenter", "Computes the center of a group.", "Group", "SubGroup" },
+    { "groupCentralizer", "Computes the centralizer of an element in a group.", "Group and GroupElement from that Group", "SubGroup" },
+    { "groupNormalizer", "Computes the normalizer of a subgroup in its ambient group.", "SubGroup", "SubGroup" },
+    { "conjugacyClass", "Formats the conjugacy class of a group element.", "GroupElement", "Symbol summary" },
+    { "getConjClass", "Constructs the conjugacy class object for a group element.", "GroupElement", "ConjugacyClass" },
+    { "listConjClasses", "Lists conjugacy class objects for a group or for the group of an element.", "Group or GroupElement", "List of ConjugacyClass values" },
+    { "getConjClasses", "Lists conjugacy class objects for a group or for the group of an element.", "Group or GroupElement", "List of ConjugacyClass values" },
+    { "numConjClasses", "Counts conjugacy classes of a group or of the group of an element.", "Group or GroupElement", "Int" },
+    { "trivialRep", "Constructs the trivial representation.", "zero values for the trivial group, or one Group", "Representation" },
+    { "regularRep", "Constructs the regular representation of a group.", "Group", "Representation" },
+    { "permutationRep", "Constructs the permutation representation of a group.", "Group", "Representation" },
+    { "standardRep", "Constructs the standard representation of a group.", "Group", "Representation" },
+    { "signRep", "Constructs the sign representation of a symmetric group.", "Group that is a symmetric group", "Representation" },
+    { "projectToAbelianization", "Constructs the canonical projection from a group to its abelianization.", "Group", "GroupHomomorphism" },
+    { "dualRep", "Constructs the dual representation.", "Representation", "Representation" },
+    { "conjRep", "Constructs the complex-conjugate representation.", "Representation", "Representation" },
+    { "prodRep", "Constructs the external product representation.", "Representation and Representation", "Representation" },
+    { "tensorRep", "Constructs the tensor product of two representations of the same group.", "Representation and Representation", "Representation" },
+    { "symRep", "Constructs the symmetric square representation.", "Representation", "Representation" },
+    { "wedgeRep", "Constructs the exterior square representation.", "Representation", "Representation" },
+    { "resRep", "Restricts a representation to a subgroup.", "Representation and SubGroup", "Representation" },
+    { "indRep", "Induces a representation from a subgroup.", "Representation and SubGroup", "Representation" },
+    { "getChar", "Computes and remembers the character of a representation.", "Representation", "Symbol summary; the Character is stored for later evalChar" },
+    { "evalChar", "Evaluates a character at a group element.", "GroupElement after getChar, or Representation and GroupElement, or Character and GroupElement", "Int, Decimal, Fraction, or Complex scalar" },
+    { "repDegree", "Returns the degree of a representation.", "Representation", "Int" },
+    { "charDegree", "Returns the degree of a character, or of the character of a representation.", "Character or Representation", "Int, Decimal, or Complex scalar" },
+    { "isIrrep", "Tests whether a representation is irreducible.", "Representation", "Bool" },
+    { "listIrreps", "Lists labels for irreducible characters of a group.", "Group", "List of String labels" },
+    { "numIrreps", "Counts irreducible characters of a group.", "Group", "Int" },
+    { "getIrrep", "Retrieves an irreducible character by one-based index.", "Group and Int index >= 1", "Character" },
+    { "decomposeRep", "Decomposes a representation into irreducible multiplicities.", "Representation", "List of Int multiplicities" },
+    { "charTable", "Constructs the character table of a group.", "Group", "CharacterTable" },
+    { "printCharTable", "Prints a character table to stdout.", "CharacterTable", "None" },
+    { "printTable", "Alias for printCharTable.", "CharacterTable", "None" },
+    { "printRep", "Prints all representation matrices to stdout.", "Representation", "None" },
+    { "normalClosure", "Computes the normal closure of a subgroup.", "SubGroup", "SubGroup" },
+    { "isInSubgroup", "Tests whether a group element is in a subgroup.", "SubGroup and GroupElement", "Bool" },
+    { "subgroupContains", "Tests whether the first subgroup contains the second.", "SubGroup container and SubGroup candidate", "Bool" },
+    { "subgroupIndex", "Computes the index of a subgroup in its ambient group.", "SubGroup", "Int" },
+    { "subgroupConjugate", "Conjugates a subgroup by a group element.", "GroupElement and SubGroup from the same ambient Group", "SubGroup" },
+    { "commutatorSubgroup", "Computes the commutator subgroup.", "Group", "SubGroup" },
+    { "abelianization", "Computes the abelianization of a group.", "Group", "Group" },
+    { "listNormalSubgroups", "Lists normal subgroups of a group.", "Group", "Symbol summary" },
+    { "listMaximalSubgroups", "Lists maximal subgroups of a group.", "Group", "Symbol summary" },
+    { "numNormalSubgroups", "Counts normal subgroups of a group.", "Group", "Int" },
+    { "numMaximalSubgroups", "Counts maximal subgroups of a group.", "Group", "Int" },
+    { "largestCoreFreeSubgroup", "Finds a largest core-free subgroup.", "Group", "SubGroup" },
+    { "isCyclicGroup", "Tests whether a group is cyclic.", "Group", "Bool" },
+    { "isCyclicSubgroup", "Tests whether a subgroup is cyclic.", "SubGroup", "Bool" },
+    { "generatesCyclicGroup", "Tests whether an element generates a cyclic group.", "Group and GroupElement", "Bool" },
+    { "generatesCyclicSubgroup", "Tests whether an element generates a cyclic subgroup.", "SubGroup and GroupElement", "Bool" },
+    { "getCyclicSubgroup", "Constructs the cyclic subgroup generated by an element.", "GroupElement", "SubGroup" },
+    { "isInCoset", "Tests whether a group element lies in a group coset.", "GroupCoset and GroupElement", "Bool" },
+    { "leftCoset", "Constructs a left coset of a subgroup.", "SubGroup and GroupElement from its ambient Group", "GroupCoset" },
+    { "rightCoset", "Constructs a right coset of a subgroup.", "SubGroup and GroupElement from its ambient Group", "GroupCoset" },
+    { "listLeftCosets", "Lists all left cosets of a subgroup in its ambient group.", "SubGroup", "List of GroupCoset values" },
+    { "listRightCosets", "Lists all right cosets of a subgroup in its ambient group.", "SubGroup", "List of GroupCoset values" },
+    { "numLeftCosets", "Returns the number of left cosets of a subgroup in its ambient group.", "SubGroup", "Int" },
+    { "numRightCosets", "Returns the number of right cosets of a subgroup in its ambient group.", "SubGroup", "Int" },
+    { "kProductGroup", "Constructs the k-fold direct product of a group.", "Group and positive Int k", "Group" },
+    { "kProductRing", "Constructs the k-fold direct product of a ring.", "Ring and positive Int k", "Ring" },
+    { "subring", "Constructs the subring generated by ring elements.", "RingElement or List of RingElement values from the same Ring", "SubRing" },
+    { "leftIdeal", "Constructs the left ideal generated by ring elements.", "RingElement or List of RingElement values from the same Ring", "Ideal" },
+    { "rightIdeal", "Constructs the right ideal generated by ring elements.", "RingElement or List of RingElement values from the same Ring", "Ideal" },
+    { "isTrivialSubring", "Tests whether a subring is trivial.", "SubRing", "Bool" },
+    { "subgroupGeneratedBy", "Constructs the subgroup generated by one or more group elements.", "Group and GroupElement or List of GroupElement values from that Group", "SubGroup" },
+    { "subgroupAsGroup", "Converts a subgroup into a standalone group.", "SubGroup", "Group" },
+    { "groupHomomorphism", "Constructs a group homomorphism from a complete mapping.", "domain Group, codomain Group, and List of pairs mapping every domain GroupElement to a codomain GroupElement", "GroupHomomorphism" },
+    { "ringHomomorphism", "Constructs a ring homomorphism from a complete mapping.", "domain Ring, codomain Ring, and List of pairs mapping every domain RingElement to a codomain RingElement", "RingHomomorphism" },
+    { "groupHomomorphismKernel", "Computes the kernel of a group homomorphism.", "GroupHomomorphism", "SubGroup" },
+    { "ringHomomorphismKernel", "Computes the kernel of a ring homomorphism.", "RingHomomorphism", "Ideal" },
+    { "groupHomomorphismImage", "Computes the image of a group homomorphism.", "GroupHomomorphism", "Group" },
+    { "ringHomomorphismImage", "Computes the image of a ring homomorphism.", "RingHomomorphism", "Ring" },
+    { "isGroupIsomorphism", "Tests whether a group homomorphism is an isomorphism.", "GroupHomomorphism", "Bool" },
+    { "isRingIsomorphism", "Tests whether a ring homomorphism is an isomorphism.", "RingHomomorphism", "Bool" },
+    { "isCommutativeGroup", "Tests whether a group is commutative.", "Group", "Bool" },
+    { "isCommutativeRing", "Tests whether a ring is commutative.", "Ring", "Bool" },
+    { "isSimple", "Tests whether a group is simple.", "Group", "Bool" },
+    { "isInverse", "Tests whether two group elements are inverses.", "two GroupElement values from the same Group", "Bool" },
+    { "isAddInverse", "Tests whether two ring elements are additive inverses.", "two RingElement values from the same Ring", "Bool" },
+    { "isMultInverse", "Tests whether two ring elements are multiplicative inverses.", "two RingElement values from the same Ring", "Bool" },
+    { "hasMultInverse", "Tests whether a ring element has a multiplicative inverse in its ring.", "RingElement", "Bool" },
+    { "isZeroDivisor", "Tests whether a ring element is a zero divisor in its ring.", "RingElement", "Bool" },
+    { "hasZeroDivisors", "Tests whether a ring has any zero divisors.", "Ring", "Bool" },
+    { "isIntegralDomain", "Tests whether a ring is an integral domain.", "Ring", "Bool" },
+    { "isDivisionRing", "Tests whether a ring is a division ring.", "Ring", "Bool" },
+    { "isField", "Tests whether a ring is a field.", "Ring", "Bool" },
+    { "listSubgroups", "Formats a list of all subgroups of a group.", "Group", "Symbol summary" },
+    { "numSubgroups", "Counts all subgroups of a group.", "Group", "Int" },
+    { "getSubgroup", "Retrieves a subgroup by one-based index from the subgroup list.", "Group and Int index >= 1", "SubGroup" },
+    { "subgroupInfo", "Formats information about a subgroup and its ambient group.", "SubGroup", "Symbol summary" },
+    { "subringInfo", "Formats information about a subring and its ambient ring.", "SubRing", "Symbol summary" },
+    { "idealInfo", "Formats information about an ideal and its ambient ring.", "Ideal", "Symbol summary" },
+    { "groupHomomorphismInfo", "Formats information about a group homomorphism.", "GroupHomomorphism", "Symbol summary" },
+    { "ringHomomorphismInfo", "Formats information about a ring homomorphism.", "RingHomomorphism", "Symbol summary" },
+    { NULL, NULL, NULL, NULL }
+};
+
+static const BuiltinDoc* lookupBuiltinHelp(const char* name) {
+    if (!name) return NULL;
+    for (const BuiltinDoc* d = BUILTIN_DOCS; d->name; d++)
+        if (strcmp(d->name, name) == 0) return d;
+    return NULL;
+}
+
+static const char* lookupBuiltinDoc(const char* name) {
+    const BuiltinDoc* doc = lookupBuiltinHelp(name);
+    return doc ? doc->purpose : NULL;
+}
+
 // Register (or replace) a command by name
 void registerCommand(const char* name, int arity, CommandFn fn) {
     for (CommandEntry* c = g_commands; c; c = c->next) {
         if (strcmp(c->name, name) == 0) {
             c->arity = arity;
+            c->doc   = lookupBuiltinDoc(name);
             c->fn    = fn;
             return;
         }
@@ -95,6 +418,7 @@ void registerCommand(const char* name, int arity, CommandFn fn) {
     CommandEntry* e = calloc(1, sizeof(CommandEntry));
     e->name  = dupstr(name);            // registry owns the name buffer
     e->arity = arity;
+    e->doc   = lookupBuiltinDoc(name);
     e->fn    = fn;
     e->next  = g_commands;
     g_commands = e;
@@ -109,6 +433,118 @@ const CommandEntry* lookupCommand(const char* name) {
 
 const CommandEntry* commandRegistry(void) {
     return g_commands;
+}
+
+static const char* commandPurposeHint(const char* name) {
+    const BuiltinDoc* doc = lookupBuiltinHelp(name);
+    return doc ? doc->purpose : "No help entry is registered for this command.";
+}
+
+static const char* commandValueHint(const char* name) {
+    const BuiltinDoc* doc = lookupBuiltinHelp(name);
+    return doc ? doc->values : "No value help is registered for this command.";
+}
+
+static const char* commandReturnHint(const char* name) {
+    const BuiltinDoc* doc = lookupBuiltinHelp(name);
+    return doc ? doc->returns : "No return help is registered for this command.";
+}
+
+static void appendUsage(char* buf, size_t bufSize, const char* name, int arity) {
+    size_t used = strlen(buf);
+    used += snprintf(buf + used, bufSize - used, "\\%s", name);
+    if (arity < 0) {
+        snprintf(buf + used, bufSize - used, "{value...}");
+        return;
+    }
+    for (int i = 0; i < arity && used < bufSize; i++)
+        used += snprintf(buf + used, bufSize - used, "{value%d}", i + 1);
+}
+
+static Value bi_help(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    if (n == 0) {
+        char buf[4096] = "Commands:";
+        for (const CommandEntry* e = commandRegistry(); e; e = e->next) {
+            if (strcmp(e->name, "numIrrpes") == 0) continue;
+            size_t used = strlen(buf);
+            if (used + strlen(e->name) + 4 >= sizeof(buf)) {
+                snprintf(buf + used, sizeof(buf) - used, " ...");
+                break;
+            }
+            snprintf(buf + used, sizeof(buf) - used, " \\%s", e->name);
+        }
+        return valString(buf);
+    }
+    if (n != 1) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\help expects zero or one command name");
+    }
+
+    const char* raw = NULL;
+    if (a[0].kind == VAL_SYMBOL || a[0].kind == VAL_STRING) raw = a[0].as.str;
+    if (!raw || !*raw) {
+        valFree(a[0]);
+        return valError("\\help expects a command name, e.g. \\help{sin}");
+    }
+    while (*raw == '\\') raw++;
+    if (strcmp(raw, "numIrrpes") == 0) {
+        valFree(a[0]);
+        return valError("unknown command for help: \\numIrrpes");
+    }
+
+    const CommandEntry* entry = lookupCommand(raw);
+    if (!entry) {
+        char err[160];
+        snprintf(err, sizeof(err), "unknown command for help: \\%s", raw);
+        valFree(a[0]);
+        return valError(err);
+    }
+
+    char buf[2048] = {0};
+    snprintf(buf, sizeof(buf), "Command: ");
+    appendUsage(buf, sizeof(buf), entry->name, entry->arity);
+    size_t used = strlen(buf);
+    snprintf(buf + used, sizeof(buf) - used,
+             "\nPurpose: %s\nValues: %s\nReturns: %s\nArity: %s",
+             commandPurposeHint(entry->name),
+             commandValueHint(entry->name),
+             commandReturnHint(entry->name),
+             entry->arity < 0 ? "variadic" : "");
+    if (entry->arity >= 0) {
+        used = strlen(buf);
+        snprintf(buf + used, sizeof(buf) - used, "%d", entry->arity);
+    }
+    valFree(a[0]);
+    return valString(buf);
+}
+
+static Value bi_run(EvalContext* ctx, Value* args, size_t nargs) {
+    if (nargs != 1) {
+        for (size_t i = 0; i < nargs; i++) valFree(args[i]);
+        return valError("\\run expects one filename");
+    }
+
+    if (args[0].kind != VAL_STRING && args[0].kind != VAL_SYMBOL) {
+        valFree(args[0]);
+        return valError("\\run expects a filename as a String or Symbol");
+    }
+
+    const char* filename = args[0].as.str;
+    ScriptRunOptions options = {0, 0, 1};
+    ScriptRunResult result = {0, 0, 0};
+    char error[512] = {0};
+    int ok = bstRunScriptFile(ctx, filename, &options, &result, error, sizeof(error));
+    valFree(args[0]);
+    if (!ok) return valError(error[0] ? error : "failed to run script");
+
+    char summary[256];
+    snprintf(summary, sizeof(summary),
+             "Ran %zu line%s from script (%zu evaluated, %zu error%s).",
+             result.linesRead, result.linesRead == 1 ? "" : "s",
+             result.linesEvaluated,
+             result.errors, result.errors == 1 ? "" : "s");
+    return valString(summary);
 }
 
 /* ---------- Eval context ---------- */
@@ -138,6 +574,22 @@ static Value dispatch(EvalContext* ctx, const char* name, Value* args, size_t na
         char buf[128];
         snprintf(buf, sizeof(buf), "unknown command: \\%s", name);
         return valError(buf);
+    }
+    if (e->arity > 1 && nargs == 1 && args[0].kind == VAL_LIST && (int)args[0].as.list.n == e->arity) {
+        size_t tupleCount = args[0].as.list.n;
+        Value* unpacked = calloc(tupleCount, sizeof(Value));
+        if (!unpacked) {
+            valFree(args[0]);
+            free(args);
+            return valError("failed to unpack command tuple arguments");
+        }
+        for (size_t i = 0; i < tupleCount; i++) {
+            unpacked[i] = valClone(args[0].as.list.items[i]);
+        }
+        valFree(args[0]);
+        free(args);
+        args = unpacked;
+        nargs = tupleCount;
     }
     if (e->arity >= 0 && (int)nargs != e->arity) {
         for (size_t i = 0; i < nargs; i++) valFree(args[i]);
@@ -201,6 +653,10 @@ static int valueIsVector(Value v) {
 
 static int valueIsBody(Value v) {
     return v.kind == VAL_BODY;
+}
+
+static int valueIsBodySystem(Value v) {
+    return v.kind == VAL_BODY_SYSTEM;
 }
 
 static int valueIsForce(Value v) {
@@ -648,6 +1104,77 @@ static void appendInlineSubgroupSummary(char* buf, size_t bufSize, SubGroup* sub
     if (used < bufSize) snprintf(buf + used, bufSize - used, ">");
 }
 
+static void appendInlineSubringSummary(char* buf, size_t bufSize, SubRing* subring) {
+    size_t used = strlen(buf);
+    if (used >= bufSize) return;
+    if (!subring || !subring->ambient) {
+        snprintf(buf + used, bufSize - used, "<subring null>");
+        return;
+    }
+    used += snprintf(buf + used, bufSize - used, "<subring card=%d; elements=[", subring->card);
+    int limit = subring->card < 8 ? subring->card : 8;
+    for (int i = 0; i < limit && used < bufSize; i++) {
+        RingElement* element = subring->ambient->elements[subring->indices[i]];
+        used += snprintf(buf + used, bufSize - used, "%s%s",
+                         i ? ", " : "",
+                         (element && element->repr) ? element->repr : "?");
+    }
+    if (subring->card > limit && used < bufSize) used += snprintf(buf + used, bufSize - used, ", ...");
+    if (used < bufSize) snprintf(buf + used, bufSize - used, "]>");
+}
+
+static void appendInlineIdealSummary(char* buf, size_t bufSize, Ideal* ideal) {
+    size_t used = strlen(buf);
+    if (used >= bufSize) return;
+    if (!ideal || !ideal->ring) {
+        snprintf(buf + used, bufSize - used, "<ideal null>");
+        return;
+    }
+    used += snprintf(buf + used, bufSize - used, "<%sIdeal card=%d; elements=[",
+                     ideal->isLeft ? "left" : "right", ideal->card);
+    int limit = ideal->card < 8 ? ideal->card : 8;
+    for (int i = 0; i < limit && used < bufSize; i++) {
+        RingElement* element = ideal->ring->elements[ideal->indices[i]];
+        used += snprintf(buf + used, bufSize - used, "%s%s",
+                         i ? ", " : "",
+                         (element && element->repr) ? element->repr : "?");
+    }
+    if (ideal->card > limit && used < bufSize) used += snprintf(buf + used, bufSize - used, ", ...");
+    if (used < bufSize) snprintf(buf + used, bufSize - used, "]>");
+}
+
+static void appendInlineGroupHomomorphismSummary(char* buf, size_t bufSize, GroupHomomorphism* hom) {
+    size_t used = strlen(buf);
+    if (used >= bufSize) return;
+    if (!hom) {
+        snprintf(buf + used, bufSize - used, "<groupHomomorphism null>");
+        return;
+    }
+    used += snprintf(buf + used, bufSize - used, "<groupHomomorphism domain=");
+    appendInlineGroupSummary(buf, bufSize, hom->domain);
+    used = strlen(buf);
+    if (used < bufSize) snprintf(buf + used, bufSize - used, "; codomain=");
+    appendInlineGroupSummary(buf, bufSize, hom->codomain);
+    used = strlen(buf);
+    if (used < bufSize) snprintf(buf + used, bufSize - used, ">");
+}
+
+static void appendInlineRingHomomorphismSummary(char* buf, size_t bufSize, RingHomomorphism* hom) {
+    size_t used = strlen(buf);
+    if (used >= bufSize) return;
+    if (!hom) {
+        snprintf(buf + used, bufSize - used, "<ringHomomorphism null>");
+        return;
+    }
+    used += snprintf(buf + used, bufSize - used, "<ringHomomorphism domain=");
+    appendInlineRingSummary(buf, bufSize, hom->domain);
+    used = strlen(buf);
+    if (used < bufSize) snprintf(buf + used, bufSize - used, "; codomain=");
+    appendInlineRingSummary(buf, bufSize, hom->codomain);
+    used = strlen(buf);
+    if (used < bufSize) snprintf(buf + used, bufSize - used, ">");
+}
+
 static Value groupCosetArrayToList(GroupCoset** cosets, int count) {
     Value* items = calloc((size_t)count, sizeof(Value));
     if (!items) {
@@ -741,6 +1268,20 @@ static Vector* vectorFromRealArray(double* data, int dim) {
         setEntry(vector, i, 0, elemFromReal(data[i]));
     }
     return vector;
+}
+
+static int cloneTupleArgs(Value tuple, Value** outArgs, size_t* outCount) {
+    if (tuple.kind != VAL_LIST || !outArgs || !outCount) return 0;
+
+    Value* args = calloc(tuple.as.list.n, sizeof(Value));
+    if (!args && tuple.as.list.n != 0) return 0;
+    for (size_t i = 0; i < tuple.as.list.n; i++) {
+        args[i] = valClone(tuple.as.list.items[i]);
+    }
+
+    *outArgs = args;
+    *outCount = tuple.as.list.n;
+    return 1;
 }
 
 static int unpackBodyList(Value* args, size_t nargs, Body*** outBodies, size_t* outCount) {
@@ -1759,10 +2300,16 @@ static Value bi_sqrt(EvalContext* c, Value* a, size_t n) {
     Value x = a[0];
     Value r;
 
+    if (x.kind == VAL_COMPLEX) {
+        r = valueFromComplexNumber(complexSqrt(x.as.cplx));
+        valFree(x);
+        return r;
+    }
+
     if (x.kind == VAL_INT) {
         long long root;
-        if (intSqrtExact(x.as.i, &root)) r = valInt(root);
-        else                             r = valDecimal(sqrt((double)x.as.i));
+        if (x.as.i >= 0 && intSqrtExact(x.as.i, &root)) r = valInt(root);
+        else r = valueFromComplexNumber(complexSqrt(valueToComplex(x)));
         valFree(x);
         return r;
     }
@@ -1776,14 +2323,14 @@ static Value bi_sqrt(EvalContext* c, Value* a, size_t n) {
         if (intSqrtExact(x.as.frac.num, &numRoot) && intSqrtExact(x.as.frac.denom, &denRoot)) {
             r = valFraction(constructFraction(numRoot, denRoot));
         } else {
-            r = valDecimal(sqrt(valToDouble(x)));
+            r = valueFromComplexNumber(complexSqrt(valueToComplex(x)));
         }
         valFree(x);
         return r;
     }
 
     if (x.kind == VAL_DECIMAL) {
-        r = valDecimal(sqrt(x.as.d));
+        r = valueFromComplexNumber(complexSqrt(valueToComplex(x)));
         valFree(x);
         return r;
     }
@@ -1793,9 +2340,103 @@ static Value bi_sqrt(EvalContext* c, Value* a, size_t n) {
         return nekoUnaryResult(x, nekoSqrt, &handled);
     }
 
-    r = valError("\\sqrt expects one numeric argument");
+    r = valError("\\sqrt expects one numeric or symbolic argument");
     valFree(x);
     return r;
+}
+
+static Value bi_cbrt_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (!valueIsComplexNumeric(a[0])) {
+        valFree(a[0]);
+        return valError("\\cbrt expects one numeric or complex argument");
+    }
+    ComplexNumber out = complexCbrt(valueToComplex(a[0]));
+    valFree(a[0]);
+    return valueFromComplexNumber(out);
+}
+
+static Value bi_conj_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (!valueIsComplexNumeric(a[0])) {
+        valFree(a[0]);
+        return valError("\\conj expects one numeric or complex argument");
+    }
+    ComplexNumber out = complexConj(valueToComplex(a[0]));
+    valFree(a[0]);
+    return valueFromComplexNumber(out);
+}
+
+static Value bi_abs_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    Value x = a[0];
+    if (x.kind == VAL_INT) {
+        long long value = x.as.i < 0 ? -x.as.i : x.as.i;
+        valFree(x);
+        return valInt(value);
+    }
+    if (x.kind == VAL_FRACTION) {
+        Fraction frac = x.as.frac;
+        if (frac.num < 0) frac.num = -frac.num;
+        valFree(x);
+        return valFraction(frac);
+    }
+    if (x.kind == VAL_DECIMAL) {
+        double value = fabs(x.as.d);
+        valFree(x);
+        return valDecimal(value);
+    }
+    if (x.kind == VAL_COMPLEX) {
+        double value = complexAbs(x.as.cplx);
+        valFree(x);
+        return valDecimal(value);
+    }
+    if (valueIsNekoLike(x)) {
+        int handled = 0;
+        return nekoUnaryResult(x, nekoAbs, &handled);
+    }
+    valFree(x);
+    return valError("\\abs expects a numeric, complex, or symbolic argument");
+}
+
+static Value bi_arg_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (!valueIsComplexNumeric(a[0])) {
+        valFree(a[0]);
+        return valError("\\arg expects one numeric or complex argument");
+    }
+    double value = complexArg(valueToComplex(a[0]));
+    valFree(a[0]);
+    return valDecimal(value);
+}
+
+static Value bi_re_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    Value x = a[0];
+    if (x.kind == VAL_COMPLEX) {
+        double real = x.as.cplx.real;
+        valFree(x);
+        return valDecimal(real);
+    }
+    if (valueIsComplexNumeric(x)) return x;
+    valFree(x);
+    return valError("\\re expects one numeric or complex argument");
+}
+
+static Value bi_im_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    Value x = a[0];
+    if (x.kind == VAL_COMPLEX) {
+        double imag = x.as.cplx.imag;
+        valFree(x);
+        return valDecimal(imag);
+    }
+    if (valueIsComplexNumeric(x)) {
+        valFree(x);
+        return valInt(0);
+    }
+    valFree(x);
+    return valError("\\im expects one numeric or complex argument");
 }
 
 static const char* skipSpaces(const char* s) {
@@ -1967,6 +2608,153 @@ static int exprDependsOnVar(const NekoExpr* expr, const char* var) {
             return 0;
     }
     return 0;
+}
+
+typedef struct {
+    char** items;
+    int count;
+    int cap;
+} CalcVarList;
+
+typedef struct {
+    const NekoExpr* expr;
+    const char* var;
+} NekoEvalVarData;
+
+static void calcVarListFree(CalcVarList* vars) {
+    if (!vars) return;
+    for (int i = 0; i < vars->count; i++) free(vars->items[i]);
+    free(vars->items);
+    vars->items = NULL;
+    vars->count = 0;
+    vars->cap = 0;
+}
+
+static int calcVarListPushUnique(CalcVarList* vars, const char* name) {
+    if (!vars || !name || !*name) return 0;
+    for (int i = 0; i < vars->count; i++) {
+        if (strcmp(vars->items[i], name) == 0) return 1;
+    }
+    if (vars->count == vars->cap) {
+        int nextCap = vars->cap ? vars->cap * 2 : 4;
+        char** nextItems = realloc(vars->items, (size_t)nextCap * sizeof(char*));
+        if (!nextItems) return 0;
+        vars->items = nextItems;
+        vars->cap = nextCap;
+    }
+    vars->items[vars->count] = dupstr(name);
+    if (!vars->items[vars->count]) return 0;
+    vars->count++;
+    return 1;
+}
+
+static int collectCalcVariables(const NekoExpr* expr, CalcVarList* vars) {
+    if (!expr || !vars) return 0;
+
+    switch (expr->kind) {
+        case NEKO_EXPR_CONST:
+            return 1;
+        case NEKO_EXPR_VAR:
+            return calcVarListPushUnique(vars, expr->as.var);
+        case NEKO_EXPR_ADD:
+        case NEKO_EXPR_SUB:
+        case NEKO_EXPR_MUL:
+        case NEKO_EXPR_DIV:
+        case NEKO_EXPR_POW:
+            return collectCalcVariables(expr->as.binary.lhs, vars)
+                && collectCalcVariables(expr->as.binary.rhs, vars);
+        case NEKO_EXPR_NEG:
+        case NEKO_EXPR_SIN:
+        case NEKO_EXPR_COS:
+        case NEKO_EXPR_TAN:
+        case NEKO_EXPR_ASIN:
+        case NEKO_EXPR_ACOS:
+        case NEKO_EXPR_ATAN:
+        case NEKO_EXPR_EXP:
+        case NEKO_EXPR_LOG:
+        case NEKO_EXPR_SQRT:
+        case NEKO_EXPR_ABS:
+            return collectCalcVariables(expr->as.unary.arg, vars);
+        case NEKO_EXPR_CALL:
+            for (int i = 0; i < expr->as.call.nargs; i++) {
+                if (!collectCalcVariables(expr->as.call.args[i], vars)) return 0;
+            }
+            return 1;
+    }
+    return 0;
+}
+
+static int calcVarRank(const char* name) {
+    static const char* order[] = { "x", "y", "z", "w", "t", "u", "v" };
+    for (int i = 0; i < (int)(sizeof(order) / sizeof(order[0])); i++) {
+        if (strcmp(name, order[i]) == 0) return i;
+    }
+    return 100;
+}
+
+static int compareCalcVarNames(const void* lhs, const void* rhs) {
+    const char* a = *(const char* const*)lhs;
+    const char* b = *(const char* const*)rhs;
+    int ra = calcVarRank(a);
+    int rb = calcVarRank(b);
+    if (ra != rb) return ra - rb;
+    return strcmp(a, b);
+}
+
+static void sortCalcVarList(CalcVarList* vars) {
+    if (!vars || vars->count < 2) return;
+    qsort(vars->items, (size_t)vars->count, sizeof(char*), compareCalcVarNames);
+}
+
+static int valueToCalcVarName(Value v, const char** out) {
+    if ((v.kind == VAL_SYMBOL || v.kind == VAL_STRING) && v.as.str && *v.as.str) {
+        if (out) *out = v.as.str;
+        return 1;
+    }
+    return 0;
+}
+
+static int extractCalcVariablesFromValue(Value v, CalcVarList* vars) {
+    const char* name = NULL;
+    if (valueToCalcVarName(v, &name)) return calcVarListPushUnique(vars, name);
+    if (v.kind != VAL_LIST) return 0;
+    if (v.as.list.n == 0) return 0;
+    for (size_t i = 0; i < v.as.list.n; i++) {
+        if (!valueToCalcVarName(v.as.list.items[i], &name)) return 0;
+        if (!calcVarListPushUnique(vars, name)) return 0;
+    }
+    return vars->count > 0;
+}
+
+static int defaultCalcVariables(const NekoExpr* expr, CalcVarList* vars) {
+    if (!collectCalcVariables(expr, vars)) return 0;
+    sortCalcVarList(vars);
+    if (vars->count == 0) return calcVarListPushUnique(vars, "x");
+    return 1;
+}
+
+static double evalNekoExprAtVar(double x, void* userdata) {
+    NekoEvalVarData* data = (NekoEvalVarData*)userdata;
+    if (!data || !data->expr || !data->var) return NAN;
+    return nekoEvalExpr(data->expr, data->var, x);
+}
+
+static Value parseCalcVariableArgs(const NekoExpr* expr, Value* a, size_t n,
+                                   size_t varsIndex, CalcVarList* vars,
+                                   const char* cmdName) {
+    if (!vars) return valError("internal error while parsing variables");
+    if (n > varsIndex) {
+        if (!extractCalcVariablesFromValue(a[varsIndex], vars)) {
+            char buf[160];
+            snprintf(buf, sizeof(buf), "\\%s expects a Symbol/String variable or a List of variables", cmdName);
+            return valError(buf);
+        }
+        return valNone();
+    }
+    if (!defaultCalcVariables(expr, vars)) {
+        return valError("out of memory while collecting variables");
+    }
+    return valNone();
 }
 
 static int nekoExprIsConstValue(const NekoExpr* expr, double value) {
@@ -2267,13 +3055,19 @@ static Value solveSeparableOdeValue(double lhsCoeff, NekoExpr* rhsExpr, const ch
 static Value bi_neko_unary(Value* a, size_t n,
                            NekoExpr* (*op)(NekoExpr*),
                            const char* name,
-                           double (*numeric)(double)) {
+                           double (*numeric)(double),
+                           ComplexNumber (*complexNumeric)(ComplexNumber)) {
     if (n == 0) return wrapNekoExpr(op(nekoVar("x")));
     if (n != 1) {
         for (size_t i = 0; i < n; i++) valFree(a[i]);
         char buf[96];
         snprintf(buf, sizeof(buf), "\\%s expects zero or one argument", name);
         return valError(buf);
+    }
+    if (complexNumeric && valueIsComplexNumeric(a[0])) {
+        ComplexNumber y = complexNumeric(valueToComplex(a[0]));
+        valFree(a[0]);
+        return valueFromComplexNumber(y);
     }
     if (valIsNumeric(a[0]) && numeric) {
         double y = numeric(valToDouble(a[0]));
@@ -2287,22 +3081,48 @@ static Value bi_neko_unary(Value* a, size_t n,
     return valError("NEKO function expects a symbolic or numeric argument");
 }
 
-static Value bi_neko_sin(EvalContext* c, Value* a, size_t n) { (void)c; return bi_neko_unary(a, n, nekoSin, "sin", sin); }
-static Value bi_neko_cos(EvalContext* c, Value* a, size_t n) { (void)c; return bi_neko_unary(a, n, nekoCos, "cos", cos); }
-static Value bi_neko_tan(EvalContext* c, Value* a, size_t n) { (void)c; return bi_neko_unary(a, n, nekoTan, "tan", tan); }
-static Value bi_neko_asin(EvalContext* c, Value* a, size_t n) { (void)c; return bi_neko_unary(a, n, nekoAsin, "asin", asin); }
-static Value bi_neko_acos(EvalContext* c, Value* a, size_t n) { (void)c; return bi_neko_unary(a, n, nekoAcos, "acos", acos); }
-static Value bi_neko_atan(EvalContext* c, Value* a, size_t n) { (void)c; return bi_neko_unary(a, n, nekoAtan, "atan", atan); }
-static Value bi_neko_exp(EvalContext* c, Value* a, size_t n) { (void)c; return bi_neko_unary(a, n, nekoExp, "exp", exp); }
-static Value bi_neko_log(EvalContext* c, Value* a, size_t n) { (void)c; return bi_neko_unary(a, n, nekoLog, "log", log); }
+static Value bi_neko_sin(EvalContext* c, Value* a, size_t n) { (void)c; return bi_neko_unary(a, n, nekoSin, "sin", sin, complexSin); }
+static Value bi_neko_cos(EvalContext* c, Value* a, size_t n) { (void)c; return bi_neko_unary(a, n, nekoCos, "cos", cos, complexCos); }
+static Value bi_neko_tan(EvalContext* c, Value* a, size_t n) { (void)c; return bi_neko_unary(a, n, nekoTan, "tan", tan, complexTan); }
+static Value bi_neko_asin(EvalContext* c, Value* a, size_t n) { (void)c; return bi_neko_unary(a, n, nekoAsin, "asin", asin, complexAsin); }
+static Value bi_neko_acos(EvalContext* c, Value* a, size_t n) { (void)c; return bi_neko_unary(a, n, nekoAcos, "acos", acos, complexAcos); }
+static Value bi_neko_atan(EvalContext* c, Value* a, size_t n) { (void)c; return bi_neko_unary(a, n, nekoAtan, "atan", atan, complexAtan); }
+static Value bi_neko_exp(EvalContext* c, Value* a, size_t n) { (void)c; return bi_neko_unary(a, n, nekoExp, "exp", exp, complexExp); }
+static Value bi_neko_log(EvalContext* c, Value* a, size_t n) { (void)c; return bi_neko_unary(a, n, nekoLog, "log", log, complexLog); }
 
 static Value bi_derivative(EvalContext* c, Value* a, size_t n) {
-    (void)c; (void)n;
+    (void)c;
+    if (n != 1 && n != 2) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\derivative expects an expression and optional variable");
+    }
+    const char* var = "x";
+    char* varCopy = NULL;
     NekoExpr* expr = valueToNekoExpr(a[0]);
+    if (n == 2 && !valueToCalcVarName(a[1], &var)) {
+        valFree(a[0]);
+        valFree(a[1]);
+        return valError("\\derivative expects the variable to be a Symbol or String");
+    }
+    if (n == 2) {
+        varCopy = dupstr(var);
+        if (!varCopy) {
+            valFree(a[0]);
+            valFree(a[1]);
+            nekoFreeExpr(expr);
+            return valError("out of memory while reading derivative variable");
+        }
+        var = varCopy;
+    }
     valFree(a[0]);
-    if (!expr) return valError("\\derivative expects a NEKO expression");
-    NekoDiffResult d = nekoDifferentiateExpr(expr, "x");
+    if (n == 2) valFree(a[1]);
+    if (!expr) {
+        free(varCopy);
+        return valError("\\derivative expects a NEKO expression");
+    }
+    NekoDiffResult d = nekoDifferentiateExpr(expr, var);
     nekoFreeExpr(expr);
+    free(varCopy);
     if (d.status != NEKO_OK) {
         nekoFreeExpr(d.expr);
         return valError("symbolic differentiation unsupported for this expression");
@@ -2310,11 +3130,246 @@ static Value bi_derivative(EvalContext* c, Value* a, size_t n) {
     return wrapNekoExpr(d.expr);
 }
 
+static Value bi_partialDerivative(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    if (n != 2) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\partialDerivative expects an expression and a variable");
+    }
+    const char* var = NULL;
+    char* varCopy = NULL;
+    NekoExpr* expr = valueToNekoExpr(a[0]);
+    if (!expr || !valueToCalcVarName(a[1], &var)) {
+        nekoFreeExpr(expr);
+        valFree(a[0]);
+        valFree(a[1]);
+        return valError("\\partialDerivative expects an expression and a Symbol or String variable");
+    }
+    varCopy = dupstr(var);
+    if (!varCopy) {
+        nekoFreeExpr(expr);
+        valFree(a[0]);
+        valFree(a[1]);
+        return valError("out of memory while reading partial derivative variable");
+    }
+    var = varCopy;
+    valFree(a[0]);
+    valFree(a[1]);
+    NekoDiffResult d = nekoDifferentiateExpr(expr, var);
+    nekoFreeExpr(expr);
+    free(varCopy);
+    if (d.status != NEKO_OK) {
+        nekoFreeExpr(d.expr);
+        return valError("symbolic differentiation unsupported for this expression");
+    }
+    return wrapNekoExpr(d.expr);
+}
+
+static Value bi_gradient(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    if (n != 1 && n != 2) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\gradient expects an expression and optional variables");
+    }
+
+    NekoExpr* expr = valueToNekoExpr(a[0]);
+    if (!expr) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\gradient expects a NEKO expression");
+    }
+
+    CalcVarList vars = {0};
+    Value parseResult = parseCalcVariableArgs(expr, a, n, 1, &vars, "gradient");
+    for (size_t i = 0; i < n; i++) valFree(a[i]);
+    if (parseResult.kind != VAL_NONE) {
+        nekoFreeExpr(expr);
+        calcVarListFree(&vars);
+        return parseResult;
+    }
+
+    Value* items = calloc((size_t)vars.count, sizeof(Value));
+    if (!items) {
+        nekoFreeExpr(expr);
+        calcVarListFree(&vars);
+        return valError("out of memory while building gradient");
+    }
+
+    for (int i = 0; i < vars.count; i++) {
+        NekoDiffResult d = nekoDifferentiateExpr(expr, vars.items[i]);
+        if (d.status != NEKO_OK || !d.expr) {
+            nekoFreeExpr(d.expr);
+            for (int j = 0; j < i; j++) valFree(items[j]);
+            free(items);
+            nekoFreeExpr(expr);
+            calcVarListFree(&vars);
+            return valError("gradient failed for one of the variables");
+        }
+        items[i] = wrapNekoExpr(d.expr);
+        if (items[i].kind == VAL_ERROR) {
+            for (int j = 0; j <= i; j++) valFree(items[j]);
+            free(items);
+            nekoFreeExpr(expr);
+            calcVarListFree(&vars);
+            return valError("gradient failed while simplifying a partial derivative");
+        }
+    }
+
+    size_t resultCount = (size_t)vars.count;
+    nekoFreeExpr(expr);
+    calcVarListFree(&vars);
+    return valList(items, resultCount);
+}
+
+static Value bi_hessian(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    if (n != 1 && n != 2) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\hessian expects an expression and optional variables");
+    }
+
+    NekoExpr* expr = valueToNekoExpr(a[0]);
+    if (!expr) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\hessian expects a NEKO expression");
+    }
+
+    CalcVarList vars = {0};
+    Value parseResult = parseCalcVariableArgs(expr, a, n, 1, &vars, "hessian");
+    for (size_t i = 0; i < n; i++) valFree(a[i]);
+    if (parseResult.kind != VAL_NONE) {
+        nekoFreeExpr(expr);
+        calcVarListFree(&vars);
+        return parseResult;
+    }
+
+    Value* rows = calloc((size_t)vars.count, sizeof(Value));
+    if (!rows) {
+        nekoFreeExpr(expr);
+        calcVarListFree(&vars);
+        return valError("out of memory while building hessian");
+    }
+
+    for (int i = 0; i < vars.count; i++) {
+        NekoDiffResult first = nekoDifferentiateExpr(expr, vars.items[i]);
+        if (first.status != NEKO_OK || !first.expr) {
+            nekoFreeExpr(first.expr);
+            for (int k = 0; k < i; k++) valFree(rows[k]);
+            free(rows);
+            nekoFreeExpr(expr);
+            calcVarListFree(&vars);
+            return valError("hessian failed for one of the variables");
+        }
+
+        Value* rowItems = calloc((size_t)vars.count, sizeof(Value));
+        if (!rowItems) {
+            nekoFreeExpr(first.expr);
+            for (int k = 0; k < i; k++) valFree(rows[k]);
+            free(rows);
+            nekoFreeExpr(expr);
+            calcVarListFree(&vars);
+            return valError("out of memory while building hessian row");
+        }
+
+        int rowOk = 1;
+        for (int j = 0; j < vars.count; j++) {
+            NekoDiffResult second = nekoDifferentiateExpr(first.expr, vars.items[j]);
+            if (second.status != NEKO_OK || !second.expr) {
+                nekoFreeExpr(second.expr);
+                rowOk = 0;
+                break;
+            }
+            rowItems[j] = wrapNekoExpr(second.expr);
+            if (rowItems[j].kind == VAL_ERROR) {
+                rowOk = 0;
+                break;
+            }
+        }
+        nekoFreeExpr(first.expr);
+
+        if (!rowOk) {
+            for (int j = 0; j < vars.count; j++) valFree(rowItems[j]);
+            free(rowItems);
+            for (int k = 0; k < i; k++) valFree(rows[k]);
+            free(rows);
+            nekoFreeExpr(expr);
+            calcVarListFree(&vars);
+            return valError("hessian failed while differentiating a second time");
+        }
+
+        rows[i] = valList(rowItems, (size_t)vars.count);
+    }
+
+    size_t rowCount = (size_t)vars.count;
+    nekoFreeExpr(expr);
+    calcVarListFree(&vars);
+    return valList(rows, rowCount);
+}
+
+static Value bi_laplacian(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    if (n != 1 && n != 2) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\laplacian expects an expression and optional variables");
+    }
+
+    NekoExpr* expr = valueToNekoExpr(a[0]);
+    if (!expr) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\laplacian expects a NEKO expression");
+    }
+
+    CalcVarList vars = {0};
+    Value parseResult = parseCalcVariableArgs(expr, a, n, 1, &vars, "laplacian");
+    for (size_t i = 0; i < n; i++) valFree(a[i]);
+    if (parseResult.kind != VAL_NONE) {
+        nekoFreeExpr(expr);
+        calcVarListFree(&vars);
+        return parseResult;
+    }
+
+    NekoExpr* sum = nekoConst(0.0);
+    if (!sum) {
+        nekoFreeExpr(expr);
+        calcVarListFree(&vars);
+        return valError("out of memory while building laplacian");
+    }
+
+    for (int i = 0; i < vars.count; i++) {
+        NekoDiffResult first = nekoDifferentiateExpr(expr, vars.items[i]);
+        if (first.status != NEKO_OK || !first.expr) {
+            nekoFreeExpr(first.expr);
+            nekoFreeExpr(sum);
+            nekoFreeExpr(expr);
+            calcVarListFree(&vars);
+            return valError("laplacian failed for one of the variables");
+        }
+        NekoDiffResult second = nekoDifferentiateExpr(first.expr, vars.items[i]);
+        nekoFreeExpr(first.expr);
+        if (second.status != NEKO_OK || !second.expr) {
+            nekoFreeExpr(second.expr);
+            nekoFreeExpr(sum);
+            nekoFreeExpr(expr);
+            calcVarListFree(&vars);
+            return valError("laplacian failed while differentiating a second time");
+        }
+        sum = nekoSimplify(nekoAdd(sum, second.expr));
+        if (!sum) {
+            nekoFreeExpr(expr);
+            calcVarListFree(&vars);
+            return valError("laplacian failed while simplifying");
+        }
+    }
+
+    nekoFreeExpr(expr);
+    calcVarListFree(&vars);
+    return wrapNekoExpr(sum);
+}
+
 static Value bi_int(EvalContext* c, Value* a, size_t n) {
     (void)c;
-    if (n != 1 && n != 3) {
+    if (n != 1 && n != 2 && n != 3 && n != 4) {
         for (size_t i = 0; i < n; i++) valFree(a[i]);
-        return valError("\\int expects an integrand, optionally with lower and upper bounds");
+        return valError("\\int expects an integrand, optional variable, and optional bounds");
     }
 
     NekoExpr* expr = valueToNekoExpr(a[0]);
@@ -2323,9 +3378,41 @@ static Value bi_int(EvalContext* c, Value* a, size_t n) {
         return valError("\\int expects a NEKO expression");
     }
 
-    if (n == 1) {
-        valFree(a[0]);
-        NekoIntegralResult r = nekoIntegrateExpr(expr, "x");
+    const char* var = "x";
+    int hasBounds = 0;
+    double lo = 0.0;
+    double hi = 0.0;
+
+    if (n == 2) {
+        if (!valueToCalcVarName(a[1], &var)) {
+            nekoFreeExpr(expr);
+            valFree(a[0]);
+            valFree(a[1]);
+            return valError("\\int expects a Symbol or String variable as its second argument");
+        }
+    } else if (n == 3) {
+        if (!valIsNumeric(a[1]) || !valIsNumeric(a[2])) {
+            nekoFreeExpr(expr);
+            for (size_t i = 0; i < n; i++) valFree(a[i]);
+            return valError("\\int with three arguments expects numeric lower and upper bounds");
+        }
+        hasBounds = 1;
+        lo = valToDouble(a[1]);
+        hi = valToDouble(a[2]);
+    } else if (n == 4) {
+        if (!valueToCalcVarName(a[1], &var) || !valIsNumeric(a[2]) || !valIsNumeric(a[3])) {
+            nekoFreeExpr(expr);
+            for (size_t i = 0; i < n; i++) valFree(a[i]);
+            return valError("\\int with four arguments expects a variable, lower bound, and upper bound");
+        }
+        hasBounds = 1;
+        lo = valToDouble(a[2]);
+        hi = valToDouble(a[3]);
+    }
+
+    if (!hasBounds) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        NekoIntegralResult r = nekoIntegrateExpr(expr, var);
         nekoFreeExpr(expr);
         if (r.status != NEKO_OK) {
             nekoFreeExpr(r.expr);
@@ -2334,45 +3421,51 @@ static Value bi_int(EvalContext* c, Value* a, size_t n) {
         return wrapNekoExpr(r.expr);
     }
 
-    if (!valIsNumeric(a[1]) || !valIsNumeric(a[2])) {
-        nekoFreeExpr(expr);
-        for (size_t i = 0; i < n; i++) valFree(a[i]);
-        return valError("\\int bounds must be numeric");
-    }
-    double lo = valToDouble(a[1]);
-    double hi = valToDouble(a[2]);
-    valFree(a[0]);
-    valFree(a[1]);
-    valFree(a[2]);
-    NekoFunc* func = nekoFuncFromExpr(expr);
+    for (size_t i = 0; i < n; i++) valFree(a[i]);
+    NekoEvalVarData data = { .expr = expr, .var = var };
+    NekoFunc func = { .callback = evalNekoExprAtVar, .userdata = &data };
+    NekoNumericResult r = nekoIntegrateNumeric(&func, lo, hi, NEKO_INTEGRATE_SIMPSON, 1000, 1e-9);
     nekoFreeExpr(expr);
-    if (!func) return valError("could not build numerical integrand");
-    NekoNumericResult r = nekoIntegrateNumeric(func, lo, hi, NEKO_INTEGRATE_SIMPSON, 1000, 1e-9);
-    nekoFreeFunc(func);
     return r.status == NEKO_OK ? valDecimal(r.value) : valError("numerical integration failed");
 }
 
 static Value bi_eval_neko(EvalContext* c, Value* a, size_t n) {
-    (void)c; (void)n;
+    (void)c;
+    if (n != 2 && n != 3) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\eval expects an expression, optional variable, and numeric value");
+    }
     NekoExpr* expr = valueToNekoExpr(a[0]);
     if (!expr) {
-        valFree(a[0]);
-        valFree(a[1]);
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
         return valError("\\eval expects a NEKO expression as its first argument");
     }
-    if (valIsNumeric(a[1])) {
-        double x = valToDouble(a[1]);
-        valFree(a[0]);
-        valFree(a[1]);
-        double y = nekoEvalExpr(expr, "x", x);
-        nekoFreeExpr(expr);
-        return valDecimal(y);
+
+    const char* var = "x";
+    double x = 0.0;
+    if (n == 2) {
+        if (!valIsNumeric(a[1])) {
+            valFree(a[0]);
+            valFree(a[1]);
+            nekoFreeExpr(expr);
+            return valError("\\eval expects a numeric value as its second argument");
+        }
+        x = valToDouble(a[1]);
+    } else {
+        if (!valueToCalcVarName(a[1], &var) || !valIsNumeric(a[2])) {
+            valFree(a[0]);
+            valFree(a[1]);
+            valFree(a[2]);
+            nekoFreeExpr(expr);
+            return valError("\\eval expects a Symbol/String variable and numeric value");
+        }
+        x = valToDouble(a[2]);
     }
 
-    valFree(a[0]);
-    valFree(a[1]);
+    for (size_t i = 0; i < n; i++) valFree(a[i]);
+    double y = nekoEvalExpr(expr, var, x);
     nekoFreeExpr(expr);
-    return valError("\\eval currently expects a numeric second argument");
+    return valDecimal(y);
 }
 
 #define NEKO_REPL_MAX_POLY_DEG 64
@@ -4131,6 +5224,152 @@ static Value bi_density(EvalContext* c, Value* a, size_t n) {
     return valFraction(density);
 }
 
+static Value bi_rangeSet(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    long long start, end, step;
+    if (n == 1 && a[0].kind == VAL_LIST) {
+        Value* tupleArgs = NULL;
+        size_t tupleCount = 0;
+        if (!cloneTupleArgs(a[0], &tupleArgs, &tupleCount)) {
+            valFree(a[0]);
+            return valError("\\rangeSet failed to unpack its argument tuple");
+        }
+        valFree(a[0]);
+        Value result = bi_rangeSet(c, tupleArgs, tupleCount);
+        free(tupleArgs);
+        return result;
+    }
+    if ((n != 2 && n != 3) || !valueToCombSetInt(a[0], &start) || !valueToCombSetInt(a[1], &end)) {
+        valFree(a[0]);
+        valFree(a[1]);
+        if (n > 2) valFree(a[2]);
+        return valError("\\rangeSet expects integer start/end values and an optional integer step");
+    }
+
+    if (n == 3) {
+        if (!valueToCombSetInt(a[2], &step)) {
+            valFree(a[0]);
+            valFree(a[1]);
+            valFree(a[2]);
+            return valError("\\rangeSet expects an integer step when a third argument is provided");
+        }
+    } else {
+        step = start <= end ? 1 : -1;
+    }
+
+    valFree(a[0]);
+    valFree(a[1]);
+    if (n == 3) valFree(a[2]);
+
+    if (step == 0) return valError("\\rangeSet expects a nonzero step");
+    if ((step > 0 && start > end) || (step < 0 && start < end)) return valPtr(VAL_COMBSET, NULL);
+    return valPtr(VAL_COMBSET, constructRangeSet(start, end, step));
+}
+
+static Value bi_AP(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    long long first, diff, terms;
+    if (n == 1 && a[0].kind == VAL_LIST) {
+        Value* tupleArgs = NULL;
+        size_t tupleCount = 0;
+        if (!cloneTupleArgs(a[0], &tupleArgs, &tupleCount)) {
+            valFree(a[0]);
+            return valError("\\AP failed to unpack its argument tuple");
+        }
+        valFree(a[0]);
+        Value result = bi_AP(c, tupleArgs, tupleCount);
+        free(tupleArgs);
+        return result;
+    }
+    if (!valueToCombSetInt(a[0], &first) || !valueToCombSetInt(a[1], &diff) || !valueToCombSetInt(a[2], &terms)) {
+        valFree(a[0]);
+        valFree(a[1]);
+        valFree(a[2]);
+        return valError("\\AP expects integer first term, common difference, and number of terms");
+    }
+    valFree(a[0]);
+    valFree(a[1]);
+    valFree(a[2]);
+    if (terms < 0) return valError("\\AP expects a nonnegative number of terms");
+    return valPtr(VAL_COMBSET, constructArithmeticProgressionSet(first, diff, (int)terms));
+}
+
+static Value bi_GP(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    long long first, ratio, terms;
+    if (n == 1 && a[0].kind == VAL_LIST) {
+        Value* tupleArgs = NULL;
+        size_t tupleCount = 0;
+        if (!cloneTupleArgs(a[0], &tupleArgs, &tupleCount)) {
+            valFree(a[0]);
+            return valError("\\GP failed to unpack its argument tuple");
+        }
+        valFree(a[0]);
+        Value result = bi_GP(c, tupleArgs, tupleCount);
+        free(tupleArgs);
+        return result;
+    }
+    if (!valueToCombSetInt(a[0], &first) || !valueToCombSetInt(a[1], &ratio) || !valueToCombSetInt(a[2], &terms)) {
+        valFree(a[0]);
+        valFree(a[1]);
+        valFree(a[2]);
+        return valError("\\GP expects integer first term, common ratio, and number of terms");
+    }
+    valFree(a[0]);
+    valFree(a[1]);
+    valFree(a[2]);
+    if (terms < 0) return valError("\\GP expects a nonnegative number of terms");
+    return valPtr(VAL_COMBSET, constructGeometricProgressionSet(first, ratio, (int)terms));
+}
+
+static Value bi_subsetSums(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    long long subsetSize = -1;
+    if (n == 1 && a[0].kind == VAL_LIST) {
+        Value* tupleArgs = NULL;
+        size_t tupleCount = 0;
+        if (!cloneTupleArgs(a[0], &tupleArgs, &tupleCount)) {
+            valFree(a[0]);
+            return valError("\\subsetSums failed to unpack its argument tuple");
+        }
+        valFree(a[0]);
+        Value result = bi_subsetSums(c, tupleArgs, tupleCount);
+        free(tupleArgs);
+        return result;
+    }
+    if ((n != 1 && n != 2) || !valueIsCombSet(a[0])) {
+        valFree(a[0]);
+        if (n > 1) valFree(a[1]);
+        return valError("\\subsetSums expects a CombSet and an optional integer subset size");
+    }
+    if (n == 2) {
+        if (!valueToCombSetInt(a[1], &subsetSize)) {
+            valFree(a[0]);
+            valFree(a[1]);
+            return valError("\\subsetSums expects an integer subset size when a second argument is provided");
+        }
+        if (subsetSize < 0) {
+            valFree(a[0]);
+            valFree(a[1]);
+            return valError("\\subsetSums expects subset size >= 0");
+        }
+        valFree(a[1]);
+    }
+
+    if (valueIsEmptyCombSet(a[0])) {
+        valFree(a[0]);
+        if (subsetSize == -1 || subsetSize == 0) {
+            long long zero = 0;
+            return valPtr(VAL_COMBSET, constructCombset(&zero, 1));
+        }
+        return valPtr(VAL_COMBSET, NULL);
+    }
+
+    CombSet* result = subsetSums((CombSet*)a[0].as.ptr, (int)subsetSize);
+    valFree(a[0]);
+    return valPtr(VAL_COMBSET, result);
+}
+
 static Value bi_translate(EvalContext* c, Value* a, size_t n) {
     (void)c; (void)n;
     if (!valueIsCombSet(a[0]) || a[1].kind != VAL_INT) {
@@ -4480,6 +5719,23 @@ static Value bi_body(EvalContext* c, Value* a, size_t n) {
     return valPtr(VAL_BODY, body);
 }
 
+static Value bi_bodySystem(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    Body** bodies = NULL;
+    size_t count = 0;
+    if (!unpackBodyList(a, n, &bodies, &count) || count == 0) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        free(bodies);
+        return valError("\\bodySystem expects one or more bodies");
+    }
+
+    BodySystem* system = constructBodySystem(bodies, (int)count);
+    free(bodies);
+    for (size_t i = 0; i < n; i++) valFree(a[i]);
+    if (!system) return valError("\\bodySystem failed to construct a system");
+    return valPtr(VAL_BODY_SYSTEM, system);
+}
+
 static Value bi_addForce(EvalContext* c, Value* a, size_t n) {
     (void)c; (void)n;
     if (a[0].kind != VAL_BODY || a[1].kind != VAL_FORCE) {
@@ -4756,6 +6012,182 @@ static Value bi_frictionForce(EvalContext* c, Value* a, size_t n) {
     return valPtr(VAL_FORCE, out);
 }
 
+static Value bi_springForce_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    if (n == 1 && a[0].kind == VAL_LIST) {
+        Value* tupleArgs = NULL;
+        size_t tupleCount = 0;
+        if (!cloneTupleArgs(a[0], &tupleArgs, &tupleCount)) {
+            valFree(a[0]);
+            return valError("\\springForce failed to unpack its argument tuple");
+        }
+        valFree(a[0]);
+        Value result = bi_springForce_cmd(c, tupleArgs, tupleCount);
+        free(tupleArgs);
+        return result;
+    }
+
+    double k, restLength = 0.0;
+    if ((n != 3 && n != 4) || !valueIsBody(a[0]) || !valueIsVector(a[1]) || !valueToRealScalar(a[2], &k)) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\springForce expects a body, anchor vector, spring constant, and optional rest length");
+    }
+    if (n == 4 && !valueToRealScalar(a[3], &restLength)) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\springForce expects a numeric rest length when a fourth argument is provided");
+    }
+
+    Force* out = springForce((Body*)a[0].as.ptr, (Vector*)a[1].as.ptr, k, restLength);
+    for (size_t i = 0; i < n; i++) valFree(a[i]);
+    if (!out) return valError("\\springForce failed");
+    return valPtr(VAL_FORCE, out);
+}
+
+static Value bi_dragForce_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    if (n == 1 && a[0].kind == VAL_LIST) {
+        Value* tupleArgs = NULL;
+        size_t tupleCount = 0;
+        if (!cloneTupleArgs(a[0], &tupleArgs, &tupleCount)) {
+            valFree(a[0]);
+            return valError("\\dragForce failed to unpack its argument tuple");
+        }
+        valFree(a[0]);
+        Value result = bi_dragForce_cmd(c, tupleArgs, tupleCount);
+        free(tupleArgs);
+        return result;
+    }
+
+    double coeff;
+    if (n != 2 || !valueIsBody(a[0]) || !valueToRealScalar(a[1], &coeff)) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\dragForce expects a body and a numeric drag coefficient");
+    }
+
+    Force* out = dragForce((Body*)a[0].as.ptr, coeff);
+    valFree(a[0]);
+    valFree(a[1]);
+    if (!out) return valError("\\dragForce failed");
+    return valPtr(VAL_FORCE, out);
+}
+
+static Value bi_gravitationalForce_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    if (n == 1 && a[0].kind == VAL_LIST) {
+        Value* tupleArgs = NULL;
+        size_t tupleCount = 0;
+        if (!cloneTupleArgs(a[0], &tupleArgs, &tupleCount)) {
+            valFree(a[0]);
+            return valError("\\gravitationalForce failed to unpack its argument tuple");
+        }
+        valFree(a[0]);
+        Value result = bi_gravitationalForce_cmd(c, tupleArgs, tupleCount);
+        free(tupleArgs);
+        return result;
+    }
+
+    if (n != 2 || !valueIsBody(a[0]) || !valueIsBody(a[1])) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\gravitationalForce expects two bodies");
+    }
+
+    Force* out = gravitationalForce((Body*)a[0].as.ptr, (Body*)a[1].as.ptr);
+    valFree(a[0]);
+    valFree(a[1]);
+    if (!out) return valError("\\gravitationalForce failed");
+    return valPtr(VAL_FORCE, out);
+}
+
+static Value bi_stepBody_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    if (n == 1 && a[0].kind == VAL_LIST) {
+        Value* tupleArgs = NULL;
+        size_t tupleCount = 0;
+        if (!cloneTupleArgs(a[0], &tupleArgs, &tupleCount)) {
+            valFree(a[0]);
+            return valError("\\stepBody failed to unpack its argument tuple");
+        }
+        valFree(a[0]);
+        Value result = bi_stepBody_cmd(c, tupleArgs, tupleCount);
+        free(tupleArgs);
+        return result;
+    }
+
+    double dt;
+    if (n != 2 || !valueIsBody(a[0]) || !valueToRealScalar(a[1], &dt)) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\stepBody expects a body and a numeric time step");
+    }
+    if (!stepBody((Body*)a[0].as.ptr, dt)) {
+        valFree(a[0]);
+        valFree(a[1]);
+        return valError("\\stepBody failed");
+    }
+    valFree(a[1]);
+    return a[0];
+}
+
+static Value bi_step_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    if (n == 1 && a[0].kind == VAL_LIST) {
+        Value* tupleArgs = NULL;
+        size_t tupleCount = 0;
+        if (!cloneTupleArgs(a[0], &tupleArgs, &tupleCount)) {
+            valFree(a[0]);
+            return valError("\\step failed to unpack its argument tuple");
+        }
+        valFree(a[0]);
+        Value result = bi_step_cmd(c, tupleArgs, tupleCount);
+        free(tupleArgs);
+        return result;
+    }
+
+    double dt;
+    if (n != 2 || !valueIsBodySystem(a[0]) || !valueToRealScalar(a[1], &dt)) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\step expects a body system and a numeric time step");
+    }
+    if (!stepBodySystem((BodySystem*)a[0].as.ptr, dt)) {
+        valFree(a[0]);
+        valFree(a[1]);
+        return valError("\\step failed");
+    }
+    valFree(a[1]);
+    return a[0];
+}
+
+static Value bi_simulate_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    if (n == 1 && a[0].kind == VAL_LIST) {
+        Value* tupleArgs = NULL;
+        size_t tupleCount = 0;
+        if (!cloneTupleArgs(a[0], &tupleArgs, &tupleCount)) {
+            valFree(a[0]);
+            return valError("\\simulate failed to unpack its argument tuple");
+        }
+        valFree(a[0]);
+        Value result = bi_simulate_cmd(c, tupleArgs, tupleCount);
+        free(tupleArgs);
+        return result;
+    }
+
+    double dt;
+    long long steps;
+    if (n != 3 || !valueIsBodySystem(a[0]) || !valueToRealScalar(a[1], &dt) || !valueToCombSetInt(a[2], &steps)) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\simulate expects a body system, a numeric time step, and an integer step count");
+    }
+    if (!simulateBodySystem((BodySystem*)a[0].as.ptr, dt, (int)steps)) {
+        valFree(a[0]);
+        valFree(a[1]);
+        valFree(a[2]);
+        return valError("\\simulate failed");
+    }
+    valFree(a[1]);
+    valFree(a[2]);
+    return a[0];
+}
+
 static Value bi_momentum(EvalContext* c, Value* a, size_t n) {
     (void)c; (void)n;
     if (!valueIsBody(a[0])) {
@@ -4777,6 +6209,30 @@ static Value bi_kineticEnergy(EvalContext* c, Value* a, size_t n) {
     double result = kineticEnergy((Body*)a[0].as.ptr);
     valFree(a[0]);
     if (isnan(result)) return valError("\\kineticEnergy failed");
+    return valDecimal(result);
+}
+
+static Value bi_totalMomentum_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (!valueIsBodySystem(a[0])) {
+        valFree(a[0]);
+        return valError("\\totalMomentum expects one body system");
+    }
+    Vector* out = totalMomentum((BodySystem*)a[0].as.ptr);
+    valFree(a[0]);
+    if (!out) return valError("\\totalMomentum failed");
+    return valPtr(VAL_VECTOR, out);
+}
+
+static Value bi_totalEnergy_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (!valueIsBodySystem(a[0])) {
+        valFree(a[0]);
+        return valError("\\totalEnergy expects one body system");
+    }
+    double result = totalEnergy((BodySystem*)a[0].as.ptr);
+    valFree(a[0]);
+    if (isnan(result)) return valError("\\totalEnergy failed");
     return valDecimal(result);
 }
 
@@ -5444,6 +6900,71 @@ static Value bi_trivialRing_cmd(EvalContext* c, Value* a, size_t n) {
     return valPtr(VAL_RING, out);
 }
 
+static Value bi_addGroup_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (!valueIsRing(a[0])) {
+        valFree(a[0]);
+        return valError("\\addGroup expects one ring");
+    }
+    Group* out = constructAddGroup((Ring*)a[0].as.ptr);
+    valFree(a[0]);
+    if (!out) return valError("\\addGroup failed");
+    return valPtr(VAL_GROUP, out);
+}
+
+static Value bi_unitGroup_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (!valueIsRing(a[0])) {
+        valFree(a[0]);
+        return valError("\\unitGroup expects one ring");
+    }
+    Group* out = constructUnitGroup((Ring*)a[0].as.ptr);
+    valFree(a[0]);
+    if (!out) return valError("\\unitGroup failed (ring may lack a multiplicative identity)");
+    return valPtr(VAL_GROUP, out);
+}
+
+static Value bi_groupInfo_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (!valueIsGroup(a[0])) {
+        valFree(a[0]);
+        return valError("\\groupInfo expects one group");
+    }
+    Group* group = (Group*)a[0].as.ptr;
+    char buf[2048] = {0};
+    appendInlineGroupSummary(buf, sizeof(buf), group);
+    size_t used = strlen(buf);
+    if (used < sizeof(buf)) snprintf(buf + used, sizeof(buf) - used, "; commutative=%s; cyclic=%s; simple=%s; identity=%s",
+                                     isCommutativeGroup(group) ? "yes" : "no",
+                                     isCyclicGroup(group) ? "yes" : "no",
+                                     isSimple(group) ? "yes" : "no",
+                                     (groupIdentity(group) && groupIdentity(group)->repr) ? groupIdentity(group)->repr : "?");
+    valFree(a[0]);
+    return valSymbol(buf);
+}
+
+static Value bi_ringInfo_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (!valueIsRing(a[0])) {
+        valFree(a[0]);
+        return valError("\\ringInfo expects one ring");
+    }
+    Ring* ring = (Ring*)a[0].as.ptr;
+    char buf[2048] = {0};
+    appendInlineRingSummary(buf, sizeof(buf), ring);
+    size_t used = strlen(buf);
+    if (used < sizeof(buf)) snprintf(buf + used, sizeof(buf) - used,
+                                     "; commutative=%s; hasIdentity=%s; zeroDivisors=%s; integralDomain=%s; divisionRing=%s; field=%s",
+                                     isCommutativeRing(ring) ? "yes" : "no",
+                                     hasMultIdentity(ring) ? "yes" : "no",
+                                     hasZeroDivisors(ring) ? "yes" : "no",
+                                     isIntegralDomain(ring) ? "yes" : "no",
+                                     isDivisionRing(ring) ? "yes" : "no",
+                                     isField(ring) ? "yes" : "no");
+    valFree(a[0]);
+    return valSymbol(buf);
+}
+
 static Value bi_groupElementInfo_cmd(EvalContext* c, Value* a, size_t n) {
     (void)c; (void)n;
     if (!valueIsGroupElement(a[0])) {
@@ -5731,6 +7252,87 @@ static Value bi_subgroupInfo_cmd(EvalContext* c, Value* a, size_t n) {
     size_t used = strlen(buf);
     if (used < sizeof(buf)) snprintf(buf + used, sizeof(buf) - used, "; ambient=");
     appendInlineGroupSummary(buf, sizeof(buf), subgroup->ambient);
+    valFree(a[0]);
+    return valSymbol(buf);
+}
+
+static Value bi_subringInfo_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (!valueIsSubring(a[0])) {
+        valFree(a[0]);
+        return valError("\\subringInfo expects one subring");
+    }
+    SubRing* subring = (SubRing*)a[0].as.ptr;
+    char buf[4096] = {0};
+    appendInlineSubringSummary(buf, sizeof(buf), subring);
+    size_t used = strlen(buf);
+    if (used < sizeof(buf)) snprintf(buf + used, sizeof(buf) - used, "; ambient=");
+    appendInlineRingSummary(buf, sizeof(buf), subring ? subring->ambient : NULL);
+    used = strlen(buf);
+    if (used < sizeof(buf)) snprintf(buf + used, sizeof(buf) - used, "; trivial=%s; whole=%s",
+                                     isTrivialSubring(subring) ? "yes" : "no",
+                                     isWholeRing(subring) ? "yes" : "no");
+    valFree(a[0]);
+    return valSymbol(buf);
+}
+
+static Value bi_idealInfo_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (!valueIsIdeal(a[0])) {
+        valFree(a[0]);
+        return valError("\\idealInfo expects one ideal");
+    }
+    Ideal* ideal = (Ideal*)a[0].as.ptr;
+    char buf[4096] = {0};
+    appendInlineIdealSummary(buf, sizeof(buf), ideal);
+    size_t used = strlen(buf);
+    if (used < sizeof(buf)) snprintf(buf + used, sizeof(buf) - used, "; ring=");
+    appendInlineRingSummary(buf, sizeof(buf), ideal ? ideal->ring : NULL);
+    valFree(a[0]);
+    return valSymbol(buf);
+}
+
+static Value bi_groupHomomorphismInfo_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (!valueIsGroupHomomorphism(a[0])) {
+        valFree(a[0]);
+        return valError("\\groupHomomorphismInfo expects one group homomorphism");
+    }
+    GroupHomomorphism* hom = (GroupHomomorphism*)a[0].as.ptr;
+    char buf[4096] = {0};
+    appendInlineGroupHomomorphismSummary(buf, sizeof(buf), hom);
+    SubGroup* kernel = hom ? groupHomomorphismKernel(hom) : NULL;
+    Group* image = hom ? groupHomomorphismImage(hom) : NULL;
+    size_t used = strlen(buf);
+    if (used < sizeof(buf)) snprintf(buf + used, sizeof(buf) - used, "; kernelCard=%d; imageCard=%d; isomorphism=%s",
+                                     kernel ? kernel->card : -1,
+                                     image ? image->card : -1,
+                                     (hom && isGroupIsomorphism(hom)) ? "yes" : "no");
+    freeSubgroup(kernel);
+    freeGroup(image);
+    valFree(a[0]);
+    return valSymbol(buf);
+}
+
+static Value bi_ringHomomorphismInfo_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (!valueIsRingHomomorphism(a[0])) {
+        valFree(a[0]);
+        return valError("\\ringHomomorphismInfo expects one ring homomorphism");
+    }
+    RingHomomorphism* hom = (RingHomomorphism*)a[0].as.ptr;
+    char buf[4096] = {0};
+    appendInlineRingHomomorphismSummary(buf, sizeof(buf), hom);
+    Ideal* kernel = hom ? ringHomomorphismKernel(hom) : NULL;
+    Ring* image = hom ? ringHomomorphismImage(hom) : NULL;
+    size_t used = strlen(buf);
+    if (used < sizeof(buf)) snprintf(buf + used, sizeof(buf) - used, "; kernelCard=%d; imageCard=%d; isomorphism=%s",
+                                     kernel ? kernel->card : -1,
+                                     image ? image->card : -1,
+                                     (hom && isRingIsomorphism(hom)) ? "yes" : "no");
+    free(kernel ? kernel->indices : NULL);
+    free(kernel);
+    freeRing(image);
     valFree(a[0]);
     return valSymbol(buf);
 }
@@ -6116,6 +7718,68 @@ static Value bi_indRep_cmd(EvalContext* c, Value* a, size_t n) {
     valFree(a[1]);
     if (!out) return valError("\\indRep failed");
     return valPtr(VAL_REPRESENTATION, out);
+}
+
+static Value bi_projectToAbelianization_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (!valueIsGroup(a[0])) {
+        valFree(a[0]);
+        return valError("\\projectToAbelianization expects one group");
+    }
+    GroupHomomorphism* out = projectToAbelianization((Group*)a[0].as.ptr);
+    valFree(a[0]);
+    if (!out) return valError("\\projectToAbelianization failed");
+    return valPtr(VAL_GROUP_HOMOMORPHISM, out);
+}
+
+static Value bi_repDegree_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (!valueIsRepresentation(a[0])) {
+        valFree(a[0]);
+        return valError("\\repDegree expects one representation");
+    }
+    Representation* rep = (Representation*)a[0].as.ptr;
+    int degree = rep ? rep->dim : -1;
+    valFree(a[0]);
+    if (degree < 0) return valError("\\repDegree failed");
+    return valInt(degree);
+}
+
+static Value bi_charDegree_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (valueIsRepresentation(a[0])) {
+        Representation* rep = (Representation*)a[0].as.ptr;
+        int degree = rep ? rep->dim : -1;
+        valFree(a[0]);
+        if (degree < 0) return valError("\\charDegree failed");
+        return valInt(degree);
+    }
+    if (!valueIsCharacter(a[0])) {
+        valFree(a[0]);
+        return valError("\\charDegree expects a character or representation");
+    }
+
+    Character* chi = (Character*)a[0].as.ptr;
+    ComplexNumber degree = {0.0, 0.0};
+    int found = 0;
+    if (chi && chi->classes) {
+        for (int i = 0; i < chi->numClasses; i++) {
+            ConjugacyClass* cls = chi->classes[i];
+            if (cls && cls->group && cls->rep && isGroupIdentity(cls->group, cls->rep)) {
+                degree = chi->values[i];
+                found = 1;
+                break;
+            }
+        }
+    }
+    valFree(a[0]);
+    if (!found) return valError("\\charDegree failed");
+    if (fabs(degree.imag) < 1e-9) {
+        double rounded = round(degree.real);
+        if (fabs(degree.real - rounded) < 1e-9) return valInt((long long)rounded);
+        return valDecimal(degree.real);
+    }
+    return valueFromComplexNumber(degree);
 }
 
 static Value bi_getChar_cmd(EvalContext* c, Value* a, size_t n) {
@@ -7060,6 +8724,8 @@ static Value bi_vproj(EvalContext* c, Value* a, size_t n) {
  *   registerCommand("__pmatrix__", 1, bi_pmatrix);  // or fall back to __matrix__
  */
 void registerBuiltins(void) {
+    registerCommand("help", -1, bi_help);
+    registerCommand("run", 1, bi_run);
     registerCommand("+",  2, bi_add);
     registerCommand("-",  2, bi_sub);
     registerCommand("*",  2, bi_mul);
@@ -7071,6 +8737,10 @@ void registerBuiltins(void) {
     registerCommand("otimes",  2, bi_otimes);
     registerCommand("cap",  2, bi_cap);
     registerCommand("cup",  2, bi_cup);
+    registerCommand("rangeSet", -1, bi_rangeSet);
+    registerCommand("AP", -1, bi_AP);
+    registerCommand("GP", -1, bi_GP);
+    registerCommand("subsetSums", -1, bi_subsetSums);
     registerCommand("u-",  1, bi_neg);
     registerCommand("u+",  1, bi_pos);
     registerCommand("^",  2, bi_pow);
@@ -7079,6 +8749,12 @@ void registerBuiltins(void) {
     registerCommand("phi",  0, bi_phi);
     registerCommand("frac",  2, bi_frac);
     registerCommand("sqrt",  1, bi_sqrt);
+    registerCommand("cbrt",  1, bi_cbrt_cmd);
+    registerCommand("conj",  1, bi_conj_cmd);
+    registerCommand("abs",  1, bi_abs_cmd);
+    registerCommand("arg",  1, bi_arg_cmd);
+    registerCommand("re",  1, bi_re_cmd);
+    registerCommand("im",  1, bi_im_cmd);
     registerCommand("poly",  1, bi_poly);
     registerCommand("sin", -1, bi_neko_sin);
     registerCommand("cos", -1, bi_neko_cos);
@@ -7088,10 +8764,14 @@ void registerBuiltins(void) {
     registerCommand("atan", -1, bi_neko_atan);
     registerCommand("exp", -1, bi_neko_exp);
     registerCommand("log", -1, bi_neko_log);
-    registerCommand("derivative",  1, bi_derivative);
+    registerCommand("derivative", -1, bi_derivative);
+    registerCommand("partialDerivative",  2, bi_partialDerivative);
+    registerCommand("gradient", -1, bi_gradient);
+    registerCommand("hessian", -1, bi_hessian);
+    registerCommand("laplacian", -1, bi_laplacian);
     registerCommand("int", -1, bi_int);
     registerCommand("integral", -1, bi_int);
-    registerCommand("eval",  2, bi_eval_neko);
+    registerCommand("eval", -1, bi_eval_neko);
     registerCommand("roots",  1, bi_roots);
     registerCommand("factorPoly",  1, bi_factorPoly);
     registerCommand("factorPolyReal",  1, bi_factorPolyReal);
@@ -7130,6 +8810,7 @@ void registerBuiltins(void) {
     registerCommand("vproj", -1, bi_vproj);
     registerCommand("force",  3, bi_force);
     registerCommand("body",  3, bi_body);
+    registerCommand("bodySystem", -1, bi_bodySystem);
     registerCommand("copy",  1, bi_copy);
     registerCommand("transpose",  1, bi_transpose);
     registerCommand("adjoint",  1, bi_adjoint);
@@ -7155,8 +8836,16 @@ void registerBuiltins(void) {
     registerCommand("gravityForce",  1, bi_gravityForce);
     registerCommand("normalForce",  2, bi_normalForce);
     registerCommand("frictionForce",  3, bi_frictionForce);
+    registerCommand("springForce", -1, bi_springForce_cmd);
+    registerCommand("dragForce", -1, bi_dragForce_cmd);
+    registerCommand("gravitationalForce", -1, bi_gravitationalForce_cmd);
+    registerCommand("stepBody", -1, bi_stepBody_cmd);
+    registerCommand("step", -1, bi_step_cmd);
+    registerCommand("simulate", -1, bi_simulate_cmd);
     registerCommand("momentum",  1, bi_momentum);
     registerCommand("kineticEnergy",  1, bi_kineticEnergy);
+    registerCommand("totalMomentum",  1, bi_totalMomentum_cmd);
+    registerCommand("totalEnergy",  1, bi_totalEnergy_cmd);
     registerCommand("gravPotentialEnergy",  2, bi_gravPotentialEnergy);
     registerCommand("springPotentialEnergy",  2, bi_springPotentialEnergy);
     registerCommand("work",  2, bi_work);
@@ -7183,6 +8872,8 @@ void registerBuiltins(void) {
     registerCommand("ZnProductRing",  1, bi_ZnProductRing);
     registerCommand("primeField",  1, bi_primeFiniteField);
     registerCommand("finiteField",  2, bi_finiteField);
+    registerCommand("addGroup",  1, bi_addGroup_cmd);
+    registerCommand("unitGroup",  1, bi_unitGroup_cmd);
     registerCommand("Q8",  0, bi_quaternionGroup);
     registerCommand("isPrime",  1, bi_isPrime_cmd);
     registerCommand("factorial",  1, bi_factorial_cmd);
@@ -7205,6 +8896,8 @@ void registerBuiltins(void) {
     registerCommand("isTrivialRing",  1, bi_isTrivialRing_cmd);
     registerCommand("trivialGroup",  0, bi_trivialGroup_cmd);
     registerCommand("trivialRing",  0, bi_trivialRing_cmd);
+    registerCommand("groupInfo",  1, bi_groupInfo_cmd);
+    registerCommand("ringInfo",  1, bi_ringInfo_cmd);
     registerCommand("groupElementInfo",  1, bi_groupElementInfo_cmd);
     registerCommand("ringElementInfo",  1, bi_ringElementInfo_cmd);
     registerCommand("isSubgroup",  2, bi_isSubgroup_cmd);
@@ -7224,6 +8917,7 @@ void registerBuiltins(void) {
     registerCommand("permutationRep",  1, bi_permutationRep_cmd);
     registerCommand("standardRep",  1, bi_standardRep_cmd);
     registerCommand("signRep",  1, bi_signRep_cmd);
+    registerCommand("projectToAbelianization",  1, bi_projectToAbelianization_cmd);
     registerCommand("dualRep",  1, bi_dualRep_cmd);
     registerCommand("conjRep",  1, bi_conjRep_cmd);
     registerCommand("prodRep",  2, bi_prodRep_cmd);
@@ -7234,6 +8928,8 @@ void registerBuiltins(void) {
     registerCommand("indRep",  2, bi_indRep_cmd);
     registerCommand("getChar",  1, bi_getChar_cmd);
     registerCommand("evalChar", -1, bi_evalChar_cmd);
+    registerCommand("repDegree",  1, bi_repDegree_cmd);
+    registerCommand("charDegree",  1, bi_charDegree_cmd);
     registerCommand("isIrrep",  1, bi_isIrrep_cmd);
     registerCommand("listIrreps",  1, bi_listIrrpes_cmd);
     registerCommand("numIrreps",  1, bi_numIrreps_cmd);
@@ -7288,6 +8984,10 @@ void registerBuiltins(void) {
     registerCommand("numSubgroups",  1, bi_numSubgroups_cmd);
     registerCommand("getSubgroup",  2, bi_getSubgroup_cmd);
     registerCommand("subgroupInfo",  1, bi_subgroupInfo_cmd);
+    registerCommand("subringInfo",  1, bi_subringInfo_cmd);
+    registerCommand("idealInfo",  1, bi_idealInfo_cmd);
+    registerCommand("groupHomomorphismInfo",  1, bi_groupHomomorphismInfo_cmd);
+    registerCommand("ringHomomorphismInfo",  1, bi_ringHomomorphismInfo_cmd);
     registerCommand("isCommutativeGroup",  1, bi_isCommutativeGroup_cmd);
     registerCommand("isCommutativeRing",  1, bi_isCommutativeRing_cmd);
     registerCommand("isSimple",  1, bi_isSimple_cmd);

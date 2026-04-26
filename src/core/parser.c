@@ -179,6 +179,7 @@ static AstNode* parseUnary(P* p);
 static AstNode* parsePostfix(P* p);
 static AstNode* parsePrimary(P* p);
 static AstNode* parseCommandCall(P* p);
+static AstNode* parseRunCall(P* p, Token* cmd);
 static AstNode* parseIntegralCall(P* p, Token* cmd);
 static AstNode* parseBoundedSingleArgCall(P* p, Token* cmd, const char* outName);
 static AstNode* parseCallArgList(P* p);
@@ -194,6 +195,65 @@ static AstNode* parsePipeGroup(P* p);
 static AstNode* parseEnvironment(P* p, size_t beginLine, size_t beginCol);
 static char*    readBraceIdent(P* p);
 static AstNode* stripDifferential(AstNode* n);
+
+static const char* tokenRawText(Token* t, char* scratch, size_t scratchSize) {
+    switch (t->kind) {
+        case TOK_IDENT:
+        case TOK_NUMBER:
+        case TOK_DECIMAL:
+        case TOK_STRING:
+            return t->text ? t->text : "";
+        case TOK_COMMAND:
+            snprintf(scratch, scratchSize, "\\%s", t->text ? t->text : "");
+            return scratch;
+        case TOK_DBLBACKSLASH: return "\\\\";
+        case TOK_EQUALS:       return "=";
+        case TOK_EQEQ:         return "==";
+        case TOK_LBRACE:       return "{";
+        case TOK_RBRACE:       return "}";
+        case TOK_AMP:          return "&";
+        case TOK_PLUS:         return "+";
+        case TOK_MINUS:        return "-";
+        case TOK_STAR:         return "*";
+        case TOK_SLASH:        return "/";
+        case TOK_LPAREN:       return "(";
+        case TOK_RPAREN:       return ")";
+        case TOK_LBRACK:       return "[";
+        case TOK_RBRACK:       return "]";
+        case TOK_COMMA:        return ",";
+        case TOK_CARET:        return "^";
+        case TOK_UNDERSCORE:   return "_";
+        case TOK_BANG:         return "!";
+        case TOK_COLON:        return ":";
+        case TOK_SEMICOLON:    return ";";
+        case TOK_PIPE:         return "|";
+        case TOK_LESS:         return "<";
+        case TOK_GREATER:      return ">";
+        case TOK_PRIME:        return "'";
+        case TOK_DOLLAR:       return "$";
+        case TOK_PERCENT:      return "%";
+        case TOK_TILDE:        return "~";
+        case TOK_DOT:          return ".";
+        case TOK_HASH:         return "#";
+        default:               return "";
+    }
+}
+
+static int rawPush(char** out, size_t* len, size_t* cap, const char* text) {
+    size_t add = strlen(text);
+    if (*len + add + 1 > *cap) {
+        size_t nextCap = *cap ? *cap * 2 : 64;
+        while (nextCap < *len + add + 1) nextCap *= 2;
+        char* next = realloc(*out, nextCap);
+        if (!next) return 0;
+        *out = next;
+        *cap = nextCap;
+    }
+    memcpy(*out + *len, text, add);
+    *len += add;
+    (*out)[*len] = '\0';
+    return 1;
+}
 
 /* ---------- Primary-starter predicate ---------- */
 
@@ -294,7 +354,13 @@ static AstNode* parseSetLiteral(P* p) {
 // grouping semantics so expressions like A^{-1} continue to work.
 static AstNode* parseScriptOperand(P* p) {
     if (check(p, TOK_LBRACE)) return parseBraceGroup(p);
-    return parseUnary(p);
+    if (match(p, TOK_MINUS)) return astUnary(OP_NEG, parsePrimary(p));
+    if (match(p, TOK_PLUS)) return astUnary(OP_POS, parsePrimary(p));
+    if (check(p, TOK_COMMAND)) {
+        Token* cmd = advance(p);
+        return astCall(cmd->text ? cmd->text : "", NULL, 0, cmd->line, cmd->col);
+    }
+    return parsePrimary(p);
 }
 
 // Integral limits like \int_0^1(...) should consume only the single
@@ -490,6 +556,7 @@ static AstNode* parseCommandCall(P* p) {
         parseError(p, "unexpected \\end without matching \\begin");
         return NULL;
     }
+    if (strcmp(name, "run") == 0) return parseRunCall(p, cmd);
     if (strcmp(name, "int") == 0 || strcmp(name, "integral") == 0) {
         return parseIntegralCall(p, cmd);
     }
@@ -514,6 +581,54 @@ static AstNode* parseCommandCall(P* p) {
         break;
     }
     return astCall(name, args.data, args.len, cmd->line, cmd->col);
+}
+
+static AstNode* parseRunCall(P* p, Token* cmd) {
+    TokenKind closeKind = TOK_NONE;
+    if (match(p, TOK_LBRACE)) closeKind = TOK_RBRACE;
+    else if (match(p, TOK_LPAREN)) closeKind = TOK_RPAREN;
+    else {
+        return astCall("run", NULL, 0, cmd->line, cmd->col);
+    }
+
+    Token* first = peek(p);
+    if (first->kind == TOK_STRING && peekAt(p, 1)->kind == closeKind) {
+        advance(p);
+        advance(p);
+        AstNode** args = malloc(sizeof(AstNode*));
+        if (!args) { parseError(p, "out of memory"); return NULL; }
+        args[0] = astString(first->text ? first->text : "", first->line, first->col);
+        return astCall("run", args, 1, cmd->line, cmd->col);
+    }
+
+    char* raw = NULL;
+    size_t len = 0;
+    size_t cap = 0;
+    while (!atEnd(p) && !check(p, closeKind)) {
+        char scratch[128];
+        const char* text = tokenRawText(peek(p), scratch, sizeof(scratch));
+        if (!rawPush(&raw, &len, &cap, text)) {
+            free(raw);
+            parseError(p, "out of memory");
+            return NULL;
+        }
+        advance(p);
+    }
+    if (!match(p, closeKind)) {
+        free(raw);
+        parseError(p, "expected closing delimiter after \\run filename");
+        return NULL;
+    }
+
+    AstNode** args = malloc(sizeof(AstNode*));
+    if (!args) {
+        free(raw);
+        parseError(p, "out of memory");
+        return NULL;
+    }
+    args[0] = astString(raw ? raw : "", cmd->line, cmd->col);
+    free(raw);
+    return astCall("run", args, 1, cmd->line, cmd->col);
 }
 
 static AstNode* parseIntegralArg(P* p) {
