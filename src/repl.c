@@ -1,3 +1,5 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include<stdio.h>
 #include<stdlib.h>
 #include<string.h>
@@ -26,6 +28,7 @@ typedef enum {
 
 static volatile sig_atomic_t g_sigint_seen = 0;
 static volatile sig_atomic_t g_repl_state = REPL_STATE_IDLE;
+static volatile sig_atomic_t g_sigint_from_readline = 0;
 static sigjmp_buf g_repl_jmp;
 
 static char* g_active_line = NULL;
@@ -213,11 +216,11 @@ static void clearActiveObjects(void) {
 static void handleSigint(int signo) {
     (void)signo;
     g_sigint_seen = 1;
-    write(STDOUT_FILENO, "\n", 1);
     if (g_repl_state == REPL_STATE_READLINE) {
-        rl_done = 1;
-        return;
+        g_sigint_from_readline = 1;
+        siglongjmp(g_repl_jmp, 1);
     }
+    write(STDOUT_FILENO, "\n", 1);
     siglongjmp(g_repl_jmp, 1);
 }
 
@@ -247,6 +250,14 @@ int main(int argc, char** argv) {
     puts("Bestiary v0.0.1 (flags: --tokens --ast)  -- Ctrl+C cancels, Ctrl-D quits");
     for (;;) {
         if (sigsetjmp(g_repl_jmp, 1) != 0) {
+            if (g_sigint_from_readline) {
+                rl_free_line_state();
+                rl_cleanup_after_signal();
+                putchar('\n');
+                fflush(stdout);
+                rl_reset_after_signal();
+                g_sigint_from_readline = 0;
+            }
             clearActiveObjects();
             g_repl_state = REPL_STATE_IDLE;
             g_sigint_seen = 0;
@@ -256,13 +267,6 @@ int main(int argc, char** argv) {
         char* line = readline("> ");
         g_active_line = line;
         g_repl_state = REPL_STATE_IDLE;
-
-        if (g_sigint_seen) {
-            g_sigint_seen = 0;
-            clearActiveObjects();
-            rl_on_new_line();
-            continue;
-        }
 
         if (!line) { putchar('\n'); break; }     // Ctrl-D
         if (*line == '\0') {

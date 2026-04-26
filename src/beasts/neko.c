@@ -67,6 +67,8 @@ static bool isBinaryKind(NekoExprKind kind) {
     }
 }
 
+static bool exprEqual(const NekoExpr* a, const NekoExpr* b);
+
 /* ---------- Constructors ---------- */
 
 NekoExpr* nekoConst(double c) {
@@ -275,6 +277,386 @@ double nekoEvalExpr(const NekoExpr* expr, const char* var, double x) {
 
 /* ---------- Simplification ---------- */
 
+typedef struct {
+    NekoExpr** items;
+    size_t len;
+    size_t cap;
+} ExprVec;
+
+typedef struct {
+    int degree;
+    NekoExpr* coeff;
+} PolyTerm;
+
+typedef struct {
+    PolyTerm* items;
+    size_t len;
+    size_t cap;
+} PolyVec;
+
+static bool exprVecPush(ExprVec* vec, NekoExpr* expr) {
+    if (!vec || !expr) return false;
+    if (vec->len == vec->cap) {
+        size_t nextCap = vec->cap ? vec->cap * 2 : 4;
+        NekoExpr** next = realloc(vec->items, nextCap * sizeof(NekoExpr*));
+        if (!next) {
+            nekoFreeExpr(expr);
+            return false;
+        }
+        vec->items = next;
+        vec->cap = nextCap;
+    }
+    vec->items[vec->len++] = expr;
+    return true;
+}
+
+static void exprVecFree(ExprVec* vec) {
+    if (!vec) return;
+    for (size_t i = 0; i < vec->len; i++) nekoFreeExpr(vec->items[i]);
+    free(vec->items);
+    vec->items = NULL;
+    vec->len = 0;
+    vec->cap = 0;
+}
+
+static bool polyVecPush(PolyVec* vec, int degree, NekoExpr* coeff) {
+    if (!vec || !coeff) {
+        nekoFreeExpr(coeff);
+        return false;
+    }
+    if (vec->len == vec->cap) {
+        size_t nextCap = vec->cap ? vec->cap * 2 : 4;
+        PolyTerm* next = realloc(vec->items, nextCap * sizeof(PolyTerm));
+        if (!next) {
+            nekoFreeExpr(coeff);
+            return false;
+        }
+        vec->items = next;
+        vec->cap = nextCap;
+    }
+    vec->items[vec->len++] = (PolyTerm){ .degree = degree, .coeff = coeff };
+    return true;
+}
+
+static void polyVecFree(PolyVec* vec) {
+    if (!vec) return;
+    for (size_t i = 0; i < vec->len; i++) nekoFreeExpr(vec->items[i].coeff);
+    free(vec->items);
+    vec->items = NULL;
+    vec->len = 0;
+    vec->cap = 0;
+}
+
+static int exprDependsOnVar(const NekoExpr* expr, const char* var) {
+    if (!expr || !var) return 0;
+
+    switch (expr->kind) {
+        case NEKO_EXPR_CONST:
+            return 0;
+        case NEKO_EXPR_VAR:
+            return expr->as.var && strcmp(expr->as.var, var) == 0;
+        case NEKO_EXPR_ADD:
+        case NEKO_EXPR_SUB:
+        case NEKO_EXPR_MUL:
+        case NEKO_EXPR_DIV:
+        case NEKO_EXPR_POW:
+            return exprDependsOnVar(expr->as.binary.lhs, var)
+                || exprDependsOnVar(expr->as.binary.rhs, var);
+        case NEKO_EXPR_NEG:
+        case NEKO_EXPR_SIN:
+        case NEKO_EXPR_COS:
+        case NEKO_EXPR_TAN:
+        case NEKO_EXPR_ASIN:
+        case NEKO_EXPR_ACOS:
+        case NEKO_EXPR_ATAN:
+        case NEKO_EXPR_EXP:
+        case NEKO_EXPR_LOG:
+        case NEKO_EXPR_SQRT:
+        case NEKO_EXPR_ABS:
+            return exprDependsOnVar(expr->as.unary.arg, var);
+        case NEKO_EXPR_CALL:
+            for (int i = 0; i < expr->as.call.nargs; i++) {
+                if (exprDependsOnVar(expr->as.call.args[i], var)) return 1;
+            }
+            return 0;
+    }
+    return 0;
+}
+
+static bool constNonNegativeInteger(const NekoExpr* expr, int* out) {
+    if (!expr || expr->kind != NEKO_EXPR_CONST) return false;
+    double rounded = round(expr->as.constant);
+    if (expr->as.constant < -1e-12 || fabs(expr->as.constant - rounded) > 1e-9) return false;
+    if (out) *out = (int)rounded;
+    return true;
+}
+
+static bool splitPolynomialMonomial(const NekoExpr* expr, const char* var, int* degree, NekoExpr** coeff) {
+    if (!expr || !var || !degree || !coeff) return false;
+
+    if (!exprDependsOnVar(expr, var)) {
+        *degree = 0;
+        *coeff = nekoCloneExpr(expr);
+        return *coeff != NULL;
+    }
+
+    if (sameVar(expr, var)) {
+        *degree = 1;
+        *coeff = nekoConst(1.0);
+        return *coeff != NULL;
+    }
+
+    switch (expr->kind) {
+        case NEKO_EXPR_NEG: {
+            NekoExpr* innerCoeff = NULL;
+            int innerDegree = 0;
+            if (!splitPolynomialMonomial(expr->as.unary.arg, var, &innerDegree, &innerCoeff)) return false;
+            *degree = innerDegree;
+            *coeff = nekoSimplify(nekoNeg(innerCoeff));
+            return *coeff != NULL;
+        }
+        case NEKO_EXPR_POW: {
+            int power = 0;
+            if (!sameVar(expr->as.binary.lhs, var) || !constNonNegativeInteger(expr->as.binary.rhs, &power)) {
+                return false;
+            }
+            *degree = power;
+            *coeff = nekoConst(1.0);
+            return *coeff != NULL;
+        }
+        case NEKO_EXPR_MUL: {
+            int leftDegree = 0, rightDegree = 0;
+            NekoExpr* leftCoeff = NULL;
+            NekoExpr* rightCoeff = NULL;
+            if (!splitPolynomialMonomial(expr->as.binary.lhs, var, &leftDegree, &leftCoeff)
+                    || !splitPolynomialMonomial(expr->as.binary.rhs, var, &rightDegree, &rightCoeff)) {
+                nekoFreeExpr(leftCoeff);
+                nekoFreeExpr(rightCoeff);
+                return false;
+            }
+            *degree = leftDegree + rightDegree;
+            *coeff = nekoSimplify(nekoMul(leftCoeff, rightCoeff));
+            return *coeff != NULL;
+        }
+        case NEKO_EXPR_DIV:
+            if (!exprDependsOnVar(expr->as.binary.rhs, var)) {
+                int numDegree = 0;
+                NekoExpr* numCoeff = NULL;
+                if (!splitPolynomialMonomial(expr->as.binary.lhs, var, &numDegree, &numCoeff)) return false;
+                *degree = numDegree;
+                *coeff = nekoSimplify(nekoDiv(numCoeff, nekoCloneExpr(expr->as.binary.rhs)));
+                return *coeff != NULL;
+            }
+            return false;
+        default:
+            return false;
+    }
+}
+
+static bool polyVecAddCoeff(PolyVec* vec, int degree, NekoExpr* coeff) {
+    if (!vec || !coeff) {
+        nekoFreeExpr(coeff);
+        return false;
+    }
+
+    for (size_t i = 0; i < vec->len; i++) {
+        if (vec->items[i].degree == degree) {
+            NekoExpr* merged = nekoSimplify(nekoAdd(vec->items[i].coeff, coeff));
+            vec->items[i].coeff = merged;
+            return merged != NULL;
+        }
+    }
+
+    return polyVecPush(vec, degree, coeff);
+}
+
+static bool collectPolynomialTerms(const NekoExpr* expr, const char* var, int sign, PolyVec* terms) {
+    if (!expr || !var || !terms) return false;
+
+    switch (expr->kind) {
+        case NEKO_EXPR_ADD:
+            return collectPolynomialTerms(expr->as.binary.lhs, var, sign, terms)
+                && collectPolynomialTerms(expr->as.binary.rhs, var, sign, terms);
+        case NEKO_EXPR_SUB:
+            return collectPolynomialTerms(expr->as.binary.lhs, var, sign, terms)
+                && collectPolynomialTerms(expr->as.binary.rhs, var, -sign, terms);
+        case NEKO_EXPR_NEG:
+            return collectPolynomialTerms(expr->as.unary.arg, var, -sign, terms);
+        default: {
+            int degree = 0;
+            NekoExpr* coeff = NULL;
+            if (!splitPolynomialMonomial(expr, var, &degree, &coeff)) return false;
+            if (sign < 0) coeff = nekoSimplify(nekoNeg(coeff));
+            return coeff ? polyVecAddCoeff(terms, degree, coeff) : false;
+        }
+    }
+}
+
+static int polyTermCompare(const void* lhs, const void* rhs) {
+    const PolyTerm* left = (const PolyTerm*)lhs;
+    const PolyTerm* right = (const PolyTerm*)rhs;
+    return (left->degree > right->degree) - (left->degree < right->degree);
+}
+
+static NekoExpr* buildPolynomialTermOwned(const char* var, int degree, NekoExpr* coeff) {
+    if (!coeff) return NULL;
+    if (degree == 0) return coeff;
+
+    NekoExpr* power = degree == 1
+        ? nekoVar(var)
+        : nekoPow(nekoVar(var), nekoConst((double)degree));
+    if (!power) {
+        nekoFreeExpr(coeff);
+        return NULL;
+    }
+
+    if (isConst(coeff, 1.0)) {
+        nekoFreeExpr(coeff);
+        return power;
+    }
+    if (isConst(coeff, -1.0)) {
+        nekoFreeExpr(coeff);
+        return nekoNeg(power);
+    }
+    return nekoSimplify(nekoMul(coeff, power));
+}
+
+static NekoExpr* rebuildPolynomialExpr(const char* var, PolyVec* terms) {
+    if (!terms || !var) return NULL;
+    if (terms->len == 0) return nekoConst(0.0);
+
+    qsort(terms->items, terms->len, sizeof(PolyTerm), polyTermCompare);
+
+    NekoExpr* out = NULL;
+    for (size_t i = 0; i < terms->len; i++) {
+        NekoExpr* coeff = terms->items[i].coeff;
+        terms->items[i].coeff = NULL;
+        if (!coeff || isConst(coeff, 0.0)) {
+            nekoFreeExpr(coeff);
+            continue;
+        }
+
+        NekoExpr* term = buildPolynomialTermOwned(var, terms->items[i].degree, coeff);
+        if (!term) {
+            nekoFreeExpr(out);
+            return NULL;
+        }
+        out = out ? nekoAdd(out, term) : term;
+    }
+
+    return out ? out : nekoConst(0.0);
+}
+
+static NekoExpr* normalizePolynomialOwned(NekoExpr* expr, const char* var) {
+    if (!expr || !var || !exprDependsOnVar(expr, var)) return expr;
+
+    PolyVec terms = {0};
+    if (!collectPolynomialTerms(expr, var, 1, &terms)) {
+        polyVecFree(&terms);
+        return expr;
+    }
+
+    NekoExpr* rebuilt = rebuildPolynomialExpr(var, &terms);
+    polyVecFree(&terms);
+    if (!rebuilt) return expr;
+
+    nekoFreeExpr(expr);
+    return rebuilt;
+}
+
+static NekoExpr* normalizePolynomialDefaultOwned(NekoExpr* expr) {
+    if (!expr) return NULL;
+    if (exprDependsOnVar(expr, "x")) return normalizePolynomialOwned(expr, "x");
+    if (exprDependsOnVar(expr, "y")) return normalizePolynomialOwned(expr, "y");
+    return expr;
+}
+
+static bool collectProductPiecesOwned(NekoExpr* expr, double* coeff, ExprVec* factors) {
+    if (!expr || !coeff || !factors) {
+        nekoFreeExpr(expr);
+        return false;
+    }
+
+    switch (expr->kind) {
+        case NEKO_EXPR_CONST:
+            *coeff *= expr->as.constant;
+            nekoFreeExpr(expr);
+            return true;
+        case NEKO_EXPR_NEG: {
+            NekoExpr* arg = expr->as.unary.arg;
+            expr->as.unary.arg = NULL;
+            free(expr);
+            *coeff = -*coeff;
+            return collectProductPiecesOwned(arg, coeff, factors);
+        }
+        case NEKO_EXPR_MUL: {
+            NekoExpr* lhs = expr->as.binary.lhs;
+            NekoExpr* rhs = expr->as.binary.rhs;
+            expr->as.binary.lhs = NULL;
+            expr->as.binary.rhs = NULL;
+            free(expr);
+            if (!collectProductPiecesOwned(lhs, coeff, factors)) {
+                nekoFreeExpr(rhs);
+                return false;
+            }
+            if (!collectProductPiecesOwned(rhs, coeff, factors)) {
+                exprVecFree(factors);
+                return false;
+            }
+            return true;
+        }
+        case NEKO_EXPR_DIV:
+            if (expr->as.binary.rhs && expr->as.binary.rhs->kind == NEKO_EXPR_CONST) {
+                double denom = expr->as.binary.rhs->as.constant;
+                NekoExpr* lhs = expr->as.binary.lhs;
+                expr->as.binary.lhs = NULL;
+                nekoFreeExpr(expr->as.binary.rhs);
+                expr->as.binary.rhs = NULL;
+                free(expr);
+                *coeff /= denom;
+                return collectProductPiecesOwned(lhs, coeff, factors);
+            }
+            break;
+        default:
+            break;
+    }
+
+    return exprVecPush(factors, expr);
+}
+
+static NekoExpr* rebuildCollectedProduct(double coeff, ExprVec* factors) {
+    if (!factors) return NULL;
+    if (fabs(coeff) <= 1e-12) {
+        exprVecFree(factors);
+        return nekoConst(0.0);
+    }
+    if (factors->len == 0) {
+        free(factors->items);
+        factors->items = NULL;
+        factors->len = 0;
+        factors->cap = 0;
+        return nekoConst(coeff);
+    }
+
+    size_t index = 0;
+    NekoExpr* out = NULL;
+    if (fabs(coeff - 1.0) <= 1e-12) {
+        out = factors->items[index++];
+    } else if (fabs(coeff + 1.0) <= 1e-12 && factors->len == 1) {
+        out = nekoNeg(factors->items[index++]);
+    } else {
+        out = nekoMul(nekoConst(coeff), factors->items[index++]);
+    }
+
+    for (; index < factors->len; index++) out = nekoMul(out, factors->items[index]);
+
+    free(factors->items);
+    factors->items = NULL;
+    factors->len = 0;
+    factors->cap = 0;
+    return out;
+}
+
 NekoExpr* nekoSimplify(NekoExpr* expr) {
     if (!expr) return NULL;
 
@@ -375,6 +757,15 @@ NekoExpr* nekoSimplify(NekoExpr* expr) {
                 nekoFreeExpr(expr);
                 return nekoSimplify(out);
             }
+            {
+                ExprVec factors = {0};
+                double coeff = 1.0;
+                if (collectProductPiecesOwned(expr, &coeff, &factors)) {
+                    return rebuildCollectedProduct(coeff, &factors);
+                }
+                exprVecFree(&factors);
+                return NULL;
+            }
             break;
         case NEKO_EXPR_DIV:
             if (isConst(lhs, 0.0)) {
@@ -385,6 +776,26 @@ NekoExpr* nekoSimplify(NekoExpr* expr) {
                 expr->as.binary.lhs = NULL;
                 nekoFreeExpr(expr);
                 return lhs;
+            }
+            if (exprEqual(lhs, rhs)) {
+                nekoFreeExpr(expr);
+                return nekoConst(1.0);
+            }
+            if (rhs->kind == NEKO_EXPR_CONST) {
+                ExprVec factors = {0};
+                double coeff = 1.0;
+                NekoExpr* lhsOwned = lhs;
+                expr->as.binary.lhs = NULL;
+                expr->as.binary.rhs = NULL;
+                double denom = rhs->as.constant;
+                nekoFreeExpr(rhs);
+                free(expr);
+                coeff /= denom;
+                if (collectProductPiecesOwned(lhsOwned, &coeff, &factors)) {
+                    return rebuildCollectedProduct(coeff, &factors);
+                }
+                exprVecFree(&factors);
+                return NULL;
             }
             break;
         case NEKO_EXPR_POW:
@@ -410,7 +821,7 @@ NekoExpr* nekoSimplify(NekoExpr* expr) {
             break;
     }
 
-    return expr;
+    return normalizePolynomialDefaultOwned(expr);
 }
 
 /* ---------- Differentiation ---------- */
@@ -1335,6 +1746,312 @@ static NekoFunc* cloneFunc(const NekoFunc* func) {
     return NULL;
 }
 
+static NekoSolveResult solveOk(NekoExpr* expr) {
+    NekoSolveResult r = { .status = expr ? NEKO_OK : NEKO_ERR_INVALID_ARG, .expr = expr };
+    return r;
+}
+
+static NekoSolveResult solveErr(NekoStatus status) {
+    NekoSolveResult r = { .status = status, .expr = NULL };
+    return r;
+}
+
+static double factorialDouble(int n) {
+    double out = 1.0;
+    for (int i = 2; i <= n; i++) out *= (double)i;
+    return out;
+}
+
+static NekoExpr* scaleExpr(double coeff, NekoExpr* expr) {
+    if (!expr) return NULL;
+    if (fabs(coeff) <= 1e-12) {
+        nekoFreeExpr(expr);
+        return nekoConst(0.0);
+    }
+    if (fabs(coeff - 1.0) <= 1e-12) return expr;
+    if (fabs(coeff + 1.0) <= 1e-12) return nekoNeg(expr);
+    return nekoMul(nekoConst(coeff), expr);
+}
+
+static NekoExpr* xShiftExpr(double x0) {
+    if (fabs(x0) <= 1e-12) return nekoVar("x");
+    return nekoSub(nekoVar("x"), nekoConst(x0));
+}
+
+static NekoExpr* constantSymbolExpr(int index) {
+    char name[16];
+    snprintf(name, sizeof(name), "C%d", index);
+    return nekoVar(name);
+}
+
+static NekoExpr* generalBasisTerm(int degree, int constantIndex) {
+    if (degree == 0) return constantSymbolExpr(constantIndex);
+
+    NekoExpr* power = degree == 1
+        ? nekoVar("x")
+        : nekoPow(nekoVar("x"), nekoConst((double)degree));
+    return scaleExpr(1.0 / factorialDouble(degree),
+                     nekoMul(constantSymbolExpr(constantIndex), power));
+}
+
+static NekoExpr* shiftedBasisTerm(int degree, double x0, double coeff) {
+    if (fabs(coeff) <= 1e-12) return nekoConst(0.0);
+    if (degree == 0) return nekoConst(coeff);
+
+    NekoExpr* power = xShiftExpr(x0);
+    if (degree > 1) power = nekoPow(power, nekoConst((double)degree));
+    return scaleExpr(coeff / factorialDouble(degree), power);
+}
+
+static bool splitScalarFactorExpr(const NekoExpr* expr, double* coeff, NekoExpr** core) {
+    if (!expr || !coeff || !core) return false;
+
+    switch (expr->kind) {
+        case NEKO_EXPR_CONST:
+            *coeff = expr->as.constant;
+            *core = nekoConst(1.0);
+            return *core != NULL;
+        case NEKO_EXPR_NEG: {
+            double innerCoeff = 0.0;
+            NekoExpr* innerCore = NULL;
+            if (!splitScalarFactorExpr(expr->as.unary.arg, &innerCoeff, &innerCore)) return false;
+            *coeff = -innerCoeff;
+            *core = innerCore;
+            return true;
+        }
+        case NEKO_EXPR_MUL: {
+            double leftCoeff = 0.0, rightCoeff = 0.0;
+            NekoExpr* leftCore = NULL;
+            NekoExpr* rightCore = NULL;
+            if (!splitScalarFactorExpr(expr->as.binary.lhs, &leftCoeff, &leftCore)
+                    || !splitScalarFactorExpr(expr->as.binary.rhs, &rightCoeff, &rightCore)) {
+                nekoFreeExpr(leftCore);
+                nekoFreeExpr(rightCore);
+                return false;
+            }
+            *coeff = leftCoeff * rightCoeff;
+            *core = nekoSimplify(nekoMul(leftCore, rightCore));
+            return *core != NULL;
+        }
+        case NEKO_EXPR_DIV:
+            if (expr->as.binary.rhs->kind == NEKO_EXPR_CONST) {
+                double numCoeff = 0.0;
+                NekoExpr* numCore = NULL;
+                if (!splitScalarFactorExpr(expr->as.binary.lhs, &numCoeff, &numCore)) return false;
+                *coeff = numCoeff / expr->as.binary.rhs->as.constant;
+                *core = numCore;
+                return true;
+            }
+            break;
+        default:
+            break;
+    }
+
+    *coeff = 1.0;
+    *core = nekoCloneExpr(expr);
+    return *core != NULL;
+}
+
+static NekoExpr* integrateRepeatedlyExpr(const NekoExpr* expr, int times, const char* var) {
+    NekoExpr* current = nekoCloneExpr(expr);
+    if (!current) return NULL;
+
+    for (int i = 0; i < times; i++) {
+        double coeff = 1.0;
+        NekoExpr* core = NULL;
+        if (!splitScalarFactorExpr(current, &coeff, &core)) {
+            nekoFreeExpr(current);
+            return NULL;
+        }
+        NekoIntegralResult r = nekoIntegrateExpr(core, var);
+        nekoFreeExpr(core);
+        nekoFreeExpr(current);
+        if (r.status != NEKO_OK) {
+            nekoFreeExpr(r.expr);
+            return NULL;
+        }
+        current = nekoSimplify(scaleExpr(coeff, r.expr));
+    }
+    return nekoSimplify(current);
+}
+
+static NekoExpr* differentiateRepeatedlyExpr(const NekoExpr* expr, int times, const char* var) {
+    NekoExpr* current = nekoCloneExpr(expr);
+    if (!current) return NULL;
+
+    for (int i = 0; i < times; i++) {
+        NekoDiffResult r = nekoDifferentiateExpr(current, var);
+        nekoFreeExpr(current);
+        if (r.status != NEKO_OK) {
+            nekoFreeExpr(r.expr);
+            return NULL;
+        }
+        current = r.expr;
+    }
+    return nekoSimplify(current);
+}
+
+static NekoExpr* buildSecondOrderParticular(double p, double q, double r, NekoExpr* arg) {
+    if (fabs(r) <= 1e-12) {
+        nekoFreeExpr(arg);
+        return nekoConst(0.0);
+    }
+    if (fabs(q) > 1e-12) {
+        nekoFreeExpr(arg);
+        return nekoConst(r / q);
+    }
+    if (fabs(p) > 1e-12) return scaleExpr(r / p, arg);
+    return scaleExpr(0.5 * r, nekoPow(arg, nekoConst(2.0)));
+}
+
+static double secondOrderParticularAtZero(double p, double q, double r) {
+    (void)p;
+    if (fabs(r) <= 1e-12) return 0.0;
+    if (fabs(q) > 1e-12) return r / q;
+    return 0.0;
+}
+
+static double secondOrderParticularDerivAtZero(double p, double q, double r) {
+    if (fabs(r) <= 1e-12 || fabs(q) > 1e-12) return 0.0;
+    if (fabs(p) > 1e-12) return r / p;
+    return 0.0;
+}
+
+static NekoExpr* solveFirstOrderGeneralExpr(const NekoOde* ode) {
+    double k = ode->as.firstOrder.b / ode->as.firstOrder.a;
+    return nekoSimplify(nekoMul(constantSymbolExpr(1),
+                                nekoExp(scaleExpr(k, nekoVar("x")))));
+}
+
+static NekoExpr* solveFirstOrderInitialExpr(const NekoOde* ode) {
+    double k = ode->as.firstOrder.b / ode->as.firstOrder.a;
+    return nekoSimplify(scaleExpr(ode->as.firstOrder.y0,
+                                  nekoExp(scaleExpr(k, xShiftExpr(ode->as.firstOrder.x0)))));
+}
+
+static NekoExpr* solveSecondOrderGeneralExpr(const NekoOde* ode) {
+    double a = ode->as.secondOrder.a;
+    double b = ode->as.secondOrder.b;
+    double c = ode->as.secondOrder.c;
+    double d = ode->as.secondOrder.d;
+    double p = b / a;
+    double q = c / a;
+    double r = d / a;
+    double disc = b * b - 4.0 * a * c;
+    NekoExpr* hom = NULL;
+
+    if (disc > 1e-12) {
+        double s = sqrt(disc);
+        double r1 = (-b + s) / (2.0 * a);
+        double r2 = (-b - s) / (2.0 * a);
+        NekoExpr* x = nekoVar("x");
+        NekoExpr* t1 = nekoMul(constantSymbolExpr(1), nekoExp(scaleExpr(r1, nekoCloneExpr(x))));
+        NekoExpr* t2 = nekoMul(constantSymbolExpr(2), nekoExp(scaleExpr(r2, x)));
+        hom = nekoAdd(t1, t2);
+    } else if (disc < -1e-12) {
+        double alpha = -b / (2.0 * a);
+        double beta = sqrt(-disc) / (2.0 * fabs(a));
+        NekoExpr* x = nekoVar("x");
+        NekoExpr* cosTerm = nekoMul(constantSymbolExpr(1),
+                                    nekoCos(scaleExpr(beta, nekoCloneExpr(x))));
+        NekoExpr* sinTerm = nekoMul(constantSymbolExpr(2),
+                                    nekoSin(scaleExpr(beta, x)));
+        NekoExpr* inner = nekoAdd(cosTerm, sinTerm);
+        hom = nekoMul(nekoExp(scaleExpr(alpha, nekoVar("x"))), inner);
+    } else {
+        double root = -b / (2.0 * a);
+        NekoExpr* x = nekoVar("x");
+        NekoExpr* inner = nekoAdd(constantSymbolExpr(1),
+                                  nekoMul(constantSymbolExpr(2), nekoCloneExpr(x)));
+        hom = nekoMul(inner, nekoExp(scaleExpr(root, x)));
+    }
+
+    return nekoSimplify(nekoAdd(hom, buildSecondOrderParticular(p, q, r, nekoVar("x"))));
+}
+
+static NekoExpr* solveSecondOrderInitialExpr(const NekoOde* ode) {
+    double a = ode->as.secondOrder.a;
+    double b = ode->as.secondOrder.b;
+    double c = ode->as.secondOrder.c;
+    double d = ode->as.secondOrder.d;
+    double y0 = ode->as.secondOrder.y0;
+    double dy0 = ode->as.secondOrder.dy0;
+    double x0 = ode->as.secondOrder.x0;
+    double p = b / a;
+    double q = c / a;
+    double r = d / a;
+    double disc = b * b - 4.0 * a * c;
+    double yShift = y0 - secondOrderParticularAtZero(p, q, r);
+    double dyShift = dy0 - secondOrderParticularDerivAtZero(p, q, r);
+    NekoExpr* hom = NULL;
+
+    if (disc > 1e-12) {
+        double s = sqrt(disc);
+        double r1 = (-b + s) / (2.0 * a);
+        double r2 = (-b - s) / (2.0 * a);
+        double A = (dyShift - r2 * yShift) / (r1 - r2);
+        double B = yShift - A;
+        NekoExpr* t = xShiftExpr(x0);
+        NekoExpr* left = scaleExpr(A, nekoExp(scaleExpr(r1, nekoCloneExpr(t))));
+        NekoExpr* right = scaleExpr(B, nekoExp(scaleExpr(r2, t)));
+        hom = nekoAdd(left, right);
+    } else if (disc < -1e-12) {
+        double alpha = -b / (2.0 * a);
+        double beta = sqrt(-disc) / (2.0 * fabs(a));
+        double A = yShift;
+        double B = (dyShift - alpha * yShift) / beta;
+        NekoExpr* t = xShiftExpr(x0);
+        NekoExpr* left = scaleExpr(A, nekoCos(scaleExpr(beta, nekoCloneExpr(t))));
+        NekoExpr* right = scaleExpr(B, nekoSin(scaleExpr(beta, t)));
+        NekoExpr* inner = nekoAdd(left, right);
+        hom = nekoMul(nekoExp(scaleExpr(alpha, xShiftExpr(x0))), inner);
+    } else {
+        double root = -b / (2.0 * a);
+        double A = yShift;
+        double B = dyShift - root * yShift;
+        NekoExpr* t = xShiftExpr(x0);
+        NekoExpr* inner = nekoAdd(nekoConst(A), scaleExpr(B, nekoCloneExpr(t)));
+        hom = nekoMul(inner, nekoExp(scaleExpr(root, t)));
+    }
+
+    return nekoSimplify(nekoAdd(hom, buildSecondOrderParticular(p, q, r, xShiftExpr(x0))));
+}
+
+static NekoExpr* solveNthOrderGeneralExpr(const NekoOde* ode) {
+    NekoExpr* scaledRhs = scaleExpr(1.0 / ode->as.nthOrder.a, nekoCloneExpr(ode->as.nthOrder.rhs));
+    NekoExpr* solution = integrateRepeatedlyExpr(scaledRhs, ode->as.nthOrder.order, "x");
+    nekoFreeExpr(scaledRhs);
+    if (!solution) return NULL;
+
+    for (int i = 0; i < ode->as.nthOrder.order; i++) {
+        solution = nekoSimplify(nekoAdd(solution, generalBasisTerm(i, i + 1)));
+    }
+    return solution;
+}
+
+static NekoExpr* solveNthOrderInitialExpr(const NekoOde* ode) {
+    if (!ode->as.nthOrder.initialValues) return NULL;
+
+    NekoExpr* scaledRhs = scaleExpr(1.0 / ode->as.nthOrder.a, nekoCloneExpr(ode->as.nthOrder.rhs));
+    NekoExpr* solution = integrateRepeatedlyExpr(scaledRhs, ode->as.nthOrder.order, "x");
+    nekoFreeExpr(scaledRhs);
+    if (!solution) return NULL;
+
+    for (int i = 0; i < ode->as.nthOrder.order; i++) {
+        NekoExpr* deriv = differentiateRepeatedlyExpr(solution, i, "x");
+        double solvedValue = deriv ? nekoEvalExpr(deriv, "x", ode->as.nthOrder.x0) : NAN;
+        double correction = ode->as.nthOrder.initialValues[i] - solvedValue;
+        nekoFreeExpr(deriv);
+        if (!isfinite(correction)) {
+            nekoFreeExpr(solution);
+            return NULL;
+        }
+        solution = nekoSimplify(nekoAdd(solution,
+                                        shiftedBasisTerm(i, ode->as.nthOrder.x0, correction)));
+    }
+    return solution;
+}
+
 NekoOde* nekoOdeBernoulli(const NekoFunc* P, const NekoFunc* Q, double n, double x0, double y0) {
     if (!P || !Q || !isfinite(n) || !isfinite(x0) || !isfinite(y0)) return NULL;
 
@@ -1353,9 +2070,28 @@ NekoOde* nekoOdeBernoulli(const NekoFunc* P, const NekoFunc* Q, double n, double
     return ode;
 }
 
+NekoOde* nekoOdeFirstOrderLinearConst(double a, double b, double x0, double y0) {
+    if (!isfinite(a) || !isfinite(b) || !isfinite(x0) || !isfinite(y0) || fabs(a) <= 1e-12) {
+        return NULL;
+    }
+
+    NekoOde* ode = calloc(1, sizeof(NekoOde));
+    if (!ode) return NULL;
+    ode->kind = NEKO_ODE_FIRST_ORDER_LINEAR_CONST;
+    ode->as.firstOrder.a = a;
+    ode->as.firstOrder.b = b;
+    ode->as.firstOrder.x0 = x0;
+    ode->as.firstOrder.y0 = y0;
+    return ode;
+}
+
 NekoOde* nekoOdeSecondOrderConst(double a, double b, double c, double x0, double y0, double dy0) {
+    return nekoOdeSecondOrderConstForced(a, b, c, 0.0, x0, y0, dy0);
+}
+
+NekoOde* nekoOdeSecondOrderConstForced(double a, double b, double c, double d, double x0, double y0, double dy0) {
     if (!isfinite(a) || !isfinite(b) || !isfinite(c) || !isfinite(x0)
-            || !isfinite(y0) || !isfinite(dy0) || fabs(a) <= 1e-12) {
+            || !isfinite(d) || !isfinite(y0) || !isfinite(dy0) || fabs(a) <= 1e-12) {
         return NULL;
     }
 
@@ -1365,9 +2101,42 @@ NekoOde* nekoOdeSecondOrderConst(double a, double b, double c, double x0, double
     ode->as.secondOrder.a = a;
     ode->as.secondOrder.b = b;
     ode->as.secondOrder.c = c;
+    ode->as.secondOrder.d = d;
     ode->as.secondOrder.x0 = x0;
     ode->as.secondOrder.y0 = y0;
     ode->as.secondOrder.dy0 = dy0;
+    return ode;
+}
+
+NekoOde* nekoOdeNthOrderIntegrable(int order, double a, const NekoExpr* rhs, double x0, const double* initialValues) {
+    if (order < 1 || !rhs || !isfinite(a) || fabs(a) <= 1e-12 || !isfinite(x0)) return NULL;
+
+    NekoOde* ode = calloc(1, sizeof(NekoOde));
+    if (!ode) return NULL;
+    ode->kind = NEKO_ODE_NTH_ORDER_INTEGRABLE;
+    ode->as.nthOrder.order = order;
+    ode->as.nthOrder.a = a;
+    ode->as.nthOrder.x0 = x0;
+    ode->as.nthOrder.rhs = nekoCloneExpr(rhs);
+    if (!ode->as.nthOrder.rhs) {
+        nekoFreeOde(ode);
+        return NULL;
+    }
+
+    if (initialValues) {
+        ode->as.nthOrder.initialValues = malloc((size_t)order * sizeof(double));
+        if (!ode->as.nthOrder.initialValues) {
+            nekoFreeOde(ode);
+            return NULL;
+        }
+        for (int i = 0; i < order; i++) {
+            if (!isfinite(initialValues[i])) {
+                nekoFreeOde(ode);
+                return NULL;
+            }
+            ode->as.nthOrder.initialValues[i] = initialValues[i];
+        }
+    }
     return ode;
 }
 
@@ -1410,6 +2179,12 @@ void nekoFreeOde(NekoOde* ode) {
             nekoFreeFunc(ode->as.bernoulli.P);
             nekoFreeFunc(ode->as.bernoulli.Q);
             break;
+        case NEKO_ODE_FIRST_ORDER_LINEAR_CONST:
+            break;
+        case NEKO_ODE_NTH_ORDER_INTEGRABLE:
+            nekoFreeExpr(ode->as.nthOrder.rhs);
+            free(ode->as.nthOrder.initialValues);
+            break;
         case NEKO_ODE_LINEAR_SYSTEM_CONST:
             free(ode->as.linearSystem.A);
             free(ode->as.linearSystem.y0);
@@ -1422,6 +2197,40 @@ void nekoFreeOde(NekoOde* ode) {
 
 bool nekoMatchOdePattern(const NekoOde* ode, NekoOdeKind kind) {
     return ode && ode->kind == kind;
+}
+
+NekoSolveResult nekoSolveOdeGeneral(const NekoOde* ode) {
+    if (!ode) return solveErr(NEKO_ERR_INVALID_ARG);
+
+    switch (ode->kind) {
+        case NEKO_ODE_FIRST_ORDER_LINEAR_CONST:
+            return solveOk(solveFirstOrderGeneralExpr(ode));
+        case NEKO_ODE_SECOND_ORDER_LINEAR_CONST:
+            return solveOk(solveSecondOrderGeneralExpr(ode));
+        case NEKO_ODE_NTH_ORDER_INTEGRABLE:
+            return solveOk(solveNthOrderGeneralExpr(ode));
+        case NEKO_ODE_BERNOULLI:
+        case NEKO_ODE_LINEAR_SYSTEM_CONST:
+            return solveErr(NEKO_ERR_UNSUPPORTED);
+    }
+    return solveErr(NEKO_ERR_UNSUPPORTED);
+}
+
+NekoSolveResult nekoSolveOdeInitialValue(const NekoOde* ode) {
+    if (!ode) return solveErr(NEKO_ERR_INVALID_ARG);
+
+    switch (ode->kind) {
+        case NEKO_ODE_FIRST_ORDER_LINEAR_CONST:
+            return solveOk(solveFirstOrderInitialExpr(ode));
+        case NEKO_ODE_SECOND_ORDER_LINEAR_CONST:
+            return solveOk(solveSecondOrderInitialExpr(ode));
+        case NEKO_ODE_NTH_ORDER_INTEGRABLE:
+            return solveOk(solveNthOrderInitialExpr(ode));
+        case NEKO_ODE_BERNOULLI:
+        case NEKO_ODE_LINEAR_SYSTEM_CONST:
+            return solveErr(NEKO_ERR_UNSUPPORTED);
+    }
+    return solveErr(NEKO_ERR_UNSUPPORTED);
 }
 
 static NekoOdeResult odeScalarError(NekoStatus status, double x) {
@@ -1466,36 +2275,15 @@ static NekoOdeResult evalBernoulli(const NekoOde* ode, double x, int steps) {
     return r;
 }
 
-static NekoOdeResult evalSecondOrderConst(const NekoOde* ode, double x) {
-    NekoOdeResult r = { .status = NEKO_OK, .x = x, .value = NAN, .iterations = 0 };
-    double a = ode->as.secondOrder.a;
-    double b = ode->as.secondOrder.b;
-    double c = ode->as.secondOrder.c;
-    double y0 = ode->as.secondOrder.y0;
-    double v0 = ode->as.secondOrder.dy0;
-    double t = x - ode->as.secondOrder.x0;
-    double disc = b * b - 4.0 * a * c;
-
-    if (disc > 1e-12) {
-        double s = sqrt(disc);
-        double r1 = (-b + s) / (2.0 * a);
-        double r2 = (-b - s) / (2.0 * a);
-        double A = (v0 - r2 * y0) / (r1 - r2);
-        double B = y0 - A;
-        r.value = A * exp(r1 * t) + B * exp(r2 * t);
-    } else if (disc < -1e-12) {
-        double alpha = -b / (2.0 * a);
-        double beta = sqrt(-disc) / (2.0 * fabs(a));
-        double A = y0;
-        double B = (v0 - alpha * y0) / beta;
-        r.value = exp(alpha * t) * (A * cos(beta * t) + B * sin(beta * t));
-    } else {
-        double root = -b / (2.0 * a);
-        double A = y0;
-        double B = v0 - root * y0;
-        r.value = (A + B * t) * exp(root * t);
+static NekoOdeResult evalClosedFormOde(const NekoOde* ode, double x) {
+    NekoSolveResult solved = nekoSolveOdeInitialValue(ode);
+    if (solved.status != NEKO_OK || !solved.expr) {
+        nekoFreeExpr(solved.expr);
+        return odeScalarError(solved.status, x);
     }
 
+    NekoOdeResult r = { .status = NEKO_OK, .x = x, .value = nekoEvalExpr(solved.expr, "x", x), .iterations = 0 };
+    nekoFreeExpr(solved.expr);
     if (!isfinite(r.value)) r.status = NEKO_ERR_DOMAIN;
     return r;
 }
@@ -1513,8 +2301,10 @@ NekoOdeResult nekoEvalOde(const NekoOde* ode, double x, int steps) {
     switch (ode->kind) {
         case NEKO_ODE_BERNOULLI:
             return evalBernoulli(ode, x, steps);
+        case NEKO_ODE_FIRST_ORDER_LINEAR_CONST:
         case NEKO_ODE_SECOND_ORDER_LINEAR_CONST:
-            return evalSecondOrderConst(ode, x);
+        case NEKO_ODE_NTH_ORDER_INTEGRABLE:
+            return evalClosedFormOde(ode, x);
         case NEKO_ODE_LINEAR_SYSTEM_CONST:
             return odeScalarError(NEKO_ERR_INVALID_ARG, x);
     }
@@ -1596,18 +2386,162 @@ static const char* unaryName(NekoExprKind kind) {
     }
 }
 
-static const char* binaryName(NekoExprKind kind) {
-    switch (kind) {
-        case NEKO_EXPR_ADD: return "+";
-        case NEKO_EXPR_SUB: return "-";
-        case NEKO_EXPR_MUL: return "*";
-        case NEKO_EXPR_DIV: return "/";
-        case NEKO_EXPR_POW: return "^";
-        default: return "?";
+static int exprPrecedence(const NekoExpr* expr) {
+    if (!expr) return 100;
+    switch (expr->kind) {
+        case NEKO_EXPR_ADD:
+        case NEKO_EXPR_SUB:
+            return 10;
+        case NEKO_EXPR_MUL:
+        case NEKO_EXPR_DIV:
+            return 20;
+        case NEKO_EXPR_NEG:
+            return 30;
+        case NEKO_EXPR_POW:
+            return 40;
+        default:
+            return 50;
     }
 }
 
-void nekoPrintExpr(const NekoExpr* expr) {
+typedef struct {
+    const NekoExpr* expr;
+    int sign;
+} PrintTerm;
+
+typedef struct {
+    PrintTerm* items;
+    size_t len;
+    size_t cap;
+} PrintTermVec;
+
+static bool printTermVecPush(PrintTermVec* vec, const NekoExpr* expr, int sign) {
+    if (!vec || !expr) return false;
+    if (vec->len == vec->cap) {
+        size_t nextCap = vec->cap ? vec->cap * 2 : 4;
+        PrintTerm* next = realloc(vec->items, nextCap * sizeof(PrintTerm));
+        if (!next) return false;
+        vec->items = next;
+        vec->cap = nextCap;
+    }
+    vec->items[vec->len++] = (PrintTerm){ .expr = expr, .sign = sign };
+    return true;
+}
+
+static void printTermVecFree(PrintTermVec* vec) {
+    if (!vec) return;
+    free(vec->items);
+    vec->items = NULL;
+    vec->len = 0;
+    vec->cap = 0;
+}
+
+static bool collectPrintTerms(const NekoExpr* expr, int sign, PrintTermVec* vec) {
+    if (!expr || !vec) return false;
+    switch (expr->kind) {
+        case NEKO_EXPR_ADD:
+            return collectPrintTerms(expr->as.binary.lhs, sign, vec)
+                && collectPrintTerms(expr->as.binary.rhs, sign, vec);
+        case NEKO_EXPR_SUB:
+            return collectPrintTerms(expr->as.binary.lhs, sign, vec)
+                && collectPrintTerms(expr->as.binary.rhs, -sign, vec);
+        case NEKO_EXPR_NEG:
+            return collectPrintTerms(expr->as.unary.arg, -sign, vec);
+        default:
+            return printTermVecPush(vec, expr, sign);
+    }
+}
+
+typedef struct {
+    const NekoExpr** items;
+    size_t len;
+    size_t cap;
+} ExprRefVec;
+
+static bool exprRefVecPush(ExprRefVec* vec, const NekoExpr* expr) {
+    if (!vec || !expr) return false;
+    if (vec->len == vec->cap) {
+        size_t nextCap = vec->cap ? vec->cap * 2 : 4;
+        const NekoExpr** next = realloc(vec->items, nextCap * sizeof(NekoExpr*));
+        if (!next) return false;
+        vec->items = next;
+        vec->cap = nextCap;
+    }
+    vec->items[vec->len++] = expr;
+    return true;
+}
+
+static void exprRefVecFree(ExprRefVec* vec) {
+    if (!vec) return;
+    free(vec->items);
+    vec->items = NULL;
+    vec->len = 0;
+    vec->cap = 0;
+}
+
+static bool collectMulFactors(const NekoExpr* expr, ExprRefVec* vec) {
+    if (!expr || !vec) return false;
+    if (expr->kind == NEKO_EXPR_MUL) {
+        return collectMulFactors(expr->as.binary.lhs, vec)
+            && collectMulFactors(expr->as.binary.rhs, vec);
+    }
+    return exprRefVecPush(vec, expr);
+}
+
+static void printExprPrec(const NekoExpr* expr, int parentPrec);
+
+static void printAdditiveExpr(const NekoExpr* expr, int parentPrec) {
+    PrintTermVec terms = {0};
+    if (!collectPrintTerms(expr, 1, &terms) || terms.len == 0) {
+        printTermVecFree(&terms);
+        printf("<null>");
+        return;
+    }
+
+    int needsParens = parentPrec > 10;
+    if (needsParens) putchar('(');
+
+    for (size_t i = 0; i < terms.len; i++) {
+        if (i == 0) {
+            if (terms.items[i].sign < 0) {
+                putchar('-');
+                printExprPrec(terms.items[i].expr, 30);
+            } else {
+                printExprPrec(terms.items[i].expr, 10);
+            }
+        } else {
+            printf(terms.items[i].sign < 0 ? " - " : " + ");
+            printExprPrec(terms.items[i].expr, 10);
+        }
+    }
+
+    if (needsParens) putchar(')');
+    printTermVecFree(&terms);
+}
+
+static void printMultiplicativeExpr(const NekoExpr* expr, int parentPrec) {
+    ExprRefVec factors = {0};
+    if (!collectMulFactors(expr, &factors) || factors.len == 0) {
+        exprRefVecFree(&factors);
+        printf("<null>");
+        return;
+    }
+
+    int needsParens = parentPrec > 20;
+    if (needsParens) putchar('(');
+    for (size_t i = 0; i < factors.len; i++) {
+        if (i) printf(" * ");
+        int childPrec = exprPrecedence(factors.items[i]);
+        int childNeedsParens = childPrec < 20 || factors.items[i]->kind == NEKO_EXPR_NEG;
+        if (childNeedsParens) putchar('(');
+        printExprPrec(factors.items[i], childNeedsParens ? 0 : 20);
+        if (childNeedsParens) putchar(')');
+    }
+    if (needsParens) putchar(')');
+    exprRefVecFree(&factors);
+}
+
+static void printExprPrec(const NekoExpr* expr, int parentPrec) {
     if (!expr) {
         printf("<null>");
         return;
@@ -1616,26 +2550,41 @@ void nekoPrintExpr(const NekoExpr* expr) {
     switch (expr->kind) {
         case NEKO_EXPR_CONST:
             printf("%g", expr->as.constant);
-            break;
+            return;
         case NEKO_EXPR_VAR:
             printf("%s", expr->as.var ? expr->as.var : "?");
-            break;
+            return;
         case NEKO_EXPR_ADD:
         case NEKO_EXPR_SUB:
+            printAdditiveExpr(expr, parentPrec);
+            return;
         case NEKO_EXPR_MUL:
-        case NEKO_EXPR_DIV:
-        case NEKO_EXPR_POW:
-            putchar('(');
-            nekoPrintExpr(expr->as.binary.lhs);
-            printf(" %s ", binaryName(expr->kind));
-            nekoPrintExpr(expr->as.binary.rhs);
-            putchar(')');
-            break;
+            printMultiplicativeExpr(expr, parentPrec);
+            return;
+        case NEKO_EXPR_DIV: {
+            int needsParens = parentPrec > 20;
+            if (needsParens) putchar('(');
+            printExprPrec(expr->as.binary.lhs, 20);
+            printf(" / ");
+            printExprPrec(expr->as.binary.rhs, 21);
+            if (needsParens) putchar(')');
+            return;
+        }
+        case NEKO_EXPR_POW: {
+            int needsParens = parentPrec > 40;
+            if (needsParens) putchar('(');
+            printExprPrec(expr->as.binary.lhs, 40);
+            printf(" ^ ");
+            printExprPrec(expr->as.binary.rhs, 41);
+            if (needsParens) putchar(')');
+            return;
+        }
         case NEKO_EXPR_NEG:
-            printf("(-");
-            nekoPrintExpr(expr->as.unary.arg);
-            putchar(')');
-            break;
+            if (parentPrec > 30) putchar('(');
+            putchar('-');
+            printExprPrec(expr->as.unary.arg, 30);
+            if (parentPrec > 30) putchar(')');
+            return;
         case NEKO_EXPR_SIN:
         case NEKO_EXPR_COS:
         case NEKO_EXPR_TAN:
@@ -1647,16 +2596,20 @@ void nekoPrintExpr(const NekoExpr* expr) {
         case NEKO_EXPR_SQRT:
         case NEKO_EXPR_ABS:
             printf("%s(", unaryName(expr->kind));
-            nekoPrintExpr(expr->as.unary.arg);
+            printExprPrec(expr->as.unary.arg, 0);
             putchar(')');
-            break;
+            return;
         case NEKO_EXPR_CALL:
             printf("%s(", expr->as.call.name ? expr->as.call.name : "?");
             for (int i = 0; i < expr->as.call.nargs; i++) {
                 if (i) printf(", ");
-                nekoPrintExpr(expr->as.call.args[i]);
+                printExprPrec(expr->as.call.args[i], 0);
             }
             putchar(')');
-            break;
+            return;
     }
+}
+
+void nekoPrintExpr(const NekoExpr* expr) {
+    printExprPrec(expr, 0);
 }

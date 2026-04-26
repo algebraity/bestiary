@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <math.h>
+#include <string.h>
 #include "neko.h"
 
 static int testsRun = 0;
@@ -41,6 +42,60 @@ static NekoExpr* integrateOrNull(NekoExpr* expr) {
     NekoIntegralResult r = nekoIntegrateExpr(expr, "x");
     CHECK(r.status == NEKO_OK && r.expr != NULL, "integrate returned expression");
     return r.expr;
+}
+
+static NekoExpr* solveGeneralOrNull(const NekoOde* ode) {
+    NekoSolveResult r = nekoSolveOdeGeneral(ode);
+    CHECK(r.status == NEKO_OK && r.expr != NULL, "general ODE solve returned expression");
+    return r.expr;
+}
+
+static NekoExpr* solveInitialOrNull(const NekoOde* ode) {
+    NekoSolveResult r = nekoSolveOdeInitialValue(ode);
+    CHECK(r.status == NEKO_OK && r.expr != NULL, "initial-value ODE solve returned expression");
+    return r.expr;
+}
+
+static int exprEqualTest(const NekoExpr* a, const NekoExpr* b) {
+    if (!a || !b || a->kind != b->kind) return 0;
+
+    switch (a->kind) {
+        case NEKO_EXPR_CONST:
+            return fabs(a->as.constant - b->as.constant) <= 1e-9;
+        case NEKO_EXPR_VAR:
+            return a->as.var && b->as.var && strcmp(a->as.var, b->as.var) == 0;
+        case NEKO_EXPR_ADD:
+        case NEKO_EXPR_SUB:
+        case NEKO_EXPR_MUL:
+        case NEKO_EXPR_DIV:
+        case NEKO_EXPR_POW:
+            return exprEqualTest(a->as.binary.lhs, b->as.binary.lhs)
+                && exprEqualTest(a->as.binary.rhs, b->as.binary.rhs);
+        case NEKO_EXPR_NEG:
+        case NEKO_EXPR_SIN:
+        case NEKO_EXPR_COS:
+        case NEKO_EXPR_TAN:
+        case NEKO_EXPR_ASIN:
+        case NEKO_EXPR_ACOS:
+        case NEKO_EXPR_ATAN:
+        case NEKO_EXPR_EXP:
+        case NEKO_EXPR_LOG:
+        case NEKO_EXPR_SQRT:
+        case NEKO_EXPR_ABS:
+            return exprEqualTest(a->as.unary.arg, b->as.unary.arg);
+        case NEKO_EXPR_CALL:
+            if (!a->as.call.name || !b->as.call.name
+                    || strcmp(a->as.call.name, b->as.call.name) != 0
+                    || a->as.call.nargs != b->as.call.nargs) {
+                return 0;
+            }
+            for (int i = 0; i < a->as.call.nargs; i++) {
+                if (!exprEqualTest(a->as.call.args[i], b->as.call.args[i])) return 0;
+            }
+            return 1;
+    }
+
+    return 0;
 }
 
 static void testPolynomialDerivative(void) {
@@ -265,6 +320,115 @@ static void testNumericalApplications(void) {
     nekoFreeExpr(sq);
 }
 
+static void testSimplification(void) {
+    section("simplification");
+
+    NekoExpr* orderedPolynomial = nekoSimplify(
+        nekoAdd(
+            nekoPow(nekoVar("x"), nekoConst(3.0)),
+            nekoAdd(
+                nekoConst(1.0),
+                nekoMul(nekoConst(2.0), nekoVar("x"))
+            )
+        )
+    );
+    NekoExpr* expectedOrderedPolynomial = nekoAdd(
+        nekoAdd(
+            nekoConst(1.0),
+            nekoMul(nekoConst(2.0), nekoVar("x"))
+        ),
+        nekoPow(nekoVar("x"), nekoConst(3.0))
+    );
+    CHECK(exprEqualTest(orderedPolynomial, expectedOrderedPolynomial), "polynomial terms ordered by degree");
+    nekoFreeExpr(orderedPolynomial);
+    nekoFreeExpr(expectedOrderedPolynomial);
+
+    NekoExpr* normalizedProduct = nekoSimplify(
+        nekoMul(
+            nekoConst(0.5),
+            nekoMul(nekoVar("C1"), nekoVar("x"))
+        )
+    );
+    NekoExpr* expectedProduct = nekoMul(
+        nekoMul(nekoConst(0.5), nekoVar("C1")),
+        nekoVar("x")
+    );
+    CHECK(exprEqualTest(normalizedProduct, expectedProduct), "scalar factor moved to readable coefficient position");
+    nekoFreeExpr(normalizedProduct);
+    nekoFreeExpr(expectedProduct);
+
+    NekoExpr* normalizedDivision = nekoSimplify(
+        nekoMul(
+            nekoConst(1.0 / 24.0),
+            nekoDiv(nekoPow(nekoVar("x"), nekoConst(5.0)), nekoConst(5.0))
+        )
+    );
+    NekoExpr* expectedDivision = nekoMul(
+        nekoConst(1.0 / 120.0),
+        nekoPow(nekoVar("x"), nekoConst(5.0))
+    );
+    CHECK(exprEqualTest(normalizedDivision, expectedDivision), "scalar factor combines through division");
+    nekoFreeExpr(normalizedDivision);
+    nekoFreeExpr(expectedDivision);
+
+    NekoOde* zeroFifth = nekoOdeNthOrderIntegrable(5, 1.0, nekoConst(0.0), 0.0, NULL);
+    CHECK(zeroFifth != NULL, "fifth-order zero ODE constructed");
+    NekoExpr* zeroFifthGeneral = solveGeneralOrNull(zeroFifth);
+    NekoExpr* expectedGeneral = nekoAdd(
+        nekoAdd(
+            nekoAdd(
+                nekoAdd(
+                    nekoVar("C1"),
+                    nekoMul(nekoVar("C2"), nekoVar("x"))
+                ),
+                nekoMul(
+                    nekoMul(nekoConst(0.5), nekoVar("C3")),
+                    nekoPow(nekoVar("x"), nekoConst(2.0))
+                )
+            ),
+            nekoMul(
+                nekoMul(nekoConst(1.0 / 6.0), nekoVar("C4")),
+                nekoPow(nekoVar("x"), nekoConst(3.0))
+            )
+        ),
+        nekoMul(
+            nekoMul(nekoConst(1.0 / 24.0), nekoVar("C5")),
+            nekoPow(nekoVar("x"), nekoConst(4.0))
+        )
+    );
+    CHECK(exprEqualTest(zeroFifthGeneral, expectedGeneral), "general repeated-integration basis terms stay normalized");
+    nekoFreeExpr(expectedGeneral);
+    nekoFreeExpr(zeroFifthGeneral);
+    nekoFreeOde(zeroFifth);
+
+    NekoOde* quarticGeneralOde = nekoOdeNthOrderIntegrable(4, 1.0, nekoVar("x"), 0.0, NULL);
+    CHECK(quarticGeneralOde != NULL, "fourth-order polynomial ODE constructed");
+    NekoExpr* quarticGeneral = solveGeneralOrNull(quarticGeneralOde);
+    NekoExpr* expectedQuarticGeneral = nekoAdd(
+        nekoAdd(
+            nekoAdd(
+                nekoAdd(
+                    nekoVar("C1"),
+                    nekoMul(nekoVar("C2"), nekoVar("x"))
+                ),
+                nekoMul(
+                    nekoMul(nekoConst(0.5), nekoVar("C3")),
+                    nekoPow(nekoVar("x"), nekoConst(2.0))
+                )
+            ),
+            nekoMul(
+                nekoMul(nekoConst(1.0 / 6.0), nekoVar("C4")),
+                nekoPow(nekoVar("x"), nekoConst(3.0))
+            )
+        ),
+        nekoMul(nekoConst(1.0 / 120.0), nekoPow(nekoVar("x"), nekoConst(5.0)))
+    );
+    CHECK(exprEqualTest(quarticGeneral, expectedQuarticGeneral), "general integrated polynomial solution ordered by degree");
+    nekoFreeExpr(expectedQuarticGeneral);
+    nekoFreeExpr(quarticGeneral);
+    nekoFreeOde(quarticGeneralOde);
+}
+
 static void testOdeSolvers(void) {
     section("ODE solvers");
 
@@ -288,6 +452,76 @@ static void testOdeSolvers(void) {
     CHECK(oscEval.status == NEKO_OK, "second-order eval status");
     CHECK_CLOSE(oscEval.value, 1.0, 1e-10, "second-order oscillator value");
 
+    NekoExpr* oscGeneral = solveGeneralOrNull(osc);
+    nekoFreeExpr(oscGeneral);
+
+    // 2 y' = 6 y, y(1)=5 => y = 5 exp(3(x-1)).
+    NekoOde* first = nekoOdeFirstOrderLinearConst(2.0, 6.0, 1.0, 5.0);
+    CHECK(first != NULL, "first-order linear ODE constructed");
+    CHECK(nekoMatchOdePattern(first, NEKO_ODE_FIRST_ORDER_LINEAR_CONST), "first-order pattern matched");
+    NekoExpr* firstSolved = solveInitialOrNull(first);
+    CHECK_CLOSE(nekoEvalExpr(firstSolved, "x", 1.5), 5.0 * exp(1.5), 1e-10, "first-order symbolic solution value");
+    NekoOdeResult firstEval = nekoEvalOde(first, 1.5, 0);
+    CHECK(firstEval.status == NEKO_OK, "first-order eval status");
+    CHECK_CLOSE(firstEval.value, 5.0 * exp(1.5), 1e-10, "first-order evaluator value");
+    nekoFreeExpr(firstSolved);
+
+    // y'' + y = 1, y(0)=2, y'(0)=0 => y = 1 + cos(x).
+    NekoOde* forced1 = nekoOdeSecondOrderConstForced(1.0, 0.0, 1.0, 1.0, 0.0, 2.0, 0.0);
+    CHECK(forced1 != NULL, "forced second-order ODE constructed");
+    NekoExpr* forced1Solved = solveInitialOrNull(forced1);
+    CHECK_CLOSE(nekoEvalExpr(forced1Solved, "x", M_PI), 0.0, 1e-10, "forced second-order constant particular value");
+    NekoOdeResult forced1Eval = nekoEvalOde(forced1, M_PI, 0);
+    CHECK(forced1Eval.status == NEKO_OK, "forced second-order eval status");
+    CHECK_CLOSE(forced1Eval.value, 0.0, 1e-10, "forced second-order evaluator value");
+    nekoFreeExpr(forced1Solved);
+
+    // y'' = 2, y(0)=1, y'(0)=3 => y = 1 + 3x + x^2.
+    NekoOde* forced2 = nekoOdeSecondOrderConstForced(1.0, 0.0, 0.0, 2.0, 0.0, 1.0, 3.0);
+    CHECK(forced2 != NULL, "double-integral ODE constructed");
+    NekoExpr* forced2Solved = solveInitialOrNull(forced2);
+    CHECK_CLOSE(nekoEvalExpr(forced2Solved, "x", 2.0), 11.0, 1e-10, "double-integral symbolic solution value");
+    NekoOdeResult forced2Eval = nekoEvalOde(forced2, 2.0, 0);
+    CHECK(forced2Eval.status == NEKO_OK, "double-integral eval status");
+    CHECK_CLOSE(forced2Eval.value, 11.0, 1e-10, "double-integral evaluator value");
+    nekoFreeExpr(forced2Solved);
+
+    // y' = 3x^2 - 4x + 1, y(0)=2 => y = x^3 - 2x^2 + x + 2.
+    NekoExpr* polyRhs = nekoAdd(
+        nekoSub(
+            nekoMul(nekoConst(3.0), nekoPow(nekoVar("x"), nekoConst(2.0))),
+            nekoMul(nekoConst(4.0), nekoVar("x"))
+        ),
+        nekoConst(1.0)
+    );
+    double polyInit[] = {2.0};
+    NekoOde* poly = nekoOdeNthOrderIntegrable(1, 1.0, polyRhs, 0.0, polyInit);
+    CHECK(poly != NULL, "first-order integrable ODE constructed");
+    CHECK(nekoMatchOdePattern(poly, NEKO_ODE_NTH_ORDER_INTEGRABLE), "integrable ODE pattern matched");
+    NekoExpr* polySolved = solveInitialOrNull(poly);
+    CHECK_CLOSE(nekoEvalExpr(polySolved, "x", 3.0), 14.0, 1e-9, "integrated polynomial ODE value");
+    NekoOdeResult polyEval = nekoEvalOde(poly, 3.0, 0);
+    CHECK(polyEval.status == NEKO_OK, "integrated polynomial eval status");
+    CHECK_CLOSE(polyEval.value, 14.0, 1e-9, "integrated polynomial evaluator value");
+    nekoFreeExpr(polySolved);
+
+    // y'''' = x should integrate four times and differentiate back to x.
+    double quarticInit[] = {1.0, 2.0, 3.0, 4.0};
+    NekoOde* quartic = nekoOdeNthOrderIntegrable(4, 1.0, nekoVar("x"), 0.0, quarticInit);
+    CHECK(quartic != NULL, "fourth-order integrable ODE constructed");
+    NekoExpr* quarticGeneral = solveGeneralOrNull(quartic);
+    NekoExpr* quarticFourthDeriv = quarticGeneral;
+    for (int i = 0; i < 4; i++) quarticFourthDeriv = diffOrNull(quarticFourthDeriv);
+    CHECK_CLOSE(nekoEvalExpr(quarticFourthDeriv, "x", 2.0), 2.0, 1e-8, "fourth derivative of general repeated-integral solution");
+    nekoFreeExpr(quarticFourthDeriv);
+
+    NekoExpr* quarticSolved = solveInitialOrNull(quartic);
+    CHECK_CLOSE(nekoEvalExpr(quarticSolved, "x", 2.0), 16.6, 1e-9, "fourth-order repeated integration value");
+    NekoOdeResult quarticEval = nekoEvalOde(quartic, 2.0, 0);
+    CHECK(quarticEval.status == NEKO_OK, "fourth-order eval status");
+    CHECK_CLOSE(quarticEval.value, 16.6, 1e-9, "fourth-order evaluator value");
+    nekoFreeExpr(quarticSolved);
+
     // y' = A y, A = [[0,-1],[1,0]], y(0)=(1,0) => (cos x, sin x).
     double A[] = {0.0, -1.0, 1.0, 0.0};
     double y0[] = {1.0, 0.0};
@@ -302,8 +536,14 @@ static void testOdeSolvers(void) {
 
     nekoFreeOdeSystemResult(sysEval);
     nekoFreeOde(sys);
+    nekoFreeOde(quartic);
+    nekoFreeOde(poly);
+    nekoFreeOde(forced2);
+    nekoFreeOde(forced1);
+    nekoFreeOde(first);
     nekoFreeOde(osc);
     nekoFreeOde(bern);
+    nekoFreeExpr(polyRhs);
     nekoFreeFunc(one);
     nekoFreeFunc(zero);
     nekoFreeExpr(oneExpr);
@@ -318,6 +558,7 @@ int main(void) {
     testGeneralPowerRule();
     testSymbolicIntegration();
     testNumericalApplications();
+    testSimplification();
     testOdeSolvers();
 
     printf("\n========================================\n");
