@@ -1,6 +1,7 @@
 #include<stdlib.h>
 #include<stdio.h>
 #include<math.h>
+#include<string.h>
 #include "hebi.h"
 #include "poni.h"
 #include "sokko.h"
@@ -11,6 +12,15 @@
    and R() lifts a double into one. */
 static inline double re(MatrixElement e) { return e.value.real; }
 static inline MatrixElement R(double x) { return elemFromReal(x); }
+
+static char* poniDupstr(const char* s) {
+    if (!s) return NULL;
+    size_t n = strlen(s);
+    char* copy = malloc(n + 1);
+    if (!copy) return NULL;
+    memcpy(copy, s, n + 1);
+    return copy;
+}
 
 /* ---------- Kinematics primitives ---------- */
 
@@ -146,7 +156,8 @@ Vector* velocityAtPosition(Vector* initPos, Vector* initVel, Vector* acceleratio
 ProjectileInfo* getProjectileInfo(double initVel, double angle, double initHeight) {
     if (initVel < 0 || angle < 0 || angle > 90) return NULL;
 
-    double radAngle = angle * M_PI / 180.0;
+    const double degreesToRadians = 0.017453292519943295;
+    double radAngle = angle * degreesToRadians;
     double timeOfFlight = (initVel * sin(radAngle) + sqrt(initVel * sin(radAngle) * initVel * sin(radAngle) + 2 * A_GRAVITY * initHeight)) / A_GRAVITY;
     double range = initVel * cos(radAngle) * timeOfFlight;
     double peakHeight = initHeight + (initVel * sin(radAngle)) * (initVel * sin(radAngle)) / (2 * A_GRAVITY);
@@ -346,6 +357,155 @@ Force* frictionForce(Force* normal, double mu, Vector* direction) {
     return constructForce("friction", vec, tail);
 }
 
+Force* springForce(Body* body, Vector* anchor, double k, double restLength) {
+    if (!body || !anchor || !body->pos) return NULL;
+    if (k < 0 || restLength < 0) return NULL;
+    if (body->pos->numRows != anchor->numRows) return NULL;
+
+    Vector* displacement = subtractVectors(body->pos, anchor);
+    if (!displacement) return NULL;
+
+    double distance = l2Norm(displacement);
+    Vector* forceVec = constructVector(body->pos->numRows);
+    if (!forceVec) {
+        freeVector(displacement);
+        return NULL;
+    }
+
+    if (distance > 0) {
+        double magnitude = -k * (distance - restLength);
+        for (int i = 0; i < forceVec->numRows; i++) {
+            double component = re(getEntry(displacement, i, 0)) / distance;
+            setEntry(forceVec, i, 0, R(magnitude * component));
+        }
+    } else {
+        for (int i = 0; i < forceVec->numRows; i++) setEntry(forceVec, i, 0, R(0));
+    }
+
+    freeVector(displacement);
+
+    Vector* tail = copyMatrix(body->pos);
+    if (!tail) {
+        freeVector(forceVec);
+        return NULL;
+    }
+
+    return constructForce(poniDupstr("spring"), forceVec, tail);
+}
+
+Force* dragForce(Body* body, double coeff) {
+    if (!body || !body->velocity || !body->pos || coeff < 0) return NULL;
+
+    Vector* forceVec = constructVector(body->velocity->numRows);
+    if (!forceVec) return NULL;
+    for (int i = 0; i < forceVec->numRows; i++) {
+        setEntry(forceVec, i, 0, R(-coeff * re(getEntry(body->velocity, i, 0))));
+    }
+
+    Vector* tail = copyMatrix(body->pos);
+    if (!tail) {
+        freeVector(forceVec);
+        return NULL;
+    }
+
+    return constructForce(poniDupstr("drag"), forceVec, tail);
+}
+
+Force* gravitationalForce(Body* body, Body* other) {
+    if (!body || !other || !body->pos || !other->pos) return NULL;
+    if (body->pos->numRows != other->pos->numRows) return NULL;
+
+    Vector* displacement = subtractVectors(other->pos, body->pos);
+    if (!displacement) return NULL;
+    double distance = l2Norm(displacement);
+    if (distance == 0) {
+        freeVector(displacement);
+        return NULL;
+    }
+
+    double magnitude = A_BIG_G * body->mass * other->mass / (distance * distance * distance);
+    Vector* forceVec = constructVector(displacement->numRows);
+    if (!forceVec) {
+        freeVector(displacement);
+        return NULL;
+    }
+    for (int i = 0; i < forceVec->numRows; i++) {
+        setEntry(forceVec, i, 0, R(magnitude * re(getEntry(displacement, i, 0))));
+    }
+
+    freeVector(displacement);
+
+    Vector* tail = copyMatrix(body->pos);
+    if (!tail) {
+        freeVector(forceVec);
+        return NULL;
+    }
+
+    return constructForce(poniDupstr("gravitation"), forceVec, tail);
+}
+
+Body* stepBody(Body* body, double timeStep) {
+    if (!body || !body->pos || !body->velocity || timeStep < 0) return NULL;
+
+    Vector* acceleration = accelerationFromForce(body);
+    if (!acceleration) return NULL;
+    if (acceleration->numRows != body->pos->numRows || acceleration->numRows != body->velocity->numRows) {
+        freeVector(acceleration);
+        return NULL;
+    }
+
+    for (int i = 0; i < body->pos->numRows; i++) {
+        double pos = re(getEntry(body->pos, i, 0));
+        double vel = re(getEntry(body->velocity, i, 0));
+        double accel = re(getEntry(acceleration, i, 0));
+        setEntry(body->pos, i, 0, R(pos + vel * timeStep + 0.5 * accel * timeStep * timeStep));
+        setEntry(body->velocity, i, 0, R(vel + accel * timeStep));
+    }
+
+    freeVector(acceleration);
+    return body;
+}
+
+BodySystem* constructBodySystem(Body** bodies, int nBodies) {
+    if (!bodies || nBodies < 1) return NULL;
+
+    BodySystem* system = malloc(sizeof(BodySystem));
+    if (!system) return NULL;
+    system->bodies = malloc((size_t)nBodies * sizeof(Body*));
+    if (!system->bodies) {
+        free(system);
+        return NULL;
+    }
+
+    system->nBodies = nBodies;
+    for (int i = 0; i < nBodies; i++) {
+        if (!bodies[i]) {
+            free(system->bodies);
+            free(system);
+            return NULL;
+        }
+        system->bodies[i] = bodies[i];
+    }
+
+    return system;
+}
+
+BodySystem* stepBodySystem(BodySystem* system, double timeStep) {
+    if (!system || timeStep < 0) return NULL;
+    for (int i = 0; i < system->nBodies; i++) {
+        if (!stepBody(system->bodies[i], timeStep)) return NULL;
+    }
+    return system;
+}
+
+BodySystem* simulateBodySystem(BodySystem* system, double timeStep, int steps) {
+    if (!system || timeStep < 0 || steps < 0) return NULL;
+    for (int i = 0; i < steps; i++) {
+        if (!stepBodySystem(system, timeStep)) return NULL;
+    }
+    return system;
+}
+
 /* ---------- Conservation quantities ---------- */
 
 // Compute the magnitude of the momentum of a body
@@ -389,6 +549,46 @@ double gravPotentialEnergy(Body* body, double height) {
 double springPotentialEnergy(double k, double x) {
     if (k < 0 || x < 0) return NAN;
     return 0.5 * k * x * x;
+}
+
+Vector* totalMomentum(BodySystem* system) {
+    if (!system || system->nBodies < 1 || !system->bodies || !system->bodies[0]) return NULL;
+
+    int dim = system->bodies[0]->velocity->numRows;
+    Vector* total = constructVector(dim);
+    if (!total) return NULL;
+    for (int j = 0; j < dim; j++) setEntry(total, j, 0, R(0));
+
+    for (int i = 0; i < system->nBodies; i++) {
+        Body* body = system->bodies[i];
+        if (!body || !body->velocity || body->velocity->numRows != dim) {
+            freeVector(total);
+            return NULL;
+        }
+        for (int j = 0; j < dim; j++) {
+            double prev = re(getEntry(total, j, 0));
+            double add = body->mass * re(getEntry(body->velocity, j, 0));
+            setEntry(total, j, 0, R(prev + add));
+        }
+    }
+
+    return total;
+}
+
+double totalEnergy(BodySystem* system) {
+    if (!system || !system->bodies) return NAN;
+
+    double total = 0;
+    for (int i = 0; i < system->nBodies; i++) {
+        Body* body = system->bodies[i];
+        if (!body) return NAN;
+        total += kineticEnergy(body);
+        if (body->pos && body->pos->numRows >= 2) {
+            total += gravPotentialEnergy(body, re(getEntry(body->pos, 1, 0)));
+        }
+    }
+
+    return total;
 }
 
 // Compute the work done on an object by a force over a distance

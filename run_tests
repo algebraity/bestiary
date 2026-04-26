@@ -2,10 +2,16 @@
 
 set -euo pipefail
 
-make tests
-build/bin/test_ookami
-build/bin/test_sokko
-build/bin/test_usagi
-build/bin/test_poni
-build/bin/test_tora
-build/bin/test_neko
+platform="${PLATFORM:-linux}"
+exeext=""
+if [ "$platform" = "windows" ]; then
+    exeext=".exe"
+fi
+
+make PLATFORM="$platform" tests
+build/bin/$platform/test_ookami$exeext
+build/bin/$platform/test_sokko$exeext
+build/bin/$platform/test_usagi$exeext
+build/bin/$platform/test_poni$exeext
+build/bin/$platform/test_tora$exeext
+build/bin/$platform/test_neko$exeext

@@ -2,5 +2,16 @@
 
 set -euo pipefail
 
-make repl
-echo "built ./build/bin/repl"
+platform="${PLATFORM:-linux}"
+exeext=""
+if [ "$platform" = "windows" ]; then
+    exeext=".exe"
+fi
+
+make PLATFORM="$platform" bestiary repl
+echo "built ./build/bin/$platform/bestiary$exeext"
+
+if [ "$platform" = "windows" ]; then
+    make PLATFORM="$platform" bundle
+    echo "bundled Windows runtime at ./build/dist/windows/bestiary"
+fi

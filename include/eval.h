@@ -38,6 +38,7 @@ typedef Value (*CommandFn)(EvalContext* ctx, Value* args, size_t nargs);
 typedef struct CommandEntry {
     const char* name;            // without the leading backslash
     int arity;                   // expected number of args; -1 = variadic
+    const char* doc;             // one-line help summary
     CommandFn fn;
     struct CommandEntry* next;
 } CommandEntry;

@@ -35,7 +35,12 @@ CombSet* constructCombset(long long* baseSet, int card) {
 
     // Define a new CombSet and set the cardinality
     CombSet* combset = malloc(sizeof(CombSet));
+    if (!combset) return NULL;
     combset->set = malloc(card * sizeof(long long));
+    if (!combset->set) {
+        free(combset);
+        return NULL;
+    }
     combset->card = card;
 
     // Define and normalize the base set
@@ -44,6 +49,55 @@ CombSet* constructCombset(long long* baseSet, int card) {
     
     // Return the resulting CombSet
     return combset;
+}
+
+// Construct the integer range {start, start+step, ..., end}
+CombSet* constructRangeSet(long long start, long long end, long long step) {
+    if (step == 0) return NULL;
+    if ((step > 0 && start > end) || (step < 0 && start < end)) return NULL;
+
+    long long distance = end - start;
+    long long count = distance / step + 1;
+    if (count < 1) return NULL;
+
+    long long* elems = malloc((size_t)count * sizeof(long long));
+    if (!elems) return NULL;
+    for (long long i = 0; i < count; i++) elems[i] = start + i * step;
+
+    CombSet* result = constructCombset(elems, (int)count);
+    free(elems);
+    return result;
+}
+
+// Construct the arithmetic progression {first + i*diff : 0 <= i < terms}
+CombSet* constructArithmeticProgressionSet(long long first, long long diff, int terms) {
+    if (terms < 1) return NULL;
+
+    long long* elems = malloc((size_t)terms * sizeof(long long));
+    if (!elems) return NULL;
+    for (int i = 0; i < terms; i++) elems[i] = first + (long long)i * diff;
+
+    CombSet* result = constructCombset(elems, terms);
+    free(elems);
+    return result;
+}
+
+// Construct the geometric progression {first * ratio^i : 0 <= i < terms}
+CombSet* constructGeometricProgressionSet(long long first, long long ratio, int terms) {
+    if (terms < 1) return NULL;
+
+    long long* elems = malloc((size_t)terms * sizeof(long long));
+    if (!elems) return NULL;
+
+    long long current = first;
+    for (int i = 0; i < terms; i++) {
+        elems[i] = current;
+        current *= ratio;
+    }
+
+    CombSet* result = constructCombset(elems, terms);
+    free(elems);
+    return result;
 }
 
 // Frees the memory used by the CombSet
@@ -157,6 +211,37 @@ CombSet* kads(CombSet* combset, int k) {
     }
 
     return toReturn;
+}
+
+static void subsetSumsCollect(CombSet* combset, int index, int chosen, int subsetSize,
+                              long long currentSum, long long* sums, int* count) {
+    if (index == combset->card) {
+        if (subsetSize < 0 || chosen == subsetSize) {
+            sums[*count] = currentSum;
+            (*count)++;
+        }
+        return;
+    }
+
+    subsetSumsCollect(combset, index + 1, chosen, subsetSize, currentSum, sums, count);
+    subsetSumsCollect(combset, index + 1, chosen + 1, subsetSize,
+                      currentSum + combset->set[index], sums, count);
+}
+
+CombSet* subsetSums(CombSet* combset, int subsetSize) {
+    if (!combset) return NULL;
+    if (subsetSize > combset->card || subsetSize < -1) return NULL;
+    if (combset->card >= (int)(8 * sizeof(size_t))) return NULL;
+
+    size_t maxCount = (size_t)1 << combset->card;
+    long long* sums = malloc(maxCount * sizeof(long long));
+    if (!sums) return NULL;
+
+    int count = 0;
+    subsetSumsCollect(combset, 0, 0, subsetSize, 0, sums, &count);
+    CombSet* result = constructCombset(sums, count);
+    free(sums);
+    return result;
 }
 
 // Return the subtractive doubling set of a CombSet

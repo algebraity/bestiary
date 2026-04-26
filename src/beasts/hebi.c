@@ -1,6 +1,7 @@
 #include<stdlib.h>
 #include<stdio.h>
 #include<math.h>
+#include<complex.h>
 #include "hebi.h"
 
 /* ---------- Helper methods ---------- */
@@ -136,6 +137,57 @@ double complexAbs(ComplexNumber a) {
 // Return the argument arg(a) in (-pi, pi]
 double complexArg(ComplexNumber a) {
     return atan2(a.imag, a.real);
+}
+
+static double complex toC99Complex(ComplexNumber a) {
+    return a.real + a.imag * I;
+}
+
+static ComplexNumber fromC99Complex(double complex z) {
+    ComplexNumber a;
+    a.real = creal(z);
+    a.imag = cimag(z);
+    return a;
+}
+
+// Return the complex exponential of a
+ComplexNumber complexExp(ComplexNumber a) {
+    return fromC99Complex(cexp(toC99Complex(a)));
+}
+
+// Return the principal complex logarithm of a
+ComplexNumber complexLog(ComplexNumber a) {
+    return fromC99Complex(clog(toC99Complex(a)));
+}
+
+// Return the complex sine of a
+ComplexNumber complexSin(ComplexNumber a) {
+    return fromC99Complex(csin(toC99Complex(a)));
+}
+
+// Return the complex cosine of a
+ComplexNumber complexCos(ComplexNumber a) {
+    return fromC99Complex(ccos(toC99Complex(a)));
+}
+
+// Return the complex tangent of a
+ComplexNumber complexTan(ComplexNumber a) {
+    return fromC99Complex(ctan(toC99Complex(a)));
+}
+
+// Return the principal complex inverse sine of a
+ComplexNumber complexAsin(ComplexNumber a) {
+    return fromC99Complex(casin(toC99Complex(a)));
+}
+
+// Return the principal complex inverse cosine of a
+ComplexNumber complexAcos(ComplexNumber a) {
+    return fromC99Complex(cacos(toC99Complex(a)));
+}
+
+// Return the principal complex inverse tangent of a
+ComplexNumber complexAtan(ComplexNumber a) {
+    return fromC99Complex(catan(toC99Complex(a)));
 }
 
 // Return the principal square root of a ComplexNumber

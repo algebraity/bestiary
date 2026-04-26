@@ -24,6 +24,7 @@ typedef struct SubRing SubRing;
 typedef struct Ideal Ideal;
 typedef struct RingHomomorphism RingHomomorphism;
 typedef struct Body Body;
+typedef struct BodySystem BodySystem;
 typedef struct Force Force;
 typedef struct NekoExpr NekoExpr;
 
@@ -61,6 +62,7 @@ typedef enum {
     VAL_IDEAL,
     VAL_RING_HOMOMORPHISM,
     VAL_BODY,
+    VAL_BODY_SYSTEM,
     VAL_FORCE
 } ValueKind;
 

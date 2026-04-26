@@ -1535,6 +1535,8 @@ static void formatChiValue(ComplexNumber c, char* out, size_t outSize) {
     double im = c.imag;
     if (fabs(re - round(re)) < tol) re = round(re);
     if (fabs(im - round(im)) < tol) im = round(im);
+    if (fabs(re) < tol) re = 0.0;
+    if (fabs(im) < tol) im = 0.0;
     if (fabs(im) < tol) {
         snprintf(out, outSize, "%g", re);
     } else if (fabs(re) < tol) {

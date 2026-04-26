@@ -573,6 +573,128 @@ void testNormalForce() {
     freeVector(p); freeVector(v);
 }
 
+void testSpringForceModel() {
+    SECTION("springForce");
+    Vector* pos = constructVector3(R(3), R(0), R(0));
+    Vector* vel = constructVector3(R(0), R(0), R(0));
+    Body* body = constructBody(2.0, pos, vel);
+    Vector* anchor = constructVector3(R(0), R(0), R(0));
+
+    CHECK(springForce(NULL, anchor, 2.0, 1.0) == NULL, "NULL body NULL");
+    CHECK(springForce(body, NULL, 2.0, 1.0) == NULL, "NULL anchor NULL");
+    CHECK(springForce(body, anchor, -1.0, 1.0) == NULL, "negative k NULL");
+    CHECK(springForce(body, anchor, 2.0, -1.0) == NULL, "negative rest length NULL");
+
+    Force* spring = springForce(body, anchor, 2.0, 1.0);
+    CHECK(spring != NULL, "allocated");
+    CHECK(approx(re(getEntry(spring->vector, 0, 0)), -4.0, 1e-10), "force points back to anchor");
+    CHECK(approx(re(getEntry(spring->vector, 1, 0)), 0.0, 1e-10), "no y component");
+    CHECK(matrixComp(spring->tailPos, pos, 1e-10), "tail at body position");
+
+    free(spring->name);
+    freeVector(spring->vector); freeVector(spring->tailPos); free(spring);
+    free(body->forces); free(body);
+    freeVector(anchor); freeVector(pos); freeVector(vel);
+}
+
+void testDragForceModel() {
+    SECTION("dragForce");
+    Vector* pos = constructVector3(R(0), R(0), R(0));
+    Vector* vel = constructVector3(R(3), R(-4), R(0));
+    Body* body = constructBody(1.0, pos, vel);
+
+    CHECK(dragForce(NULL, 0.5) == NULL, "NULL body NULL");
+    CHECK(dragForce(body, -0.5) == NULL, "negative coefficient NULL");
+
+    Force* drag = dragForce(body, 0.5);
+    CHECK(drag != NULL, "allocated");
+    CHECK(approx(re(getEntry(drag->vector, 0, 0)), -1.5, 1e-10), "x drag = -c*v_x");
+    CHECK(approx(re(getEntry(drag->vector, 1, 0)), 2.0, 1e-10), "y drag = -c*v_y");
+
+    free(drag->name);
+    freeVector(drag->vector); freeVector(drag->tailPos); free(drag);
+    free(body->forces); free(body);
+    freeVector(pos); freeVector(vel);
+}
+
+void testGravitationalForceModel() {
+    SECTION("gravitationalForce");
+    Vector* p1 = constructVector3(R(0), R(0), R(0));
+    Vector* v1 = constructVector3(R(0), R(0), R(0));
+    Vector* p2 = constructVector3(R(1), R(0), R(0));
+    Vector* v2 = constructVector3(R(0), R(0), R(0));
+    Body* b1 = constructBody(2.0, p1, v1);
+    Body* b2 = constructBody(3.0, p2, v2);
+
+    CHECK(gravitationalForce(NULL, b2) == NULL, "NULL source NULL");
+    CHECK(gravitationalForce(b1, NULL) == NULL, "NULL attractor NULL");
+
+    Force* grav = gravitationalForce(b1, b2);
+    CHECK(grav != NULL, "allocated");
+    CHECK(approx(re(getEntry(grav->vector, 0, 0)), A_BIG_G * 6.0, 1e-18), "magnitude = G*m1*m2/r^2");
+    CHECK(approx(re(getEntry(grav->vector, 1, 0)), 0.0, 1e-18), "no y component");
+
+    free(grav->name);
+    freeVector(grav->vector); freeVector(grav->tailPos); free(grav);
+    free(b1->forces); free(b1);
+    free(b2->forces); free(b2);
+    freeVector(p1); freeVector(v1); freeVector(p2); freeVector(v2);
+}
+
+void testBodySystemSimulation() {
+    SECTION("BodySystem / stepping");
+    Vector* p1 = constructVector3(R(0), R(10), R(0));
+    Vector* v1 = constructVector3(R(1), R(0), R(0));
+    Vector* p2 = constructVector3(R(0), R(0), R(0));
+    Vector* v2 = constructVector3(R(0), R(2), R(0));
+    Body* b1 = constructBody(2.0, p1, v1);
+    Body* b2 = constructBody(1.0, p2, v2);
+    Body* bodies[] = {b1, b2};
+    BodySystem* system = constructBodySystem(bodies, 2);
+
+    CHECK(system != NULL, "system allocated");
+
+    Vector* momentum = totalMomentum(system);
+    CHECK(momentum != NULL, "total momentum allocated");
+    CHECK(approx(re(getEntry(momentum, 0, 0)), 2.0, 1e-10), "total p_x = 2");
+    CHECK(approx(re(getEntry(momentum, 1, 0)), 2.0, 1e-10), "total p_y = 2");
+    freeVector(momentum);
+
+    CHECK(approx(totalEnergy(system), 3.0 + 2.0 * A_GRAVITY * 10.0, 1e-10), "total energy = kinetic + mgy");
+
+    Vector* thrustVec = constructVector3(R(2), R(0), R(0));
+    Vector* thrustTail = constructVector3(R(0), R(10), R(0));
+    Force* thrust = constructForce("thrust", thrustVec, thrustTail);
+    addForce(b1, thrust);
+
+    CHECK(stepBody(b1, 3.0) == b1, "stepBody returns input body");
+    CHECK(approx(re(getEntry(b1->pos, 0, 0)), 7.5, 1e-10), "stepBody updates position");
+    CHECK(approx(re(getEntry(b1->velocity, 0, 0)), 4.0, 1e-10), "stepBody updates velocity");
+
+    Vector* p3 = constructVector3(R(0), R(0), R(0));
+    Vector* v3 = constructVector3(R(0), R(0), R(0));
+    Body* b3 = constructBody(1.0, p3, v3);
+    Vector* accelVec = constructVector3(R(1), R(0), R(0));
+    Vector* accelTail = constructVector3(R(0), R(0), R(0));
+    Force* accelForce = constructForce("accel", accelVec, accelTail);
+    addForce(b3, accelForce);
+    Body* oneBody[] = {b3};
+    BodySystem* sim = constructBodySystem(oneBody, 1);
+
+    CHECK(simulateBodySystem(sim, 1.0, 2) == sim, "simulateBodySystem returns input system");
+    CHECK(approx(re(getEntry(b3->pos, 0, 0)), 2.0, 1e-10), "simulateBodySystem updates position over two steps");
+    CHECK(approx(re(getEntry(b3->velocity, 0, 0)), 2.0, 1e-10), "simulateBodySystem updates velocity over two steps");
+
+    free(sim->bodies); free(sim);
+    free(system->bodies); free(system);
+    free(thrust);
+    free(accelForce);
+    free(b1->forces); free(b1);
+    free(b2->forces); free(b2);
+    free(b3->forces); free(b3);
+    freeVector(p1); freeVector(v1); freeVector(p2); freeVector(v2); freeVector(p3); freeVector(v3);
+}
+
 void testFrictionForce() {
     SECTION("frictionForce");
     Vector* dir = constructVector3(R(1), R(0), R(0));
@@ -1158,6 +1280,9 @@ int main(void) {
     testGravityForce();
     testNormalForce();
     testFrictionForce();
+    testSpringForceModel();
+    testDragForceModel();
+    testGravitationalForceModel();
 
     testMomentum();
     testKineticEnergy();
@@ -1171,6 +1296,7 @@ int main(void) {
     testCenterOfMassVelocity();
     testElasticCollision1D();
     testInelasticCollision1D();
+    testBodySystemSimulation();
 
     testMomentOfInertiaPoint();
     testMomentOfInertiaRod();

@@ -192,6 +192,51 @@ static void testGeneralPowerRule(void) {
     nekoFreeExpr(f);
 }
 
+static void testMultivariableDifferentiation(void) {
+    section("multivariable differentiation");
+
+    NekoExpr* fy = nekoAdd(
+        nekoPow(nekoVar("y"), nekoConst(3.0)),
+        nekoMul(nekoConst(2.0), nekoVar("y"))
+    );
+    NekoDiffResult dy = nekoDifferentiateExpr(fy, "y");
+    CHECK(dy.status == NEKO_OK && dy.expr != NULL, "differentiate with respect to y");
+    CHECK_CLOSE(nekoEvalExpr(dy.expr, "y", 2.0), 14.0, 1e-9, "d/dy (y^3 + 2y)");
+    nekoFreeExpr(dy.expr);
+    nekoFreeExpr(fy);
+
+    NekoExpr* product = nekoMul(nekoVar("x"), nekoVar("y"));
+    NekoDiffResult dx = nekoDifferentiateExpr(product, "x");
+    CHECK(dx.status == NEKO_OK && dx.expr != NULL, "mixed derivative first step");
+    NekoDiffResult dxy = nekoDifferentiateExpr(dx.expr, "y");
+    CHECK(dxy.status == NEKO_OK && dxy.expr != NULL, "mixed derivative second step");
+    CHECK_CLOSE(nekoEvalExpr(dxy.expr, "x", 7.0), 1.0, 1e-9, "d/dy d/dx (xy)");
+    nekoFreeExpr(dxy.expr);
+    nekoFreeExpr(dx.expr);
+    nekoFreeExpr(product);
+
+    NekoExpr* lap = nekoAdd(
+        nekoPow(nekoVar("x"), nekoConst(2.0)),
+        nekoPow(nekoVar("y"), nekoConst(2.0))
+    );
+    NekoDiffResult dxx1 = nekoDifferentiateExpr(lap, "x");
+    CHECK(dxx1.status == NEKO_OK && dxx1.expr != NULL, "laplacian first x derivative");
+    NekoDiffResult dxx2 = nekoDifferentiateExpr(dxx1.expr, "x");
+    CHECK(dxx2.status == NEKO_OK && dxx2.expr != NULL, "laplacian second x derivative");
+    CHECK_CLOSE(nekoEvalExpr(dxx2.expr, "x", 3.0), 2.0, 1e-9, "d^2/dx^2 (x^2 + y^2)");
+    nekoFreeExpr(dxx2.expr);
+    nekoFreeExpr(dxx1.expr);
+
+    NekoDiffResult dyy1 = nekoDifferentiateExpr(lap, "y");
+    CHECK(dyy1.status == NEKO_OK && dyy1.expr != NULL, "laplacian first y derivative");
+    NekoDiffResult dyy2 = nekoDifferentiateExpr(dyy1.expr, "y");
+    CHECK(dyy2.status == NEKO_OK && dyy2.expr != NULL, "laplacian second y derivative");
+    CHECK_CLOSE(nekoEvalExpr(dyy2.expr, "y", -2.0), 2.0, 1e-9, "d^2/dy^2 (x^2 + y^2)");
+    nekoFreeExpr(dyy2.expr);
+    nekoFreeExpr(dyy1.expr);
+    nekoFreeExpr(lap);
+}
+
 static void testSymbolicIntegration(void) {
     section("symbolic integration");
 
@@ -556,6 +601,7 @@ int main(void) {
     testProductQuotientRules();
     testTrigExpLogChainRules();
     testGeneralPowerRule();
+    testMultivariableDifferentiation();
     testSymbolicIntegration();
     testNumericalApplications();
     testSimplification();

@@ -378,6 +378,17 @@ static void polyReprBuf(const int* poly, int k, char* buf, int bufLen) {
 	if (first) snprintf(buf, bufLen, "0");
 }
 
+static void freeGroupConstructionData(GroupElement** elements, int** table, int card) {
+    if (elements) {
+        for (int i = 0; i < card; i++) freeGroupElement(elements[i]);
+        free(elements);
+    }
+    if (table) {
+        for (int i = 0; i < card; i++) free(table[i]);
+        free(table);
+    }
+}
+
 /* ---------- Permutation helpers ---------- */
 
 // Return true if p is prime, else false
@@ -1218,6 +1229,115 @@ Ring* constructFiniteField(int p, int k) {
 	}
 	for (int i = 0; i < N; i++) elements[i]->ring = R;
 	return R;
+}
+
+// Construct the additive group of a Ring
+Group* constructAddGroup(Ring* R) {
+    if (!R) return NULL;
+
+    int card = R->card;
+    Group* G = malloc(sizeof(Group));
+    GroupElement** elements = calloc((size_t)card, sizeof(GroupElement*));
+    int** table = calloc((size_t)card, sizeof(int*));
+    if (!G || !elements || !table) {
+        free(G);
+        freeGroupConstructionData(elements, table, card);
+        return NULL;
+    }
+
+    for (int i = 0; i < card; i++) {
+        const char* repr = (R->elements && R->elements[i] && R->elements[i]->repr) ? R->elements[i]->repr : "?";
+        elements[i] = constructGroupElement(NULL, (char*)repr);
+        table[i] = malloc((size_t)card * sizeof(int));
+        if (!elements[i] || !table[i]) {
+            free(G);
+            freeGroupConstructionData(elements, table, card);
+            return NULL;
+        }
+        for (int j = 0; j < card; j++) table[i][j] = R->addTable[i][j];
+    }
+
+    G->elements = elements;
+    G->table = table;
+    G->card = card;
+    for (int i = 0; i < card; i++) {
+        G->elements[i]->group = G;
+        G->elements[i]->index = i;
+    }
+    return G;
+}
+
+// Construct the multiplicative unit group of a Ring
+Group* constructUnitGroup(Ring* R) {
+    if (!R || !hasMultIdentity(R)) return NULL;
+
+    int* unitIndices = malloc((size_t)R->card * sizeof(int));
+    int* indexMap = malloc((size_t)R->card * sizeof(int));
+    if (!unitIndices || !indexMap) {
+        free(unitIndices);
+        free(indexMap);
+        return NULL;
+    }
+
+    for (int i = 0; i < R->card; i++) indexMap[i] = -1;
+
+    int unitCount = 0;
+    unitIndices[unitCount] = 1;
+    indexMap[1] = unitCount++;
+    for (int i = 2; i < R->card; i++) {
+        if (hasMultInverse(R->elements[i])) {
+            indexMap[i] = unitCount;
+            unitIndices[unitCount++] = i;
+        }
+    }
+
+    Group* G = malloc(sizeof(Group));
+    GroupElement** elements = calloc((size_t)unitCount, sizeof(GroupElement*));
+    int** table = calloc((size_t)unitCount, sizeof(int*));
+    if (!G || !elements || !table) {
+        free(G);
+        free(unitIndices);
+        free(indexMap);
+        freeGroupConstructionData(elements, table, unitCount);
+        return NULL;
+    }
+
+    for (int i = 0; i < unitCount; i++) {
+        const char* repr = (R->elements && R->elements[unitIndices[i]] && R->elements[unitIndices[i]]->repr)
+            ? R->elements[unitIndices[i]]->repr : "?";
+        elements[i] = constructGroupElement(NULL, (char*)repr);
+        table[i] = malloc((size_t)unitCount * sizeof(int));
+        if (!elements[i] || !table[i]) {
+            free(G);
+            free(unitIndices);
+            free(indexMap);
+            freeGroupConstructionData(elements, table, unitCount);
+            return NULL;
+        }
+        for (int j = 0; j < unitCount; j++) {
+            int product = R->multTable[unitIndices[i]][unitIndices[j]];
+            if (product < 0 || product >= R->card || indexMap[product] < 0) {
+                free(G);
+                free(unitIndices);
+                free(indexMap);
+                freeGroupConstructionData(elements, table, unitCount);
+                return NULL;
+            }
+            table[i][j] = indexMap[product];
+        }
+    }
+
+    G->elements = elements;
+    G->table = table;
+    G->card = unitCount;
+    for (int i = 0; i < unitCount; i++) {
+        G->elements[i]->group = G;
+        G->elements[i]->index = i;
+    }
+
+    free(unitIndices);
+    free(indexMap);
+    return G;
 }
 
 /* ---------- Compare methods ---------- */
