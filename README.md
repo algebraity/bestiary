@@ -6,7 +6,7 @@
 
 Bestiary is a language, command-line interface, and GUI application through which a collection of C-based animal-themed mathematics libraries are accessed and used together seamlessly, as though they were all one program. Each library is referred to as a "BEAST," and provides a set of commands that can be accessed in Bestiary. All commands in Bestiary start with a backslash `\` character, and the language is themed after LaTeX, such that many objects can be defined in a way identical to how they would be typed in LaTeX.
 
-Each BEAST is written from scratch in C, and the wxWidgets-based GUI application, which allows for easy access to documentation while working and running multiple Bestiary shells in parallel, is written in the C++ language. For full documentation on each of the hundreds of commands and operations available in Bestiary, see the "Help" tab in the application. More information on each BEAST and its functionality can be found below
+Each BEAST is written from scratch in C, and the wxWidgets-based GUI application, which allows for easy access to documentation while working and running multiple Bestiary shells in parallel, is written in the C++ language. For full documentation on each of the hundreds of commands and operations available in Bestiary, see the "Help" tab in the application. More information on each BEAST and its functionality can be found below.
 
 ## Usage examples
 
