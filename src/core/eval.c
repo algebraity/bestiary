@@ -4,10 +4,13 @@
 #include<ctype.h>
 #include<math.h>
 #include<limits.h>
+#include<stdarg.h>
 #include "eval.h"
+#include "lexer.h"
 #include "hebi.h"
 #include "neko.h"
 #include "ookami.h"
+#include "parser.h"
 #include "poni.h"
 #include "sokko.h"
 #include "tora.h"
@@ -1883,6 +1886,384 @@ static Value bi_poly(EvalContext* c, Value* a, size_t n) {
     return expr ? wrapNekoExpr(expr) : valError("\\poly could not parse polynomial");
 }
 
+static double parseOdeNumber(const char* p, double fallback);
+static int hasParam(const char* s, const char* key);
+static int gatherInitialConditions(const char* s, int order, double* x0, double* values);
+
+static void freeTokensOwned(Token* toks, size_t n) {
+    if (!toks) return;
+    for (size_t i = 0; i < n; i++) free(toks[i].text);
+    free(toks);
+}
+
+static NekoExpr* parseNekoExprLiteral(const char* text) {
+    if (!text || !*text) return NULL;
+
+    char* input = dupstr(text);
+    if (!input) return NULL;
+
+    size_t ntokens = 0;
+    Token* tokens = bstLex(input, &ntokens);
+    free(input);
+    if (!tokens || ntokens == 0) {
+        freeTokensOwned(tokens, ntokens);
+        return NULL;
+    }
+
+    ParseError err = {0};
+    AstNode* ast = bstParse(tokens, ntokens, &err);
+    if (!ast) {
+        freeTokensOwned(tokens, ntokens);
+        return NULL;
+    }
+
+    EvalContext* ctx = evalCtxNew();
+    if (!ctx) {
+        astFree(ast);
+        freeTokensOwned(tokens, ntokens);
+        return NULL;
+    }
+
+    Value value = eval(ctx, ast);
+    NekoExpr* expr = valueToNekoExpr(value);
+    valFree(value);
+    evalCtxFree(ctx);
+    astFree(ast);
+    freeTokensOwned(tokens, ntokens);
+    return expr ? nekoSimplify(expr) : NULL;
+}
+
+static int exprDependsOnVar(const NekoExpr* expr, const char* var) {
+    if (!expr || !var) return 0;
+
+    switch (expr->kind) {
+        case NEKO_EXPR_CONST:
+            return 0;
+        case NEKO_EXPR_VAR:
+            return expr->as.var && strcmp(expr->as.var, var) == 0;
+        case NEKO_EXPR_ADD:
+        case NEKO_EXPR_SUB:
+        case NEKO_EXPR_MUL:
+        case NEKO_EXPR_DIV:
+        case NEKO_EXPR_POW:
+            return exprDependsOnVar(expr->as.binary.lhs, var)
+                || exprDependsOnVar(expr->as.binary.rhs, var);
+        case NEKO_EXPR_NEG:
+        case NEKO_EXPR_SIN:
+        case NEKO_EXPR_COS:
+        case NEKO_EXPR_TAN:
+        case NEKO_EXPR_ASIN:
+        case NEKO_EXPR_ACOS:
+        case NEKO_EXPR_ATAN:
+        case NEKO_EXPR_EXP:
+        case NEKO_EXPR_LOG:
+        case NEKO_EXPR_SQRT:
+        case NEKO_EXPR_ABS:
+            return exprDependsOnVar(expr->as.unary.arg, var);
+        case NEKO_EXPR_CALL:
+            for (int i = 0; i < expr->as.call.nargs; i++) {
+                if (exprDependsOnVar(expr->as.call.args[i], var)) return 1;
+            }
+            return 0;
+    }
+    return 0;
+}
+
+static int nekoExprIsConstValue(const NekoExpr* expr, double value) {
+    return expr
+        && expr->kind == NEKO_EXPR_CONST
+        && fabs(expr->as.constant - value) <= 1e-12;
+}
+
+static NekoExpr* reciprocalOwnedExpr(NekoExpr* expr) {
+    if (!expr) return NULL;
+    if (expr->kind == NEKO_EXPR_DIV) {
+        NekoExpr* lhs = expr->as.binary.lhs;
+        NekoExpr* rhs = expr->as.binary.rhs;
+        expr->as.binary.lhs = NULL;
+        expr->as.binary.rhs = NULL;
+        free(expr);
+        if (nekoExprIsConstValue(lhs, 1.0)) {
+            nekoFreeExpr(lhs);
+            return rhs;
+        }
+        return nekoSimplify(nekoDiv(rhs, lhs));
+    }
+    if (expr->kind == NEKO_EXPR_CONST && fabs(expr->as.constant) > 1e-12) {
+        double value = 1.0 / expr->as.constant;
+        nekoFreeExpr(expr);
+        return nekoConst(value);
+    }
+    return nekoSimplify(nekoDiv(nekoConst(1.0), expr));
+}
+
+static int appendSeparableFactor(NekoExpr** accum, NekoExpr* factor, int intoDenominator) {
+    if (!accum || !factor) {
+        nekoFreeExpr(factor);
+        return 0;
+    }
+
+    if (!*accum) {
+        *accum = intoDenominator ? nekoDiv(nekoConst(1.0), factor) : factor;
+    } else {
+        *accum = intoDenominator ? nekoDiv(*accum, factor) : nekoMul(*accum, factor);
+    }
+    if (!*accum) return 0;
+    *accum = nekoSimplify(*accum);
+    return *accum != NULL;
+}
+
+static int collectSeparableFactorsOwned(NekoExpr* expr, NekoExpr** xPart, NekoExpr** yPart, int intoDenominator) {
+    if (!expr) return 0;
+
+    if (expr->kind == NEKO_EXPR_MUL) {
+        NekoExpr* lhs = expr->as.binary.lhs;
+        NekoExpr* rhs = expr->as.binary.rhs;
+        expr->as.binary.lhs = NULL;
+        expr->as.binary.rhs = NULL;
+        free(expr);
+        if (!collectSeparableFactorsOwned(lhs, xPart, yPart, intoDenominator)) {
+            nekoFreeExpr(rhs);
+            return 0;
+        }
+        return collectSeparableFactorsOwned(rhs, xPart, yPart, intoDenominator);
+    }
+
+    if (expr->kind == NEKO_EXPR_DIV) {
+        NekoExpr* lhs = expr->as.binary.lhs;
+        NekoExpr* rhs = expr->as.binary.rhs;
+        expr->as.binary.lhs = NULL;
+        expr->as.binary.rhs = NULL;
+        free(expr);
+        if (!collectSeparableFactorsOwned(lhs, xPart, yPart, intoDenominator)) {
+            nekoFreeExpr(rhs);
+            return 0;
+        }
+        return collectSeparableFactorsOwned(rhs, xPart, yPart, !intoDenominator);
+    }
+
+    int dependsOnX = exprDependsOnVar(expr, "x");
+    int dependsOnY = exprDependsOnVar(expr, "y");
+    if (dependsOnX && dependsOnY) {
+        nekoFreeExpr(expr);
+        return 0;
+    }
+
+    return appendSeparableFactor(dependsOnY ? yPart : xPart, expr, intoDenominator);
+}
+
+typedef struct {
+    char* data;
+    size_t len;
+    size_t cap;
+} StringBuf;
+
+static int stringBufReserve(StringBuf* buf, size_t extra) {
+    if (!buf) return 0;
+    size_t needed = buf->len + extra + 1;
+    if (needed <= buf->cap) return 1;
+
+    size_t nextCap = buf->cap ? buf->cap * 2 : 64;
+    while (nextCap < needed) nextCap *= 2;
+    char* next = realloc(buf->data, nextCap);
+    if (!next) return 0;
+    buf->data = next;
+    buf->cap = nextCap;
+    return 1;
+}
+
+static int stringBufAppendText(StringBuf* buf, const char* text) {
+    size_t n = text ? strlen(text) : 0;
+    if (!stringBufReserve(buf, n)) return 0;
+    if (n) memcpy(buf->data + buf->len, text, n);
+    buf->len += n;
+    buf->data[buf->len] = '\0';
+    return 1;
+}
+
+static int stringBufAppendChar(StringBuf* buf, char ch) {
+    if (!stringBufReserve(buf, 1)) return 0;
+    buf->data[buf->len++] = ch;
+    buf->data[buf->len] = '\0';
+    return 1;
+}
+
+static int stringBufAppendFormat(StringBuf* buf, const char* fmt, ...) {
+    va_list args;
+    va_start(args, fmt);
+    va_list copy;
+    va_copy(copy, args);
+    int needed = vsnprintf(NULL, 0, fmt, copy);
+    va_end(copy);
+    if (needed < 0 || !stringBufReserve(buf, (size_t)needed)) {
+        va_end(args);
+        return 0;
+    }
+    vsnprintf(buf->data + buf->len, buf->cap - buf->len, fmt, args);
+    va_end(args);
+    buf->len += (size_t)needed;
+    return 1;
+}
+
+static int appendNekoExprString(StringBuf* buf, const NekoExpr* expr) {
+    if (!expr) return stringBufAppendText(buf, "<null>");
+
+    switch (expr->kind) {
+        case NEKO_EXPR_CONST:
+            return stringBufAppendFormat(buf, "%g", expr->as.constant);
+        case NEKO_EXPR_VAR:
+            return stringBufAppendText(buf, expr->as.var ? expr->as.var : "?");
+        case NEKO_EXPR_ADD:
+        case NEKO_EXPR_SUB:
+        case NEKO_EXPR_MUL:
+        case NEKO_EXPR_DIV:
+        case NEKO_EXPR_POW:
+            return stringBufAppendChar(buf, '(')
+                && appendNekoExprString(buf, expr->as.binary.lhs)
+                && stringBufAppendText(buf,
+                    expr->kind == NEKO_EXPR_ADD ? " + "
+                    : expr->kind == NEKO_EXPR_SUB ? " - "
+                    : expr->kind == NEKO_EXPR_MUL ? " * "
+                    : expr->kind == NEKO_EXPR_DIV ? " / "
+                    : " ^ ")
+                && appendNekoExprString(buf, expr->as.binary.rhs)
+                && stringBufAppendChar(buf, ')');
+        case NEKO_EXPR_NEG:
+            return stringBufAppendText(buf, "(-")
+                && appendNekoExprString(buf, expr->as.unary.arg)
+                && stringBufAppendChar(buf, ')');
+        case NEKO_EXPR_SIN:
+        case NEKO_EXPR_COS:
+        case NEKO_EXPR_TAN:
+        case NEKO_EXPR_ASIN:
+        case NEKO_EXPR_ACOS:
+        case NEKO_EXPR_ATAN:
+        case NEKO_EXPR_EXP:
+        case NEKO_EXPR_LOG:
+        case NEKO_EXPR_SQRT:
+        case NEKO_EXPR_ABS: {
+            const char* name = expr->kind == NEKO_EXPR_SIN ? "sin"
+                : expr->kind == NEKO_EXPR_COS ? "cos"
+                : expr->kind == NEKO_EXPR_TAN ? "tan"
+                : expr->kind == NEKO_EXPR_ASIN ? "asin"
+                : expr->kind == NEKO_EXPR_ACOS ? "acos"
+                : expr->kind == NEKO_EXPR_ATAN ? "atan"
+                : expr->kind == NEKO_EXPR_EXP ? "exp"
+                : expr->kind == NEKO_EXPR_LOG ? "log"
+                : expr->kind == NEKO_EXPR_SQRT ? "sqrt"
+                : "abs";
+            return stringBufAppendText(buf, name)
+                && stringBufAppendChar(buf, '(')
+                && appendNekoExprString(buf, expr->as.unary.arg)
+                && stringBufAppendChar(buf, ')');
+        }
+        case NEKO_EXPR_CALL:
+            if (!stringBufAppendText(buf, expr->as.call.name ? expr->as.call.name : "?")) return 0;
+            if (!stringBufAppendChar(buf, '(')) return 0;
+            for (int i = 0; i < expr->as.call.nargs; i++) {
+                if (i > 0 && !stringBufAppendText(buf, ", ")) return 0;
+                if (!appendNekoExprString(buf, expr->as.call.args[i])) return 0;
+            }
+            return stringBufAppendChar(buf, ')');
+    }
+    return 0;
+}
+
+static char* nekoExprToStringOwned(const NekoExpr* expr) {
+    StringBuf buf = {0};
+    if (!appendNekoExprString(&buf, expr)) {
+        free(buf.data);
+        return NULL;
+    }
+    return buf.data;
+}
+
+static Value solveSeparableOdeValue(double lhsCoeff, NekoExpr* rhsExpr, const char* s) {
+    NekoExpr* xPart = NULL;
+    NekoExpr* yPart = NULL;
+    if (!collectSeparableFactorsOwned(rhsExpr, &xPart, &yPart, 0)) {
+        nekoFreeExpr(xPart);
+        nekoFreeExpr(yPart);
+        return valError("\\solveODE could not separate the right-hand side");
+    }
+
+    if (!xPart) xPart = nekoConst(1.0);
+    if (!yPart) yPart = nekoConst(1.0);
+
+    NekoExpr* leftIntegrand = reciprocalOwnedExpr(yPart);
+    NekoExpr* scaledX = fabs(lhsCoeff - 1.0) <= 1e-12
+        ? xPart
+        : nekoSimplify(nekoMul(nekoConst(1.0 / lhsCoeff), xPart));
+    if (!leftIntegrand || !scaledX) {
+        nekoFreeExpr(leftIntegrand);
+        nekoFreeExpr(scaledX);
+        return valError("\\solveODE failed while preparing the separable ODE");
+    }
+
+    NekoIntegralResult left = nekoIntegrateExpr(leftIntegrand, "y");
+    NekoIntegralResult right = nekoIntegrateExpr(scaledX, "x");
+    nekoFreeExpr(leftIntegrand);
+    nekoFreeExpr(scaledX);
+    if (left.status != NEKO_OK || right.status != NEKO_OK || !left.expr || !right.expr) {
+        nekoFreeExpr(left.expr);
+        nekoFreeExpr(right.expr);
+        return valError("\\solveODE could not integrate the separable ODE");
+    }
+
+    double x0 = 0.0;
+    double initial[1] = {0.0};
+    int haveInitial = gatherInitialConditions(s, 1, &x0, initial);
+    int hasTarget = hasParam(s, "x=");
+    if (hasTarget) {
+        nekoFreeExpr(left.expr);
+        nekoFreeExpr(right.expr);
+        return valError("\\solveODE cannot directly evaluate implicit separable solutions at a target x");
+    }
+
+    double constant = 0.0;
+    if (haveInitial) {
+        double leftValue = nekoEvalExpr(left.expr, "y", initial[0]);
+        double rightValue = nekoEvalExpr(right.expr, "x", x0);
+        if (!isfinite(leftValue) || !isfinite(rightValue)) {
+            nekoFreeExpr(left.expr);
+            nekoFreeExpr(right.expr);
+            return valError("\\solveODE could not apply the initial condition to the separable solution");
+        }
+        constant = leftValue - rightValue;
+    }
+
+    char* leftText = nekoExprToStringOwned(left.expr);
+    char* rightText = nekoExprToStringOwned(right.expr);
+    nekoFreeExpr(left.expr);
+    nekoFreeExpr(right.expr);
+    if (!leftText || !rightText) {
+        free(leftText);
+        free(rightText);
+        return valError("\\solveODE failed while formatting the separable solution");
+    }
+
+    Value out;
+    if (haveInitial) {
+        char relation[2048];
+        if (fabs(constant) <= 1e-12) {
+            snprintf(relation, sizeof(relation), "%s = %s", leftText, rightText);
+        } else if (constant > 0.0) {
+            snprintf(relation, sizeof(relation), "%s = (%s + %g)", leftText, rightText, constant);
+        } else {
+            snprintf(relation, sizeof(relation), "%s = (%s - %g)", leftText, rightText, -constant);
+        }
+        out = valSymbol(relation);
+    } else {
+        char relation[2048];
+        snprintf(relation, sizeof(relation), "%s = (%s + C1)", leftText, rightText);
+        out = valSymbol(relation);
+    }
+
+    free(leftText);
+    free(rightText);
+    return out;
+}
+
 static Value bi_neko_unary(Value* a, size_t n,
                            NekoExpr* (*op)(NekoExpr*),
                            const char* name,
@@ -2279,18 +2660,22 @@ static int cmpComplexRoots(const void* lhs, const void* rhs) {
 }
 
 static int polynomialComplexRoots(const double* coeffs, int degree, ComplexNumber* roots) {
-    degree = degreeFromCoeffs(coeffs, degree);
+    double normalized[NEKO_REPL_MAX_POLY_DEG + 1] = {0};
+    for (int i = 0; i <= degree; i++) normalized[i] = coeffs[i];
+
+    degree = degreeFromCoeffs(normalized, degree);
     if (degree <= 0) return 0;
     if (degree == 1) {
-        roots[0] = (ComplexNumber){ .real = -coeffs[0] / coeffs[1], .imag = 0.0 };
+        roots[0] = (ComplexNumber){ .real = -normalized[0] / normalized[1], .imag = 0.0 };
         return 1;
     }
 
-    double lead = fabs(coeffs[degree]);
+    double lead = fabs(normalized[degree]);
     if (lead <= 0.0) return 0;
+    for (int i = 0; i <= degree; i++) normalized[i] /= normalized[degree];
     double radius = 1.0;
     for (int i = 0; i < degree; i++) {
-        double r = fabs(coeffs[i]) / lead;
+        double r = fabs(normalized[i]);
         if (r + 1.0 > radius) radius = r + 1.0;
     }
 
@@ -2310,7 +2695,7 @@ static int polynomialComplexRoots(const double* coeffs, int degree, ComplexNumbe
                 if (cAbsLocal(diff) < 1e-14) diff.real += 1e-7 * (double)(i + 1);
                 denom = cMulLocal(denom, diff);
             }
-            ComplexNumber p = evalPolyComplex(coeffs, degree, roots[i]);
+            ComplexNumber p = evalPolyComplex(normalized, degree, roots[i]);
             ComplexNumber delta = cDivLocal(p, denom);
             if (!isfinite(delta.real) || !isfinite(delta.imag)) continue;
             roots[i] = cSubLocal(roots[i], delta);
@@ -2361,6 +2746,137 @@ static int syntheticDivide(const double* coeffs, int degree, double root, double
     return 1;
 }
 
+static int complexIsNearZero(double x) {
+    return fabs(x) < 1e-10;
+}
+
+static int appendComplexFactorText(StringBuf* buf, ComplexNumber root) {
+    double real = complexIsNearZero(root.real) ? 0.0 : root.real;
+    double imag = complexIsNearZero(root.imag) ? 0.0 : root.imag;
+    if (!stringBufAppendChar(buf, '(') || !stringBufAppendText(buf, "x")) return 0;
+
+    if (real == 0.0 && imag == 0.0) return stringBufAppendChar(buf, ')');
+
+    if (imag == 0.0) {
+        if (real > 0.0) return stringBufAppendFormat(buf, " - %g)", real);
+        return stringBufAppendFormat(buf, " + %g)", -real);
+    }
+
+    if (real == 0.0) {
+        if (imag > 0.0) {
+            if (fabs(imag - 1.0) < 1e-10) return stringBufAppendText(buf, " - i)");
+            return stringBufAppendFormat(buf, " - %gi)", imag);
+        }
+        if (fabs(imag + 1.0) < 1e-10) return stringBufAppendText(buf, " + i)");
+        return stringBufAppendFormat(buf, " + %gi)", -imag);
+    }
+
+    if (real > 0.0) {
+        if (!stringBufAppendFormat(buf, " - (%g", real)) return 0;
+    } else {
+        if (!stringBufAppendFormat(buf, " + (%g", -real)) return 0;
+    }
+    if (imag > 0.0) {
+        if (fabs(imag - 1.0) < 1e-10) return stringBufAppendText(buf, " + i))");
+        return stringBufAppendFormat(buf, " + %gi))", imag);
+    }
+    if (fabs(imag + 1.0) < 1e-10) return stringBufAppendText(buf, " - i))");
+    return stringBufAppendFormat(buf, " - %gi))", -imag);
+}
+
+static Value factorPolynomialRealValue(NekoExpr* expr, const char* commandName) {
+    if (!expr) return valError("out of memory while factoring polynomial");
+
+    double coeffs[NEKO_REPL_MAX_POLY_DEG + 1] = {0};
+    int degree = 0;
+    if (!extractPolyCoeffs(expr, "x", coeffs, &degree)) {
+        nekoFreeExpr(expr);
+        char buf[96];
+        snprintf(buf, sizeof(buf), "\\%s expects a polynomial in x", commandName);
+        return valError(buf);
+    }
+
+    double roots[NEKO_REPL_MAX_ROOTS] = {0};
+    int nroots = 0;
+    polynomialRealRoots(coeffs, degree, roots, &nroots);
+
+    double remCoeffs[NEKO_REPL_MAX_POLY_DEG + 1] = {0};
+    for (int i = 0; i <= degree; i++) remCoeffs[i] = coeffs[i];
+    int remDegree = degree;
+    NekoExpr* factored = nekoConst(1.0);
+
+    for (int i = 0; i < nroots && remDegree > 0; i++) {
+        for (;;) {
+            double q[NEKO_REPL_MAX_POLY_DEG + 1] = {0};
+            double remainder = 0.0;
+            syntheticDivide(remCoeffs, remDegree, roots[i], q, &remainder);
+            if (fabs(remainder) > 1e-7) break;
+            NekoExpr* factor = nekoSub(nekoVar("x"), nekoConst(roots[i]));
+            factored = nekoSimplify(nekoMul(factored, factor));
+            for (int k = 0; k < remDegree; k++) remCoeffs[k] = q[k];
+            remCoeffs[remDegree] = 0.0;
+            remDegree = degreeFromCoeffs(remCoeffs, remDegree - 1);
+            if (remDegree <= 0 || fabs(evalPolyCoeffs(remCoeffs, remDegree, roots[i])) > 1e-7) break;
+        }
+    }
+
+    NekoExpr* leftover = polynomialExprFromCoeffs(remCoeffs, remDegree);
+    NekoExpr* out = nekoSimplify(nekoMul(leftover, factored));
+    nekoFreeExpr(expr);
+    return wrapNekoExpr(out);
+}
+
+static Value factorPolynomialComplexValue(NekoExpr* expr, const char* commandName) {
+    if (!expr) return valError("out of memory while factoring polynomial");
+
+    double coeffs[NEKO_REPL_MAX_POLY_DEG + 1] = {0};
+    int degree = 0;
+    if (!extractPolyCoeffs(expr, "x", coeffs, &degree)) {
+        nekoFreeExpr(expr);
+        char buf[104];
+        snprintf(buf, sizeof(buf), "\\%s expects a polynomial in x", commandName);
+        return valError(buf);
+    }
+
+    if (degree <= 0) return wrapNekoExpr(expr);
+
+    ComplexNumber roots[NEKO_REPL_MAX_POLY_DEG] = {0};
+    int nroots = polynomialComplexRoots(coeffs, degree, roots);
+    if (nroots <= 0) {
+        nekoFreeExpr(expr);
+        return valError("\\factorPolyComplex could not factor the polynomial");
+    }
+
+    StringBuf buf = {0};
+    double leading = coeffs[degree];
+    if (fabs(leading - 1.0) > 1e-12) {
+        if (!stringBufAppendFormat(&buf, "%g", leading)) {
+            free(buf.data);
+            nekoFreeExpr(expr);
+            return valError("out of memory while formatting complex factorization");
+        }
+    }
+
+    for (int i = 0; i < nroots; i++) {
+        if (buf.len > 0 && !stringBufAppendText(&buf, " * ")) {
+            free(buf.data);
+            nekoFreeExpr(expr);
+            return valError("out of memory while formatting complex factorization");
+        }
+        if (!appendComplexFactorText(&buf, roots[i])) {
+            free(buf.data);
+            nekoFreeExpr(expr);
+            return valError("out of memory while formatting complex factorization");
+        }
+    }
+
+    nekoFreeExpr(expr);
+    if (!buf.data) return valSymbol("1");
+    Value out = valSymbol(buf.data);
+    free(buf.data);
+    return out;
+}
+
 static Value bi_roots(EvalContext* c, Value* a, size_t n) {
     (void)c; (void)n;
     NekoExpr* expr = valueToNekoExpr(a[0]);
@@ -2388,45 +2904,23 @@ static Value bi_factorPoly(EvalContext* c, Value* a, size_t n) {
     NekoExpr* expr = valueToNekoExpr(a[0]);
     valFree(a[0]);
     if (!expr) return valError("\\factorPoly expects a NEKO expression");
+    return factorPolynomialRealValue(expr, "factorPoly");
+}
 
-    double coeffs[NEKO_REPL_MAX_POLY_DEG + 1] = {0};
-    int degree = 0;
-    if (!extractPolyCoeffs(expr, "x", coeffs, &degree)) {
-        nekoFreeExpr(expr);
-        return valError("\\factorPoly expects a polynomial in x");
-    }
+static Value bi_factorPolyReal(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    NekoExpr* expr = valueToNekoExpr(a[0]);
+    valFree(a[0]);
+    if (!expr) return valError("\\factorPolyReal expects a NEKO expression");
+    return factorPolynomialRealValue(expr, "factorPolyReal");
+}
 
-    double roots[NEKO_REPL_MAX_ROOTS] = {0};
-    int nroots = 0;
-    polynomialRealRoots(coeffs, degree, roots, &nroots);
-
-    double remCoeffs[NEKO_REPL_MAX_POLY_DEG + 1] = {0};
-    for (int i = 0; i <= degree; i++) remCoeffs[i] = coeffs[i];
-    int remDegree = degree;
-    NekoExpr* factored = nekoConst(1.0);
-
-    for (int i = 0; i < nroots && remDegree > 0; i++) {
-        int divided = 0;
-        for (;;) {
-            double q[NEKO_REPL_MAX_POLY_DEG + 1] = {0};
-            double remainder = 0.0;
-            syntheticDivide(remCoeffs, remDegree, roots[i], q, &remainder);
-            if (fabs(remainder) > 1e-7) break;
-            NekoExpr* factor = nekoSub(nekoVar("x"), nekoConst(roots[i]));
-            factored = nekoSimplify(nekoMul(factored, factor));
-            for (int k = 0; k < remDegree; k++) remCoeffs[k] = q[k];
-            remCoeffs[remDegree] = 0.0;
-            remDegree = degreeFromCoeffs(remCoeffs, remDegree - 1);
-            divided = 1;
-            if (remDegree <= 0 || fabs(evalPolyCoeffs(remCoeffs, remDegree, roots[i])) > 1e-7) break;
-        }
-        (void)divided;
-    }
-
-    NekoExpr* leftover = polynomialExprFromCoeffs(remCoeffs, remDegree);
-    NekoExpr* out = nekoSimplify(nekoMul(leftover, factored));
-    nekoFreeExpr(expr);
-    return wrapNekoExpr(out);
+static Value bi_factorPolyComplex(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    NekoExpr* expr = valueToNekoExpr(a[0]);
+    valFree(a[0]);
+    if (!expr) return valError("\\factorPolyComplex expects a NEKO expression");
+    return factorPolynomialComplexValue(expr, "factorPolyComplex");
 }
 
 static int nekoExprEquivalent(const NekoExpr* lhs, const NekoExpr* rhs) {
@@ -2668,76 +3162,425 @@ static int hasParam(const char* s, const char* key) {
     return s && key && strstr(s, key) != NULL;
 }
 
-static int parseStandardInitialCondition(const char* s, const char* marker,
-                                         double* x0, double* value) {
+static Value odeGeneralSolution(const char* solution) {
+    return valSymbol(solution);
+}
+
+static int parseExactOdeNumber(const char* s, double* out) {
+    if (!s || !*s || !out) return 0;
+    if (strncmp(s, "\\pi", 3) == 0) {
+        const char* p = s + 3;
+        double v = M_PI;
+        if (*p == '\0') {
+            *out = v;
+            return 1;
+        }
+        if (*p == '/') {
+            char* end = NULL;
+            double d = strtod(p + 1, &end);
+            if (end != p + 1 && *end == '\0' && fabs(d) > 1e-12) {
+                *out = v / d;
+                return 1;
+            }
+        }
+        if (*p == '*') {
+            char* end = NULL;
+            double m = strtod(p + 1, &end);
+            if (end != p + 1 && *end == '\0') {
+                *out = v * m;
+                return 1;
+            }
+        }
+        return 0;
+    }
+
+    char* end = NULL;
+    double v = strtod(s, &end);
+    if (end == s || *end != '\0') return 0;
+    *out = v;
+    return 1;
+}
+
+static int parseDerivativeMonomial(const char* s, double* coeff, int* order) {
+    if (!s || !*s || !coeff || !order) return 0;
+
+    const char* p = s;
+    int sign = 1;
+    if (*p == '+') p++;
+    else if (*p == '-') {
+        sign = -1;
+        p++;
+    }
+
+    char* end = NULL;
+    double c = strtod(p, &end);
+    int hasCoeff = end != p;
+    if (hasCoeff) p = end;
+    else c = 1.0;
+
+    if (*p == '*') p++;
+    if (*p != 'y') return 0;
+    p++;
+
+    int primes = 0;
+    while (*p == '\'') {
+        primes++;
+        p++;
+    }
+    if (*p != '\0') return 0;
+
+    *coeff = (double)sign * c;
+    *order = primes;
+    return 1;
+}
+
+static int parseLinearYCombination(const char* s, double* coeffs, int maxOrder) {
+    if (!s || !*s || !coeffs || maxOrder < 0) return 0;
+    for (int i = 0; i <= maxOrder; i++) coeffs[i] = 0.0;
+
+    const char* p = s;
+    while (*p) {
+        int sign = 1;
+        if (*p == '+') p++;
+        else if (*p == '-') {
+            sign = -1;
+            p++;
+        }
+
+        char* end = NULL;
+        double c = strtod(p, &end);
+        int hasCoeff = end != p;
+        if (hasCoeff) p = end;
+        else c = 1.0;
+
+        if (*p == '*') p++;
+        if (*p != 'y') return 0;
+        p++;
+
+        int order = 0;
+        while (*p == '\'') {
+            order++;
+            p++;
+        }
+        if (order > maxOrder) return 0;
+        coeffs[order] += (double)sign * c;
+
+        if (*p == '\0') break;
+        if (*p != '+' && *p != '-') return 0;
+    }
+
+    return 1;
+}
+
+static NekoExpr* parsePolynomialOrPolyCall(const char* s) {
+    if (!s) return NULL;
+
+    NekoExpr* expr = parsePolynomialLiteral(s);
+    if (expr) return expr;
+
+    if (strncmp(s, "\\poly{", 6) == 0) {
+        const char* close = strrchr(s, '}');
+        if (close && close[1] == '\0' && close > s + 6) {
+            size_t len = (size_t)(close - (s + 6));
+            char* inner = malloc(len + 1);
+            if (!inner) return NULL;
+            memcpy(inner, s + 6, len);
+            inner[len] = '\0';
+            expr = parsePolynomialLiteral(inner);
+            free(inner);
+            return expr;
+        }
+    }
+
+    return NULL;
+}
+
+static int parseDerivativeInitialCondition(const char* s, int order, double* x0, double* value) {
+    if (!s || order < 0 || !x0 || !value) return 0;
+
+    char marker[32];
+    size_t pos = 0;
+    marker[pos++] = 'y';
+    for (int i = 0; i < order && pos + 2 < sizeof(marker); i++) marker[pos++] = '\'';
+    marker[pos++] = '(';
+    marker[pos] = '\0';
+
     const char* p = strstr(s, marker);
     if (!p) return 0;
     p += strlen(marker);
     const char* close = strchr(p, ')');
     if (!close || strncmp(close, ")=", 2) != 0) return 0;
-    if (x0) *x0 = parseOdeNumber(p, x0 ? *x0 : 0.0);
-    if (value) *value = parseOdeNumber(close + 2, value ? *value : 0.0);
+
+    size_t xLen = (size_t)(close - p);
+    const char* valueStart = close + 2;
+    const char* valueEnd = valueStart;
+    while (*valueEnd && *valueEnd != ',' && *valueEnd != ';') valueEnd++;
+    size_t valueLen = (size_t)(valueEnd - valueStart);
+
+    char* xText = malloc(xLen + 1);
+    char* valueText = malloc(valueLen + 1);
+    if (!xText || !valueText) {
+        free(xText);
+        free(valueText);
+        return 0;
+    }
+    memcpy(xText, p, xLen);
+    xText[xLen] = '\0';
+    memcpy(valueText, valueStart, valueLen);
+    valueText[valueLen] = '\0';
+
+    double localX = 0.0;
+    double localValue = 0.0;
+    int ok = parseExactOdeNumber(xText, &localX) && parseExactOdeNumber(valueText, &localValue);
+    free(xText);
+    free(valueText);
+    if (!ok) return 0;
+    if (isfinite(*x0) && fabs(*x0 - localX) > 1e-12) return -1;
+    *x0 = localX;
+    *value = localValue;
     return 1;
 }
 
-static Value odeGeneralSolution(const char* solution) {
-    return valSymbol(solution);
+static int gatherInitialConditions(const char* s, int order, double* x0, double* values) {
+    if (!s || order < 1 || !x0 || !values) return 0;
+
+    for (int i = 0; i < order; i++) values[i] = NAN;
+    *x0 = hasParam(s, "x0=") ? paramValue(s, "x0=", 0.0) : NAN;
+
+    if (order >= 1 && hasParam(s, "y0=")) values[0] = paramValue(s, "y0=", NAN);
+    if (order >= 2 && hasParam(s, "dy0=")) values[1] = paramValue(s, "dy0=", NAN);
+
+    for (int i = 0; i < order; i++) {
+        double parsedValue = NAN;
+        int status = parseDerivativeInitialCondition(s, i, x0, &parsedValue);
+        if (status < 0) return 0;
+        if (status > 0) values[i] = parsedValue;
+    }
+
+    if (!isfinite(*x0)) {
+        int anyValue = 0;
+        for (int i = 0; i < order; i++) {
+            if (isfinite(values[i])) {
+                anyValue = 1;
+                break;
+            }
+        }
+        if (anyValue) *x0 = 0.0;
+    }
+
+    for (int i = 0; i < order; i++) {
+        if (!isfinite(values[i])) return 0;
+    }
+    return 1;
+}
+
+static Value finalizeSolvedOde(NekoOde* ode, int order, const char* s) {
+    if (!ode) return valError("\\solveODE could not match the ODE pattern");
+
+    int hasTarget = hasParam(s, "x=");
+    double target = paramValue(s, "x=", 0.0);
+    double x0 = NAN;
+    double initialValues[8] = {0};
+    int haveAllInitials = order >= 1 && order <= 8
+        ? gatherInitialConditions(s, order, &x0, initialValues)
+        : 0;
+
+    if (hasTarget && !haveAllInitials) {
+        nekoFreeOde(ode);
+        return valError("\\solveODE needs initial conditions to evaluate at a specific x");
+    }
+
+    if (haveAllInitials) {
+        if (hasTarget) {
+            NekoOdeResult r = nekoEvalOde(ode, target, 4096);
+            nekoFreeOde(ode);
+            return r.status == NEKO_OK ? valDecimal(r.value) : valError("\\solveODE failed while evaluating");
+        }
+
+        NekoSolveResult solved = nekoSolveOdeInitialValue(ode);
+        nekoFreeOde(ode);
+        if (solved.status != NEKO_OK || !solved.expr) {
+            nekoFreeExpr(solved.expr);
+            return valError("\\solveODE failed while solving the initial value problem");
+        }
+        return wrapNekoExpr(solved.expr);
+    }
+
+    if (hasTarget) {
+        nekoFreeOde(ode);
+        return valError("\\solveODE needs initial conditions to evaluate at a specific x");
+    }
+
+    NekoSolveResult solved = nekoSolveOdeGeneral(ode);
+    nekoFreeOde(ode);
+    if (solved.status != NEKO_OK || !solved.expr) {
+        nekoFreeExpr(solved.expr);
+        return valError("\\solveODE could not solve the ODE symbolically");
+    }
+    return wrapNekoExpr(solved.expr);
 }
 
 static Value solveScalarOdeString(const char* raw) {
     char* s = compactOdeString(raw);
     if (!s) return valError("out of memory while parsing ODE");
-    int hasTarget = hasParam(s, "x=");
-    int hasY0 = hasParam(s, "y0=");
-    int hasDy0 = hasParam(s, "dy0=");
-    int wantsParticular = hasTarget || hasY0 || hasDy0;
-    double target = paramValue(s, "x=", 0.0);
-    double x0 = paramValue(s, "x0=", 0.0);
-    double y0 = paramValue(s, "y0=", 1.0);
-    double dy0 = paramValue(s, "dy0=", 0.0);
-    if (parseStandardInitialCondition(s, "y'(", &x0, &dy0)) {
-        hasDy0 = 1;
-        wantsParticular = 1;
+    char* equation = dupstr(s);
+    if (!equation) {
+        free(s);
+        return valError("out of memory while parsing ODE");
     }
-    if (parseStandardInitialCondition(s, "y(", &x0, &y0)) {
-        hasY0 = 1;
-        wantsParticular = 1;
+    for (char* p = equation; *p; p++) {
+        if (*p == ',' || *p == ';') {
+            *p = '\0';
+            break;
+        }
     }
 
+    char* eq = strchr(equation, '=');
+    if (!eq) {
+        free(equation);
+        free(s);
+        return valError("\\solveODE expects an equation with '='");
+    }
+    *eq = '\0';
+    const char* lhs = equation;
+    const char* rhs = eq + 1;
+
     NekoOde* ode = NULL;
-    if (strstr(s, "y'=y^2") || strstr(s, "y'=1*y^2")) {
-        if (!wantsParticular) {
+    Value out;
+
+    if (strcmp(rhs, "y^2") == 0 || strcmp(rhs, "1*y^2") == 0) {
+        double x0 = 0.0;
+        double initial[1] = {0.0};
+        int haveInitial = gatherInitialConditions(s, 1, &x0, initial);
+        if (hasParam(s, "x=") && !haveInitial) {
+            free(equation);
+            free(s);
+            return valError("\\solveODE needs initial conditions to evaluate Bernoulli equations");
+        }
+        if (!haveInitial) {
+            free(equation);
             free(s);
             return odeGeneralSolution("y = 1/(C - x)");
         }
-        target = hasTarget ? target : x0;
         NekoExpr* Pexpr = nekoConst(0.0);
         NekoExpr* Qexpr = nekoConst(1.0);
         NekoFunc* P = nekoFuncFromExpr(Pexpr);
         NekoFunc* Q = nekoFuncFromExpr(Qexpr);
-        ode = nekoOdeBernoulli(P, Q, 2.0, x0, y0);
-        nekoFreeFunc(P); nekoFreeFunc(Q);
-        nekoFreeExpr(Pexpr); nekoFreeExpr(Qexpr);
-    } else if (strstr(s, "y''+y=0") || strstr(s, "y''=-y")) {
-        if (!wantsParticular) {
+        ode = nekoOdeBernoulli(P, Q, 2.0, x0, initial[0]);
+        nekoFreeFunc(P);
+        nekoFreeFunc(Q);
+        nekoFreeExpr(Pexpr);
+        nekoFreeExpr(Qexpr);
+        if (!ode) {
+            free(equation);
             free(s);
-            return odeGeneralSolution("y = C1*cos(x) + C2*sin(x)");
+            return valError("\\solveODE could not build the Bernoulli ODE");
         }
-        target = hasTarget ? target : x0;
-        ode = nekoOdeSecondOrderConst(1.0, 0.0, 1.0, x0, y0, dy0);
-    } else if (strstr(s, "y''-y=0")) {
-        if (!wantsParticular) {
+        if (hasParam(s, "x=")) {
+            double target = paramValue(s, "x=", x0);
+            NekoOdeResult r = nekoEvalOde(ode, target, 4096);
+            nekoFreeOde(ode);
+            free(equation);
             free(s);
-            return odeGeneralSolution("y = C1*exp(x) + C2*exp(-x)");
+            return r.status == NEKO_OK ? valDecimal(r.value) : valError("\\solveODE failed while evaluating");
         }
-        target = hasTarget ? target : x0;
-        ode = nekoOdeSecondOrderConst(1.0, 0.0, -1.0, x0, y0, dy0);
+        free(equation);
+        free(s);
+        return valError("\\solveODE does not yet expose symbolic Bernoulli IVP solutions");
     }
+
+    double coeffs[3] = {0.0, 0.0, 0.0};
+    double rhsConst = 0.0;
+    if (parseLinearYCombination(lhs, coeffs, 2) && fabs(coeffs[2]) > 1e-12 && parseExactOdeNumber(rhs, &rhsConst)) {
+        double x0 = 0.0;
+        double initial[2] = {0.0, 0.0};
+        if (!gatherInitialConditions(s, 2, &x0, initial)) {
+            x0 = 0.0;
+            initial[0] = 0.0;
+            initial[1] = 0.0;
+        }
+        ode = nekoOdeSecondOrderConstForced(coeffs[2], coeffs[1], coeffs[0], rhsConst, x0, initial[0], initial[1]);
+        out = finalizeSolvedOde(ode, 2, s);
+        free(equation);
+        free(s);
+        return out;
+    }
+
+    double lhsCoeff = 0.0;
+    int lhsOrder = 0;
+    double rhsCoeff = 0.0;
+    int rhsOrder = 0;
+    if (parseDerivativeMonomial(lhs, &lhsCoeff, &lhsOrder)
+            && lhsOrder == 1
+            && parseDerivativeMonomial(rhs, &rhsCoeff, &rhsOrder)
+            && rhsOrder == 0) {
+        double x0 = 0.0;
+        double initial[1] = {0.0};
+        if (!gatherInitialConditions(s, 1, &x0, initial)) {
+            x0 = 0.0;
+            initial[0] = 0.0;
+        }
+        ode = nekoOdeFirstOrderLinearConst(lhsCoeff, rhsCoeff, x0, initial[0]);
+        out = finalizeSolvedOde(ode, 1, s);
+        free(equation);
+        free(s);
+        return out;
+    }
+
+    NekoExpr* rhsExpr = NULL;
+    if (parseDerivativeMonomial(lhs, &lhsCoeff, &lhsOrder)
+            && lhsOrder >= 1
+            && lhsOrder <= 8
+            && (rhsExpr = parsePolynomialOrPolyCall(rhs)) != NULL) {
+        double x0 = 0.0;
+        double initial[8] = {0.0};
+        const double* initialPtr = initial;
+        if (!gatherInitialConditions(s, lhsOrder, &x0, initial)) {
+            x0 = 0.0;
+            initialPtr = NULL;
+        }
+        ode = nekoOdeNthOrderIntegrable(lhsOrder, lhsCoeff, rhsExpr, x0, initialPtr);
+        nekoFreeExpr(rhsExpr);
+        out = finalizeSolvedOde(ode, lhsOrder, s);
+        free(equation);
+        free(s);
+        return out;
+    }
+    nekoFreeExpr(rhsExpr);
+
+    if (parseDerivativeMonomial(lhs, &lhsCoeff, &lhsOrder)
+            && lhsOrder >= 1
+            && lhsOrder <= 8
+            && (rhsExpr = parseNekoExprLiteral(rhs)) != NULL) {
+        int dependsOnY = exprDependsOnVar(rhsExpr, "y");
+        if (!dependsOnY) {
+            double x0 = 0.0;
+            double initial[8] = {0.0};
+            const double* initialPtr = initial;
+            if (!gatherInitialConditions(s, lhsOrder, &x0, initial)) {
+                x0 = 0.0;
+                initialPtr = NULL;
+            }
+            ode = nekoOdeNthOrderIntegrable(lhsOrder, lhsCoeff, rhsExpr, x0, initialPtr);
+            nekoFreeExpr(rhsExpr);
+            out = finalizeSolvedOde(ode, lhsOrder, s);
+            free(equation);
+            free(s);
+            return out;
+        }
+
+        if (lhsOrder == 1) {
+            out = solveSeparableOdeValue(lhsCoeff, rhsExpr, s);
+            free(equation);
+            free(s);
+            return out;
+        }
+        nekoFreeExpr(rhsExpr);
+    }
+
+    free(equation);
     free(s);
-    if (!ode) return valError("\\solveODE could not match the ODE pattern");
-    NekoOdeResult r = nekoEvalOde(ode, target, 4096);
-    nekoFreeOde(ode);
-    return r.status == NEKO_OK ? valDecimal(r.value) : valError("\\solveODE failed while evaluating");
+    return valError("\\solveODE could not match the ODE pattern");
 }
 
 static int parseSystemCoeff(const char* rhs, const char* var, double* coeff) {
@@ -6251,6 +7094,8 @@ void registerBuiltins(void) {
     registerCommand("eval",  2, bi_eval_neko);
     registerCommand("roots",  1, bi_roots);
     registerCommand("factorPoly",  1, bi_factorPoly);
+    registerCommand("factorPolyReal",  1, bi_factorPolyReal);
+    registerCommand("factorPolyComplex",  1, bi_factorPolyComplex);
     registerCommand("funcArea", -1, bi_funcArea);
     registerCommand("funcMax",  1, bi_funcMax);
     registerCommand("funcMin",  1, bi_funcMin);
