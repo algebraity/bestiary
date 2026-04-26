@@ -31,7 +31,8 @@ TEST_SRCS = \
 	tests/test_usagi.c \
 	tests/test_poni.c \
 	tests/test_ookami.c \
-	tests/test_tora.c
+	tests/test_tora.c \
+	tests/test_neko.c
 
 BEAST_OBJS = $(patsubst src/%.c,$(OBJDIR)/src/%.o,$(BEAST_SRCS))
 CORE_OBJS = $(patsubst src/%.c,$(OBJDIR)/src/%.o,$(CORE_SRCS))
@@ -44,7 +45,8 @@ TEST_BINS = \
 	$(BINDIR)/test_usagi \
 	$(BINDIR)/test_poni \
 	$(BINDIR)/test_ookami \
-	$(BINDIR)/test_tora
+	$(BINDIR)/test_tora \
+	$(BINDIR)/test_neko
 
 DEPFILES = $(BEAST_OBJS:.o=.d) $(CORE_OBJS:.o=.d) $(REPL_OBJ:.o=.d) $(TEST_OBJS:.o=.d)
 
@@ -76,6 +78,9 @@ $(BINDIR)/test_ookami: $(OBJDIR)/tests/test_ookami.o $(OBJDIR)/src/beasts/ookami
 	$(CC) $(CFLAGS) -o $@ $^ -lm
 
 $(BINDIR)/test_tora: $(OBJDIR)/tests/test_tora.o $(OBJDIR)/src/beasts/tora.o $(OBJDIR)/src/beasts/sokko.o $(OBJDIR)/src/beasts/usagi.o $(OBJDIR)/src/beasts/hebi.o | $(BINDIR)
+	$(CC) $(CFLAGS) -o $@ $^ -lm
+
+$(BINDIR)/test_neko: $(OBJDIR)/tests/test_neko.o $(OBJDIR)/src/beasts/neko.o | $(BINDIR)
 	$(CC) $(CFLAGS) -o $@ $^ -lm
 
 $(OBJDIR)/%.o: %.c

@@ -75,8 +75,7 @@ Token* bstLex(char* string, size_t* out_len)
 		}
 
 		switch (c) {
-			case '"':
-			case '\'': {
+			case '"': {
 				bstlFlush(&tokens, &len, &cap, curtok, buf, &bufr, line, tokcol);
 				char quote = c;
 				size_t startCol = col;
@@ -106,6 +105,9 @@ Token* bstLex(char* string, size_t* out_len)
 				curtok = TOK_NONE;
 				continue;
 			}
+			case '\'':
+				curtok = TOK_PRIME;
+				break;
 			case '0': case '1': case '2': case '3': case '4':
 			case '5': case '6': case '7': case '8': case '9':
 				if (lastok == TOK_IDENT) {
@@ -116,8 +118,28 @@ Token* bstLex(char* string, size_t* out_len)
 				curtok = (lastok == TOK_DECIMAL) ? TOK_DECIMAL : TOK_NUMBER;
 				break;
 			case '=':
-				curtok = TOK_EQUALS;
-				break;
+				// Detect == by one-char lookahead
+				bstlFlush(&tokens, &len, &cap, curtok, buf, &bufr, line, tokcol);
+				if (i + 1 < l && string[i + 1] == '=') {
+					Token teq2;
+					teq2.kind = TOK_EQEQ;
+					teq2.text = NULL;
+					teq2.line = line;
+					teq2.col  = col;
+					bstlPush(&tokens, &len, &cap, teq2);
+					i++;
+					col += 2;
+				} else {
+					Token teq;
+					teq.kind = TOK_EQUALS;
+					teq.text = NULL;
+					teq.line = line;
+					teq.col  = col;
+					bstlPush(&tokens, &len, &cap, teq);
+					col++;
+				}
+				curtok = TOK_NONE;
+				continue;
 			case '(':
 				curtok = TOK_LPAREN;
 				break;

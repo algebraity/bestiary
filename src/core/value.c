@@ -1,10 +1,13 @@
 #include<stdlib.h>
 #include<stdio.h>
 #include<string.h>
+#include<math.h>
 #include "value.h"
+#include "neko.h"
 #include "ookami.h"
 #include "poni.h"
 #include "sokko.h"
+#include "tora.h"
 #include "usagi.h"
 
 /* ---------- Helper methods ---------- */
@@ -166,6 +169,214 @@ static void printInlineGroupHomomorphism(GroupHomomorphism* homo) {
     printf(">");
 }
 
+static void printInlineConjugacyClass(ConjugacyClass* class) {
+    if (!class) {
+        printf("<conjugacyClass null>");
+        return;
+    }
+    printf("<conjugacyClass size=%d; rep=%s; elements=[",
+           class->size,
+           (class->rep && class->rep->repr) ? class->rep->repr : "?");
+    int limit = class->size < 6 ? class->size : 6;
+    for (int i = 0; i < limit; i++) {
+        if (i) printf(", ");
+        int idx = class->indices ? class->indices[i] : -1;
+        GroupElement* element = (class->group && idx >= 0 && idx < class->group->card)
+            ? class->group->elements[idx]
+            : NULL;
+        printf("%s", (element && element->repr) ? element->repr : "?");
+    }
+    if (class->size > limit) printf(", ...");
+    printf("]>");
+}
+
+static void printInlineRepresentation(Representation* rep) {
+    if (!rep) {
+        printf("<representation null>");
+        return;
+    }
+    printf("<representation %s; dim=%d; matrixDim=%d; groupCard=%d>",
+           rep->repr ? rep->repr : "?",
+           rep->dim,
+           rep->mdim,
+           (rep->group ? rep->group->card : -1));
+}
+
+static void printInlineCharacter(Character* chi) {
+    if (!chi) {
+        printf("<character null>");
+        return;
+    }
+    printf("<character %s; classes=%d; groupCard=%d>",
+           chi->repr ? chi->repr : "?",
+           chi->numClasses,
+           (chi->group ? chi->group->card : -1));
+}
+
+static void freeCharacterDeep(Character* chi) {
+    if (!chi) return;
+    for (int i = 0; i < chi->numClasses; i++) freeConjugacyClass(chi->classes[i]);
+    freeCharacter(chi);
+}
+
+static Character* cloneCharacterDeep(Character* chi) {
+    if (!chi) return NULL;
+
+    int n = chi->numClasses;
+    ConjugacyClass** classesCopy = malloc((size_t)n * sizeof(ConjugacyClass*));
+    if (!classesCopy) return NULL;
+
+    for (int i = 0; i < n; i++) {
+        classesCopy[i] = constructConjugacyClass(chi->classes[i]->group, chi->classes[i]->rep);
+        if (!classesCopy[i]) {
+            for (int j = 0; j < i; j++) freeConjugacyClass(classesCopy[j]);
+            free(classesCopy);
+            return NULL;
+        }
+    }
+
+    ComplexNumber* valuesCopy = malloc((size_t)n * sizeof(ComplexNumber));
+    if (!valuesCopy) {
+        for (int i = 0; i < n; i++) freeConjugacyClass(classesCopy[i]);
+        free(classesCopy);
+        return NULL;
+    }
+    for (int i = 0; i < n; i++) valuesCopy[i] = chi->values[i];
+
+    Character* copy = constructCharacter(
+        chi->group,
+        chi->repr ? chi->repr : "chi",
+        classesCopy,
+        valuesCopy,
+        n
+    );
+    if (!copy) {
+        for (int i = 0; i < n; i++) freeConjugacyClass(classesCopy[i]);
+        free(classesCopy);
+        free(valuesCopy);
+    }
+    return copy;
+}
+
+static void printInlineCharacterTable(CharacterTable* table) {
+    if (!table) {
+        printf("<characterTable null>");
+        return;
+    }
+    printf("<characterTable classes=%d; irreps=%d; groupCard=%d>",
+           table->numClasses,
+           table->numIrreps,
+           (table->group ? table->group->card : -1));
+}
+
+static void freeCharacterTableDeep(CharacterTable* table) {
+    if (!table) return;
+    for (int k = 0; k < table->numIrreps; k++) freeCharacter(table->irreps[k]);
+    for (int i = 0; i < table->numClasses; i++) freeConjugacyClass(table->classes[i]);
+    freeCharacterTable(table);
+}
+
+static CharacterTable* cloneCharacterTableDeep(CharacterTable* table) {
+    if (!table) return NULL;
+
+    int r = table->numClasses;
+    int m = table->numIrreps;
+
+    ConjugacyClass** classesCopy = malloc((size_t)r * sizeof(ConjugacyClass*));
+    if (!classesCopy) return NULL;
+    for (int i = 0; i < r; i++) {
+        classesCopy[i] = constructConjugacyClass(table->classes[i]->group, table->classes[i]->rep);
+        if (!classesCopy[i]) {
+            for (int j = 0; j < i; j++) freeConjugacyClass(classesCopy[j]);
+            free(classesCopy);
+            return NULL;
+        }
+    }
+
+    Character** irrepsCopy = malloc((size_t)m * sizeof(Character*));
+    if (!irrepsCopy) {
+        for (int i = 0; i < r; i++) freeConjugacyClass(classesCopy[i]);
+        free(classesCopy);
+        return NULL;
+    }
+
+    for (int k = 0; k < m; k++) irrepsCopy[k] = NULL;
+    for (int k = 0; k < m; k++) {
+        ConjugacyClass** chiClasses = malloc((size_t)r * sizeof(ConjugacyClass*));
+        ComplexNumber* chiValues = malloc((size_t)r * sizeof(ComplexNumber));
+        if (!chiClasses || !chiValues) {
+            free(chiClasses);
+            free(chiValues);
+            for (int j = 0; j < k; j++) freeCharacter(irrepsCopy[j]);
+            free(irrepsCopy);
+            for (int i = 0; i < r; i++) freeConjugacyClass(classesCopy[i]);
+            free(classesCopy);
+            return NULL;
+        }
+        for (int i = 0; i < r; i++) {
+            chiClasses[i] = classesCopy[i];
+            chiValues[i] = table->irreps[k]->values[i];
+        }
+        irrepsCopy[k] = constructCharacter(
+            table->irreps[k]->group,
+            table->irreps[k]->repr ? table->irreps[k]->repr : "chi",
+            chiClasses,
+            chiValues,
+            r
+        );
+        if (!irrepsCopy[k]) {
+            free(chiClasses);
+            free(chiValues);
+            for (int j = 0; j < k; j++) freeCharacter(irrepsCopy[j]);
+            free(irrepsCopy);
+            for (int i = 0; i < r; i++) freeConjugacyClass(classesCopy[i]);
+            free(classesCopy);
+            return NULL;
+        }
+    }
+
+    ComplexNumber** valuesCopy = malloc((size_t)m * sizeof(ComplexNumber*));
+    if (!valuesCopy) {
+        for (int k = 0; k < m; k++) freeCharacter(irrepsCopy[k]);
+        free(irrepsCopy);
+        for (int i = 0; i < r; i++) freeConjugacyClass(classesCopy[i]);
+        free(classesCopy);
+        return NULL;
+    }
+    for (int k = 0; k < m; k++) {
+        valuesCopy[k] = malloc((size_t)r * sizeof(ComplexNumber));
+        if (!valuesCopy[k]) {
+            for (int j = 0; j < k; j++) free(valuesCopy[j]);
+            free(valuesCopy);
+            for (int kk = 0; kk < m; kk++) freeCharacter(irrepsCopy[kk]);
+            free(irrepsCopy);
+            for (int i = 0; i < r; i++) freeConjugacyClass(classesCopy[i]);
+            free(classesCopy);
+            return NULL;
+        }
+        for (int i = 0; i < r; i++) valuesCopy[k][i] = table->values[k][i];
+    }
+
+    CharacterTable* copy = constructCharacterTable(
+        table->group,
+        classesCopy,
+        irrepsCopy,
+        valuesCopy,
+        r,
+        m
+    );
+    if (!copy) {
+        for (int k = 0; k < m; k++) free(valuesCopy[k]);
+        free(valuesCopy);
+        for (int k = 0; k < m; k++) freeCharacter(irrepsCopy[k]);
+        free(irrepsCopy);
+        for (int i = 0; i < r; i++) freeConjugacyClass(classesCopy[i]);
+        free(classesCopy);
+        return NULL;
+    }
+    return copy;
+}
+
 static void printInlineRingHomomorphism(RingHomomorphism* homo) {
     if (!homo) {
         printf("<ringHomomorphism null>");
@@ -180,13 +391,17 @@ static void printInlineRingHomomorphism(RingHomomorphism* homo) {
 
 /* ---------- Construct methods ---------- */
 
+static double zeroTiny(double x) {
+    return fabs(x) < 1e-15 ? 0.0 : x;
+}
+
 Value valNone(void)               { Value v = {0}; v.kind = VAL_NONE;     return v; }
 Value valError(const char* msg)   { Value v = {0}; v.kind = VAL_ERROR;    v.as.str = dupstr(msg); return v; }
 Value valBool(bool b)             { Value v = {0}; v.kind = VAL_BOOL;     v.as.b = b;             return v; }
 Value valInt(long long n)         { Value v = {0}; v.kind = VAL_INT;      v.as.i = n;             return v; }
-Value valDecimal(double x)        { Value v = {0}; v.kind = VAL_DECIMAL;  v.as.d = x;             return v; }
+Value valDecimal(double x)        { Value v = {0}; v.kind = VAL_DECIMAL;  v.as.d = zeroTiny(x);   return v; }
 Value valFraction(Fraction f)     { Value v = {0}; v.kind = VAL_FRACTION; v.as.frac = f;          return v; }
-Value valComplex(ComplexNumber c) { Value v = {0}; v.kind = VAL_COMPLEX;  v.as.cplx = c;          return v; }
+Value valComplex(ComplexNumber c) { Value v = {0}; v.kind = VAL_COMPLEX;  c.real = zeroTiny(c.real); c.imag = zeroTiny(c.imag); v.as.cplx = c; return v; }
 Value valString(const char* s)    { Value v = {0}; v.kind = VAL_STRING;   v.as.str = dupstr(s);   return v; }
 Value valSymbol(const char* s)    { Value v = {0}; v.kind = VAL_SYMBOL;   v.as.str = dupstr(s);   return v; }
 
@@ -217,6 +432,21 @@ void valFree(Value v) {
         case VAL_COMBSET:
             if (v.as.ptr) freeCombset((CombSet*)v.as.ptr);
             break;
+        case VAL_CONJUGACY_CLASS:
+            if (v.as.ptr) freeConjugacyClass((ConjugacyClass*)v.as.ptr);
+            break;
+        case VAL_REPRESENTATION:
+            if (v.as.ptr) freeRepresentation((Representation*)v.as.ptr);
+            break;
+        case VAL_CHARACTER:
+            if (v.as.ptr) freeCharacterDeep((Character*)v.as.ptr);
+            break;
+        case VAL_CHARACTER_TABLE:
+            if (v.as.ptr) freeCharacterTableDeep((CharacterTable*)v.as.ptr);
+            break;
+        case VAL_NEKO_EXPR:
+            if (v.as.ptr) nekoFreeExpr((NekoExpr*)v.as.ptr);
+            break;
         case VAL_STRING:
         case VAL_SYMBOL:
         case VAL_ERROR:
@@ -243,6 +473,52 @@ Value valClone(Value v) {
         case VAL_COMBSET:
             return valPtr(VAL_COMBSET,
                           v.as.ptr ? copyCombset((CombSet*)v.as.ptr) : NULL);
+        case VAL_CONJUGACY_CLASS: {
+            ConjugacyClass* class = (ConjugacyClass*)v.as.ptr;
+            if (!class) return valPtr(VAL_CONJUGACY_CLASS, NULL);
+            return valPtr(VAL_CONJUGACY_CLASS,
+                          constructConjugacyClass(class->group, class->rep));
+        }
+        case VAL_REPRESENTATION: {
+            Representation* rep = (Representation*)v.as.ptr;
+            if (!rep) return valPtr(VAL_REPRESENTATION, NULL);
+            Group* group = rep->group;
+            if (!group || !rep->images) return valPtr(VAL_REPRESENTATION, NULL);
+
+            Matrix** images = malloc(group->card * sizeof(Matrix*));
+            if (!images) return valPtr(VAL_REPRESENTATION, NULL);
+
+            for (int i = 0; i < group->card; i++) {
+                images[i] = copyMatrix(rep->images[i]);
+                if (!images[i]) {
+                    for (int j = 0; j < i; j++) freeMatrix(images[j]);
+                    free(images);
+                    return valPtr(VAL_REPRESENTATION, NULL);
+                }
+            }
+
+            Representation* copy = constructRepresentation(
+                group,
+                rep->repr ? rep->repr : "rep",
+                images,
+                rep->mdim,
+                rep->dim
+            );
+            if (!copy) {
+                for (int i = 0; i < group->card; i++) freeMatrix(images[i]);
+                free(images);
+            }
+            return valPtr(VAL_REPRESENTATION, copy);
+        }
+        case VAL_CHARACTER:
+            return valPtr(VAL_CHARACTER,
+                          v.as.ptr ? cloneCharacterDeep((Character*)v.as.ptr) : NULL);
+        case VAL_CHARACTER_TABLE:
+            return valPtr(VAL_CHARACTER_TABLE,
+                          v.as.ptr ? cloneCharacterTableDeep((CharacterTable*)v.as.ptr) : NULL);
+        case VAL_NEKO_EXPR:
+            return valPtr(VAL_NEKO_EXPR,
+                          v.as.ptr ? nekoCloneExpr((NekoExpr*)v.as.ptr) : NULL);
         case VAL_STRING: return valString(v.as.str);
         case VAL_SYMBOL: return valSymbol(v.as.str);
         case VAL_ERROR:  return valError(v.as.str);
@@ -271,11 +547,16 @@ const char* valKindName(ValueKind k) {
         case VAL_STRING:        return "string";
         case VAL_SYMBOL:        return "symbol";
         case VAL_LIST:          return "list";
+        case VAL_NEKO_EXPR:     return "neko_expr";
         case VAL_MATRIX:        return "matrix";
         case VAL_VECTOR:        return "vector";
         case VAL_COMBSET:       return "combset";
         case VAL_GROUP:         return "group";
         case VAL_GROUP_ELEMENT: return "group_element";
+        case VAL_CONJUGACY_CLASS: return "conjugacy_class";
+        case VAL_REPRESENTATION: return "representation";
+        case VAL_CHARACTER: return "character";
+        case VAL_CHARACTER_TABLE: return "character_table";
         case VAL_SUBGROUP:      return "subgroup";
         case VAL_GROUP_COSET:   return "group_coset";
         case VAL_GROUP_HOMOMORPHISM: return "group_homomorphism";
@@ -309,6 +590,10 @@ void valPrint(Value v) {
                 valPrint(v.as.list.items[i]);
             }
             putchar(')');
+            break;
+        case VAL_NEKO_EXPR:
+            if (v.as.ptr) nekoPrintExpr((NekoExpr*)v.as.ptr);
+            else printf("<neko_expr null>");
             break;
         case VAL_MATRIX:
         case VAL_VECTOR:
@@ -355,6 +640,18 @@ void valPrint(Value v) {
             printf("%s", (element && element->repr) ? element->repr : "<group_element null>");
             break;
         }
+        case VAL_CONJUGACY_CLASS:
+            printInlineConjugacyClass((ConjugacyClass*)v.as.ptr);
+            break;
+        case VAL_REPRESENTATION:
+            printInlineRepresentation((Representation*)v.as.ptr);
+            break;
+        case VAL_CHARACTER:
+            printInlineCharacter((Character*)v.as.ptr);
+            break;
+        case VAL_CHARACTER_TABLE:
+            printInlineCharacterTable((CharacterTable*)v.as.ptr);
+            break;
         case VAL_SUBGROUP: {
             printInlineSubgroup((SubGroup*)v.as.ptr);
             break;

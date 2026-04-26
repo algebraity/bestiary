@@ -13,6 +13,10 @@ typedef struct Group Group;
 typedef struct GroupElement GroupElement;
 typedef struct SubGroup SubGroup;
 typedef struct GroupCoset GroupCoset;
+typedef struct ConjugacyClass ConjugacyClass;
+typedef struct Representation Representation;
+typedef struct Character Character;
+typedef struct CharacterTable CharacterTable;
 typedef struct GroupHomomorphism GroupHomomorphism;
 typedef struct Ring Ring;
 typedef struct RingElement RingElement;
@@ -21,6 +25,7 @@ typedef struct Ideal Ideal;
 typedef struct RingHomomorphism RingHomomorphism;
 typedef struct Body Body;
 typedef struct Force Force;
+typedef struct NekoExpr NekoExpr;
 
 /* ---------- Value kinds ---------- */
 
@@ -35,6 +40,7 @@ typedef enum {
     VAL_STRING,          // owned char*
     VAL_SYMBOL,          // unresolved identifier
     VAL_LIST,            // tuple / variadic payload
+    VAL_NEKO_EXPR,       // owned Neko symbolic expression
 
     /* BEAST opaque pointer kinds -- add more as you wire up functions. */
     VAL_MATRIX,
@@ -42,6 +48,10 @@ typedef enum {
     VAL_COMBSET,
     VAL_GROUP,
     VAL_GROUP_ELEMENT,
+    VAL_CONJUGACY_CLASS,
+    VAL_REPRESENTATION,
+    VAL_CHARACTER,
+    VAL_CHARACTER_TABLE,
     VAL_SUBGROUP,
     VAL_GROUP_COSET,
     VAL_GROUP_HOMOMORPHISM,
@@ -94,13 +104,14 @@ Value valPtr(ValueKind kind, void* p);            // generic opaque-pointer ctor
 /* ---------- Free, clone, introspection ---------- */
 
 // Free the Value payload. Strings/lists are owned directly; matrices,
-// vectors, and CombSets are also owned and released here. Other opaque
-// BEAST pointers are still treated as borrowed until their wrappers define
-// ownership.
+// vectors, CombSets, TORA conjugacy classes, TORA representations, and TORA
+// character tables are also owned and released here. Other opaque BEAST
+// pointers are still treated as borrowed until their wrappers define ownership.
 void valFree(Value v);
 
 // Produce an independently-freeable duplicate. Strings, lists, matrices,
-// and vectors are deep-copied; other opaque pointers remain shallow.
+// vectors, conjugacy classes, representations, and character tables are
+// deep-copied; other opaque pointers remain shallow.
 Value valClone(Value v);
 
 const char* valKindName(ValueKind k);

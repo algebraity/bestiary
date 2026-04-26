@@ -109,19 +109,22 @@ static int completeCommandName(int count, int key) {
     }
 
     size_t shared = sharedCompletionPrefix(matches, match_count);
-    if (shared > prefix_len) {
-        size_t suffix_len = shared - prefix_len;
-        char* suffix = malloc(suffix_len + 1);
-        if (suffix) {
-            memcpy(suffix, matches[0]->name + prefix_len, suffix_len);
-            suffix[suffix_len] = '\0';
-            rl_insert_text(suffix);
-            free(suffix);
+    size_t completion_len = (match_count == 1) ? strlen(matches[0]->name) : shared;
+
+    if (completion_len > 0) {
+        char* completion = malloc(completion_len + 1);
+        if (completion) {
+            memcpy(completion, matches[0]->name, completion_len);
+            completion[completion_len] = '\0';
+            rl_delete_text(prefix_start, rl_point);
+            rl_point = prefix_start;
+            rl_insert_text(completion);
+            free(completion);
         }
     }
 
     if (match_count == 1) {
-        rl_forced_update_display();
+        rl_redisplay();
         free(matches);
         return 0;
     }
@@ -131,7 +134,7 @@ static int completeCommandName(int count, int key) {
         printf("\\%s\n", matches[i]->name);
     }
     rl_on_new_line();
-    rl_forced_update_display();
+    rl_redisplay();
 
     free(matches);
     return 0;
