@@ -29,17 +29,22 @@ Bestiary can be used either through the GUI application, `bestiary`, or through 
 
 Here are some screenshots from Bestiary:
 
-![](https://git.keimai.space/algebraity/bestiary/raw/branch/main/art/screenshots/2026-04-26-201124_hyprshot.png)
-
-*The Bestiary start page.*
-
-![](https://git.keimai.space/algebraity/bestiary/raw/branch/main/art/screenshots/2026-04-26-201240_hyprshot.png)
-
-*An example of a Bestiary shell.*
-
-![](https://git.keimai.space/algebraity/bestiary/raw/branch/main/art/screenshots/2026-04-26-201253_hyprshot.png)
-
-*The main help page, with links to BEAST-specific help pages.*
+<table>
+  <tr>
+    <td align="center" width="33%">
+      <img src="https://git.keimai.space/algebraity/bestiary/raw/branch/main/art/screenshots/2026-04-26-201124_hyprshot.png" alt="The Bestiary start page" width="300"><br>
+      <em>The Bestiary start page.</em>
+    </td>
+    <td align="center" width="33%">
+      <img src="https://git.keimai.space/algebraity/bestiary/raw/branch/main/art/screenshots/2026-04-26-201240_hyprshot.png" alt="An example of a Bestiary shell" width="300"><br>
+      <em>An example of a Bestiary shell.</em>
+    </td>
+    <td align="center" width="33%">
+      <img src="https://git.keimai.space/algebraity/bestiary/raw/branch/main/art/screenshots/2026-04-26-201253_hyprshot.png" alt="The main help page, with links to BEAST-specific help pages" width="300"><br>
+      <em>The Sokko help page.</em>
+    </td>
+  </tr>
+</table>
 
 ## Usage examples
 
