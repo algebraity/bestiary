@@ -32,17 +32,23 @@ Here are some screenshots from Bestiary:
 <div align="center">
   <table width="100%">
     <tr>
-      <td align="center" width="33%">
-        <img src="https://git.keimai.space/algebraity/bestiary/raw/branch/main/art/screenshots/2026-04-26-201124_hyprshot.png" alt="The Bestiary start page" width="100%"><br>
-        <em>The Bestiary start page.</em>
+      <td align="center" valign="top" width="33%">
+        <img src="https://git.keimai.space/algebraity/bestiary/raw/branch/main/art/screenshots/2026-04-26-201124_hyprshot.png" alt="Bestiary start page" width="100%"><br>
+        <div style="min-height: 3em;">
+          <em>The Bestiary start page.</em>
+        </div>
       </td>
-      <td align="center" width="33%">
-        <img src="https://git.keimai.space/algebraity/bestiary/raw/branch/main/art/screenshots/2026-04-26-201240_hyprshot.png" alt="An example of a Bestiary shell" width="100%"><br>
-        <em>An example of a Bestiary shell.</em>
+      <td align="center" valign="top" width="33%">
+        <img src="https://git.keimai.space/algebraity/bestiary/raw/branch/main/art/screenshots/2026-04-26-201240_hyprshot.png" alt="Bestiary shell with character table output" width="100%"><br>
+        <div style="min-height: 3em;">
+          <em>Multiple shell tabs running mathematical computations in parallel.</em>
+        </div>
       </td>
-      <td align="center" width="33%">
-        <img src="https://git.keimai.space/algebraity/bestiary/raw/branch/main/art/screenshots/2026-04-26-201253_hyprshot.png" alt="The main help page, with links to BEAST-specific help pages" width="100%"><br>
-        <em>The help page for Sokko.</em>
+      <td align="center" valign="top" width="33%">
+        <img src="https://git.keimai.space/algebraity/bestiary/raw/branch/main/art/screenshots/2026-04-26-201253_hyprshot.png" alt="Bestiary help page for Sokko" width="100%"><br>
+        <div style="min-height: 3em;">
+          <em>Integrated help pages for BEAST-specific commands.</em>
+        </div>
       </td>
     </tr>
   </table>
@@ -193,4 +199,6 @@ The resulting folder can be distributed directly. On Windows, users may either r
 
 ## License and attribution
 
-The contents of this repository and the corresponding GitHub Releases page are licensed under the GNU General Public License v3.0 (GPL-3.0).
+The contents of this repository and the corresponding Releases page are licensed under the GNU General Public License v3.0 (GPL-3.0).
+
+Bestiary is brought to you by Algebraity and Mizufuwa. Special thanks to Mizufuwa for help with the lexer and an early version of the README file. (<3)
