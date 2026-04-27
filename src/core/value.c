@@ -543,6 +543,7 @@ Value valClone(Value v) {
         case VAL_ERROR:  return valError(v.as.str);
         case VAL_LIST: {
             Value* items = calloc(v.as.list.n, sizeof(Value));
+            if (!items && v.as.list.n > 0) return valError("out of memory while cloning list");
             for (size_t i = 0; i < v.as.list.n; i++) items[i] = valClone(v.as.list.items[i]);
             return valList(items, v.as.list.n);
         }

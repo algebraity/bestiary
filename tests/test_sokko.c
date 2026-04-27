@@ -1844,6 +1844,7 @@ void testCrossProduct() {
     CHECK(crossProduct(v2, v3) == NULL, "dim mismatch NULL");
     CHECK(crossProduct(v2, v2) == NULL, "2D vectors not allowed");
     freeVector(v2);
+    freeVector(v3);
 
     // Standard basis: e1 x e2 = e3
     Vector* e1 = constructVector3(R(1.0), R(0.0), R(0.0));

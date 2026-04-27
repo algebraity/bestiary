@@ -33,6 +33,7 @@ static char* dupstr(const char* s) {
 // Construct an Env whose scope chains upward through `parent`
 Env* envNew(Env* parent) {
     Env* e = calloc(1, sizeof(Env));
+    if (!e) return NULL;
     e->parent = parent;
     return e;
 }
@@ -74,7 +75,16 @@ void envSet(Env* env, const char* name, Value v) {
         }
     }
     EnvEntry* e = calloc(1, sizeof(EnvEntry));
+    if (!e) {
+        valFree(v);
+        return;
+    }
     e->name  = dupstr(name);
+    if (!e->name) {
+        free(e);
+        valFree(v);
+        return;
+    }
     e->value = v;
     e->next  = env->head;
     env->head = e;
@@ -416,7 +426,12 @@ void registerCommand(const char* name, int arity, CommandFn fn) {
         }
     }
     CommandEntry* e = calloc(1, sizeof(CommandEntry));
+    if (!e) return;
     e->name  = dupstr(name);            // registry owns the name buffer
+    if (!e->name) {
+        free(e);
+        return;
+    }
     e->arity = arity;
     e->doc   = lookupBuiltinDoc(name);
     e->fn    = fn;
@@ -551,7 +566,12 @@ static Value bi_run(EvalContext* ctx, Value* args, size_t nargs) {
 
 EvalContext* evalCtxNew(void) {
     EvalContext* ctx = calloc(1, sizeof(EvalContext));
+    if (!ctx) return NULL;
     ctx->env = envNew(NULL);
+    if (!ctx->env) {
+        free(ctx);
+        return NULL;
+    }
     return ctx;
 }
 
@@ -606,6 +626,7 @@ static Value dispatch(EvalContext* ctx, const char* name, Value* args, size_t na
 // Evaluate every node in `nodes` into a fresh Value array
 static Value* evalArgs(EvalContext* ctx, AstNode** nodes, size_t n) {
     Value* out = calloc(n, sizeof(Value));
+    if (!out && n > 0) return NULL;
     for (size_t i = 0; i < n; i++) out[i] = eval(ctx, nodes[i]);
     return out;
 }
@@ -1259,6 +1280,10 @@ static void appendInlineRingHomomorphismSummary(char* buf, size_t bufSize, RingH
 }
 
 static Value groupCosetArrayToList(GroupCoset** cosets, int count) {
+    if (count <= 0) {
+        free(cosets);
+        return valList(NULL, 0);
+    }
     Value* items = calloc((size_t)count, sizeof(Value));
     if (!items) {
         if (cosets) {
@@ -1373,7 +1398,7 @@ static int unpackBodyList(Value* args, size_t nargs, Body*** outBodies, size_t* 
     if (nargs == 1 && args[0].kind == VAL_LIST) {
         size_t count = args[0].as.list.n;
         Body** bodies = calloc(count, sizeof(Body*));
-        if (!bodies) return 0;
+        if (!bodies && count > 0) return 0;
         for (size_t i = 0; i < count; i++) {
             if (!valueIsBody(args[0].as.list.items[i])) {
                 free(bodies);
@@ -1387,7 +1412,7 @@ static int unpackBodyList(Value* args, size_t nargs, Body*** outBodies, size_t* 
     }
 
     Body** bodies = calloc(nargs, sizeof(Body*));
-    if (!bodies) return 0;
+    if (!bodies && nargs > 0) return 0;
     for (size_t i = 0; i < nargs; i++) {
         if (!valueIsBody(args[i])) {
             free(bodies);
@@ -1672,6 +1697,7 @@ Value eval(EvalContext* ctx, AstNode* node) {
 
         case AST_BINOP: {
             Value* args = calloc(2, sizeof(Value));
+            if (!args) return valError("out of memory while evaluating binary operator");
             args[0] = eval(ctx, node->as.binop.lhs);
             args[1] = eval(ctx, node->as.binop.rhs);
             const char* name = NULL;
@@ -1688,6 +1714,7 @@ Value eval(EvalContext* ctx, AstNode* node) {
 
         case AST_UNARY: {
             Value* args = calloc(1, sizeof(Value));
+            if (!args) return valError("out of memory while evaluating unary operator");
             args[0] = eval(ctx, node->as.unary.rand);
             const char* name = node->as.unary.op == OP_NEG ? "u-" : "u+";
             return dispatch(ctx, name, args, 1);
@@ -1695,6 +1722,7 @@ Value eval(EvalContext* ctx, AstNode* node) {
 
         case AST_POWER: {
             Value* args = calloc(2, sizeof(Value));
+            if (!args) return valError("out of memory while evaluating power");
             args[0] = eval(ctx, node->as.power.base);
             args[1] = eval(ctx, node->as.power.exp);
             return dispatch(ctx, "^", args, 2);
@@ -1702,6 +1730,7 @@ Value eval(EvalContext* ctx, AstNode* node) {
 
         case AST_SUBSCRIPT: {
             Value* args = calloc(2, sizeof(Value));
+            if (!args) return valError("out of memory while evaluating subscript");
             args[0] = eval(ctx, node->as.subscript.base);
             args[1] = eval(ctx, node->as.subscript.sub);
             return dispatch(ctx, "_", args, 2);
@@ -1709,6 +1738,7 @@ Value eval(EvalContext* ctx, AstNode* node) {
 
         case AST_CALL: {
             Value* args = evalArgs(ctx, node->as.call.args, node->as.call.nargs);
+            if (!args && node->as.call.nargs > 0) return valError("out of memory while evaluating call arguments");
             Value result = dispatch(ctx, node->as.call.name, args, node->as.call.nargs);
             if (result.kind != VAL_ERROR
                     && node->as.call.nargs >= 1
@@ -1723,6 +1753,7 @@ Value eval(EvalContext* ctx, AstNode* node) {
 
         case AST_TUPLE: {
             Value* items = calloc(node->as.tuple.n, sizeof(Value));
+            if (!items && node->as.tuple.n > 0) return valError("out of memory while building tuple");
             for (size_t i = 0; i < node->as.tuple.n; i++)
                 items[i] = eval(ctx, node->as.tuple.items[i]);
             return valList(items, node->as.tuple.n);
@@ -1780,7 +1811,7 @@ Value eval(EvalContext* ctx, AstNode* node) {
                 size_t totalStrings = 0;
                 for (size_t r = 0; r < nrows; r++) totalStrings += node->as.matrix.rowlens[r];
                 Value* items = calloc(totalStrings, sizeof(Value));
-                if (!items) return valError("failed to allocate string list");
+                if (!items && totalStrings > 0) return valError("failed to allocate string list");
                 for (size_t k = 0; k < totalStrings; k++) items[k] = eval(ctx, node->as.matrix.flat[k]);
                 return valList(items, totalStrings);
             }
@@ -5238,7 +5269,7 @@ static Value bi_eigenvalues(EvalContext* c, Value* a, size_t n) {
     if (!eigs) return matrixUnaryError("\\eigenvalues failed", a[0]);
 
     Value* items = calloc(count, sizeof(Value));
-    if (!items) {
+    if (!items && count > 0) {
         free(eigs);
         return matrixUnaryError("\\eigenvalues failed to allocate result list", a[0]);
     }
@@ -5266,7 +5297,7 @@ static Value bi_eigenvectors(EvalContext* c, Value* a, size_t n) {
     if (!eigvecs) return matrixUnaryError("\\eigenvectors failed", a[0]);
 
     Value* items = calloc(count, sizeof(Value));
-    if (!items) {
+    if (!items && count > 0) {
         for (size_t i = 0; i < count; i++) freeMatrix(eigvecs[i]);
         free(eigvecs);
         return matrixUnaryError("\\eigenvectors failed to allocate result list", a[0]);
@@ -6526,6 +6557,11 @@ static Value bi_elasticCollision(EvalContext* c, Value* a, size_t n) {
     }
     elasticCollision1D((Body*)lhs.as.ptr, (Body*)rhs.as.ptr);
     Value* items = calloc(2, sizeof(Value));
+    if (!items) {
+        valFree(lhs);
+        valFree(rhs);
+        return valError("out of memory while building elastic collision result");
+    }
     items[0] = lhs;
     items[1] = rhs;
     return valList(items, 2);
@@ -6540,6 +6576,11 @@ static Value bi_inelasticCollision(EvalContext* c, Value* a, size_t n) {
     }
     inelasticCollision1D((Body*)lhs.as.ptr, (Body*)rhs.as.ptr);
     Value* items = calloc(2, sizeof(Value));
+    if (!items) {
+        valFree(lhs);
+        valFree(rhs);
+        return valError("out of memory while building inelastic collision result");
+    }
     items[0] = lhs;
     items[1] = rhs;
     return valList(items, 2);
@@ -6828,7 +6869,7 @@ static Value bi_listElements(EvalContext* c, Value* a, size_t n) {
         elementKind = VAL_RING_ELEMENT;
     }
     Value* items = calloc((size_t)count, sizeof(Value));
-    if (!items) {
+    if (!items && count > 0) {
         valFree(a[0]);
         return valError("\\listElements failed to allocate output");
     }
@@ -7668,7 +7709,7 @@ static Value bi_getConjClasses_cmd(EvalContext* c, Value* a, size_t n) {
     }
 
     Value* items = calloc((size_t)count, sizeof(Value));
-    if (!items) {
+    if (!items && count > 0) {
         for (int i = 0; i < count; i++) freeConjugacyClass(classes[i]);
         free(classes);
         valFree(a[0]);
@@ -8098,7 +8139,7 @@ static Value bi_listIrrpes_cmd(EvalContext* c, Value* a, size_t n) {
         if (dCount <= 0 || !dims) return valError("\\listIrreps failed");
 
         Value* items = calloc((size_t)dCount, sizeof(Value));
-        if (!items) {
+        if (!items && dCount > 0) {
             free(dims);
             return valError("\\listIrreps failed");
         }
@@ -8113,7 +8154,7 @@ static Value bi_listIrrpes_cmd(EvalContext* c, Value* a, size_t n) {
     valFree(a[0]);
 
     Value* items = calloc((size_t)count, sizeof(Value));
-    if (!items) {
+    if (!items && count > 0) {
         if (count > 0) {
             for (int i = 0; i < irreps[0]->numClasses; i++) freeConjugacyClass(irreps[0]->classes[i]);
             for (int k = 0; k < count; k++) freeCharacter(irreps[k]);
@@ -8197,7 +8238,7 @@ static Value bi_decomposeRep_cmd(EvalContext* c, Value* a, size_t n) {
     }
 
     Value* items = calloc((size_t)table->numIrreps, sizeof(Value));
-    if (!items) {
+    if (!items && table->numIrreps > 0) {
         free(mults);
         freeCharacterTableDeep(table);
         return valError("\\decomposeRep failed");

@@ -625,11 +625,13 @@ long double ruzsaDistancePositive(CombSet* A, CombSet* B) {
 
 // Compute the k-fold additive representation function of an int for a CombSet
 long long kRepAdd(CombSet* combset, long long x, int k) {
+    if (!combset || k <= 0) return 0;
     int n = combset->card;
     long long total = 1;
     for (int i = 0; i < k; i++) total *= n;
 
-    int* index = calloc(k, sizeof(int));
+    int* index = calloc((size_t)k, sizeof(int));
+    if (!index) return 0;
     long long count = 0;
 
     for (long long t = 0; t < total; t++) {
@@ -648,11 +650,13 @@ long long kRepAdd(CombSet* combset, long long x, int k) {
 
 // Compute the k-fold difference representation function of an int for a CombSet
 long long kRepDiff(CombSet* combset, long long x, int k) {
+    if (!combset || k <= 0) return 0;
     int n = combset->card;
     long long total = 1;
     for (int i = 0; i < k; i++) total *= n;
 
-    int* index = calloc(k, sizeof(int));
+    int* index = calloc((size_t)k, sizeof(int));
+    if (!index) return 0;
     long long count = 0;
 
     for (long long t = 0; t < total; t++) {
@@ -671,11 +675,13 @@ long long kRepDiff(CombSet* combset, long long x, int k) {
 
 // Compute the k-fold multiplicative representation function of an int for a CombSet
 long long kRepMult(CombSet* combset, long long x, int k) {
+    if (!combset || k <= 0) return 0;
     int n = combset->card;
     long long total = 1;
     for (int i = 0; i < k; i++) total *= n;
 
-    int* index = calloc(k, sizeof(int));
+    int* index = calloc((size_t)k, sizeof(int));
+    if (!index) return 0;
     long long count = 0;
 
     for (long long t = 0; t < total; t++) {
@@ -718,6 +724,11 @@ long long kEnergyAdd(CombSet* A, int k) {
     
     long long* sums = malloc(total * sizeof(long long));
     int* index = calloc((size_t)k, sizeof(int));
+    if (!sums || !index) {
+        free(sums);
+        free(index);
+        return 0;
+    }
     
     // Enumerate all k-tuples, record their sums
     for (long long t = 0; t < total; t++) {
@@ -756,6 +767,11 @@ long long kEnergyDiff(CombSet* A, int k) {
     
     long long* diffs = malloc(total * sizeof(long long));
     int* index = calloc((size_t)k, sizeof(int));
+    if (!diffs || !index) {
+        free(diffs);
+        free(index);
+        return 0;
+    }
     
     // Enumerate all k-tuples, record their differences
     for (long long t = 0; t < total; t++) {
@@ -794,6 +810,11 @@ long long kEnergyMult(CombSet* A, int k) {
     
     long long* prods = malloc(total * sizeof(long long));
     int* index = calloc((size_t)k, sizeof(int));
+    if (!prods || !index) {
+        free(prods);
+        free(index);
+        return 0;
+    }
     
     // Enumerate all k-tuples, record their products
     for (long long t = 0; t < total; t++) {
