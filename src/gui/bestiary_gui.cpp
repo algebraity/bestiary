@@ -23,6 +23,7 @@
 
 #include"help_page_content.h"
 #include"embedded_banner.h"
+#include"embedded_icon.h"
 
 #ifdef __WXMSW__
 #  define WIN32_LEAN_AND_MEAN
@@ -125,6 +126,33 @@ static wxImage LoadEmbeddedBannerImage() {
     wxMemoryInputStream stream(decoded.GetData(), decoded.GetDataLen());
     wxImage image(stream, wxBITMAP_TYPE_PNG);
     return image.IsOk() ? image : wxImage();
+}
+
+static wxImage LoadEmbeddedIconImage() {
+    wxMemoryBuffer decoded = wxBase64Decode(BestiaryEmbeddedIcon::kIconBase64,
+                                            wxNO_LEN,
+                                            wxBase64DecodeMode_Strict);
+    if (decoded.IsEmpty()) return wxImage();
+
+    wxMemoryInputStream stream(decoded.GetData(), decoded.GetDataLen());
+    wxImage image(stream, wxBITMAP_TYPE_PNG);
+    return image.IsOk() ? image : wxImage();
+}
+
+static wxIconBundle BuildEmbeddedIconBundle() {
+    wxIconBundle bundle;
+    wxImage source = LoadEmbeddedIconImage();
+    if (!source.IsOk()) return bundle;
+
+    static const int kSizes[] = {16, 24, 32, 48, 64, 128, 256};
+    for (int size : kSizes) {
+        wxImage scaled = source.Scale(size, size, wxIMAGE_QUALITY_HIGH);
+        if (!scaled.IsOk()) continue;
+        wxIcon icon;
+        icon.CopyFromBitmap(wxBitmap(scaled));
+        if (icon.IsOk()) bundle.AddIcon(icon);
+    }
+    return bundle;
 }
 
 // ============================================================
@@ -520,6 +548,8 @@ public:
         wxScopedCharBuffer u8 = cmd.ToUTF8();
         m_pty.Write(u8.data(), u8.length());
     }
+
+    void ZoomFont(int delta) { ChangeTerminalResolution(delta); }
 
 private:
     struct Cell {
@@ -1489,10 +1519,38 @@ struct Tab {
 
 class MainFrame : public wxFrame {
 public:
+    static constexpr int kZoomOutId = wxID_HIGHEST + 100;
+    static constexpr int kZoomInId  = wxID_HIGHEST + 101;
+    static constexpr int kFindId    = wxID_HIGHEST + 102;
+
     MainFrame()
         : wxFrame(nullptr, wxID_ANY, "Bestiary", wxDefaultPosition, wxSize(720, 520)),
           m_selected(wxNOT_FOUND) {
                 StyleDarkWindow(this, theme::kFrameBg);
+
+        wxIconBundle icons = BuildEmbeddedIconBundle();
+        if (icons.GetIconCount() > 0) SetIcons(icons);
+
+        // Use an accelerator table so Ctrl+-/+/= preempt the native Rich Edit
+        // bindings (subscript/soft-hyphen) on Windows, where wxEVT_CHAR_HOOK
+        // and wxEVT_KEY_DOWN don't reliably swallow them inside a wxTextCtrl.
+        wxAcceleratorEntry accels[] = {
+            wxAcceleratorEntry(wxACCEL_CTRL, (int)'-',           kZoomOutId),
+            wxAcceleratorEntry(wxACCEL_CTRL, WXK_SUBTRACT,       kZoomOutId),
+            wxAcceleratorEntry(wxACCEL_CTRL, WXK_NUMPAD_SUBTRACT,kZoomOutId),
+            wxAcceleratorEntry(wxACCEL_CTRL, (int)'=',           kZoomInId),
+            wxAcceleratorEntry(wxACCEL_CTRL, (int)'+',           kZoomInId),
+            wxAcceleratorEntry(wxACCEL_CTRL, WXK_ADD,            kZoomInId),
+            wxAcceleratorEntry(wxACCEL_CTRL, WXK_NUMPAD_ADD,     kZoomInId),
+            wxAcceleratorEntry(wxACCEL_CTRL, (int)'F',           kFindId),
+        };
+        SetAcceleratorTable(wxAcceleratorTable(WXSIZEOF(accels), accels));
+        Bind(wxEVT_MENU, [this](wxCommandEvent&){ ZoomActiveTab(-1); }, kZoomOutId);
+        Bind(wxEVT_MENU, [this](wxCommandEvent&){ ZoomActiveTab(+1); }, kZoomInId);
+        Bind(wxEVT_MENU, [this](wxCommandEvent&){
+            if (m_selected >= 0 && m_selected < (int)m_tabs.size() && m_tabs[m_selected].helpPage)
+                SearchCurrentHelpPage();
+        }, kFindId);
         auto* root = new wxBoxSizer(wxVERTICAL);
         m_tabStrip = new wxScrolledWindow(this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
                                           wxHSCROLL | wxBORDER_NONE);
@@ -2355,6 +2413,19 @@ private:
                      "Find", wxOK | wxICON_INFORMATION, this);
     }
 
+    void ZoomActiveTab(int delta) {
+        if (m_selected < 0 || m_selected >= (int)m_tabs.size()) return;
+        Tab& tab = m_tabs[m_selected];
+        if (tab.helpPage) {
+            ApplyHelpPageFontZoom(tab.helpPage, delta);
+            return;
+        }
+        if (tab.terminal) {
+            tab.terminal->ZoomFont(delta);
+            return;
+        }
+    }
+
     void OnCharHook(wxKeyEvent& evt) {
         int kc = evt.GetKeyCode();
         if (evt.ControlDown() && !evt.AltDown()) {
@@ -2661,9 +2732,51 @@ private:
     int               m_startButtonBasePointSize = 0;
 };
 
+#ifdef __WXMSW__
+static void EnableWindowsDpiAwareness() {
+    HMODULE user32 = ::GetModuleHandleW(L"user32.dll");
+    if (user32) {
+        using SetProcessDpiAwarenessContextFn = BOOL (WINAPI*)(HANDLE);
+        auto setCtx = reinterpret_cast<SetProcessDpiAwarenessContextFn>(
+            ::GetProcAddress(user32, "SetProcessDpiAwarenessContext"));
+        if (setCtx) {
+            // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 == (HANDLE)-4
+            if (setCtx((HANDLE)-4)) return;
+            // Fall back to DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE == (HANDLE)-3
+            if (setCtx((HANDLE)-3)) return;
+            // Fall back to DPI_AWARENESS_CONTEXT_SYSTEM_AWARE == (HANDLE)-2
+            if (setCtx((HANDLE)-2)) return;
+        }
+    }
+
+    HMODULE shcore = ::LoadLibraryW(L"shcore.dll");
+    if (shcore) {
+        using SetProcessDpiAwarenessFn = HRESULT (WINAPI*)(int);
+        auto setAwareness = reinterpret_cast<SetProcessDpiAwarenessFn>(
+            ::GetProcAddress(shcore, "SetProcessDpiAwareness"));
+        if (setAwareness) {
+            // PROCESS_PER_MONITOR_DPI_AWARE == 2, PROCESS_SYSTEM_DPI_AWARE == 1
+            if (SUCCEEDED(setAwareness(2))) { ::FreeLibrary(shcore); return; }
+            if (SUCCEEDED(setAwareness(1))) { ::FreeLibrary(shcore); return; }
+        }
+        ::FreeLibrary(shcore);
+    }
+
+    if (user32) {
+        using SetProcessDPIAwareFn = BOOL (WINAPI*)(void);
+        auto setAware = reinterpret_cast<SetProcessDPIAwareFn>(
+            ::GetProcAddress(user32, "SetProcessDPIAware"));
+        if (setAware) setAware();
+    }
+}
+#endif
+
 class BestiaryGuiApp : public wxApp {
 public:
     bool OnInit() override {
+#ifdef __WXMSW__
+        EnableWindowsDpiAwareness();
+#endif
         wxInitAllImageHandlers();
         auto* frame = new MainFrame();
         frame->Show(true);
