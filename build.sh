@@ -10,6 +10,7 @@ fi
 
 make PLATFORM="$platform" bestiary repl
 echo "built ./build/bin/$platform/bestiary$exeext"
+echo "built ./build/bin/$platform/bestiary-cli$exeext"
 
 if [ "$platform" = "windows" ]; then
     make PLATFORM="$platform" bundle

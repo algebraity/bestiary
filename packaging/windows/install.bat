@@ -32,12 +32,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "$dir=Join-Path $start 'Bestiary';" ^
     "New-Item -ItemType Directory -Force -Path $dir | Out-Null;" ^
     "$ws=New-Object -ComObject WScript.Shell;" ^
-    "$s=$ws.CreateShortcut((Join-Path $dir 'Bestiary GUI.lnk'));" ^
-    "$s.TargetPath=Join-Path '%INSTALL_DIR%' 'bestiary-gui.exe';" ^
+    "$s=$ws.CreateShortcut((Join-Path $dir 'Bestiary.lnk'));" ^
+    "$s.TargetPath=Join-Path '%INSTALL_DIR%' 'bestiary.exe';" ^
     "$s.WorkingDirectory='%INSTALL_DIR%';" ^
     "$s.Save();" ^
     "$s=$ws.CreateShortcut((Join-Path $dir 'Bestiary CLI.lnk'));" ^
-    "$s.TargetPath=Join-Path '%INSTALL_DIR%' 'bestiary.exe';" ^
+    "$s.TargetPath=Join-Path '%INSTALL_DIR%' 'bestiary-cli.exe';" ^
     "$s.WorkingDirectory='%INSTALL_DIR%';" ^
     "$s.Save();" >nul 2>nul
 
