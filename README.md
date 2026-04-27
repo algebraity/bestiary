@@ -180,8 +180,37 @@ make windows
 To build release artifacts for all supported platforms, run:
 
 ```sh
-make release
+make release-artifacts
 ```
+
+This produces two distributable archives under `build/dist/`:
+
+```sh
+build/dist/linux/bestiary-linux.tar.gz
+build/dist/windows/bestiary-windows.zip
+```
+
+If you want the version tag embedded in the archive names, pass `VERSION=`:
+
+```sh
+make VERSION=v0.1.0 release-artifacts
+```
+
+That produces names such as:
+
+```sh
+build/dist/linux/bestiary-v0.1.0-linux.tar.gz
+build/dist/windows/bestiary-v0.1.0-windows.zip
+```
+
+The release archives intentionally include only the release executables and runtime files:
+
+```sh
+bestiary
+bestiary-cli
+```
+
+On Windows, the required DLLs and `bestiary-banner.png` are included alongside the executables. The test binaries and `repl` are not included in these release archives.
 
 A portable Windows bundle can be created with:
 
