@@ -32,17 +32,23 @@ Here are some screenshots from Bestiary:
 <div align="center">
   <table width="100%">
     <tr>
-      <td align="center" width="33%">
+      <td align="center" valign="top" width="33%">
         <img src="https://git.keimai.space/algebraity/bestiary/raw/branch/main/art/screenshots/2026-04-26-201124_hyprshot.png" alt="Bestiary start page" width="100%"><br>
-        <em>The Bestiary start page.</em>
+        <div style="min-height: 3em;">
+          <em>The Bestiary start page.</em>
+        </div>
       </td>
-      <td align="center" width="33%">
+      <td align="center" valign="top" width="33%">
         <img src="https://git.keimai.space/algebraity/bestiary/raw/branch/main/art/screenshots/2026-04-26-201240_hyprshot.png" alt="Bestiary shell with character table output" width="100%"><br>
-        <em>Multiple shell tabs running mathematical computations in parallel.</em>
+        <div style="min-height: 3em;">
+          <em>Multiple shell tabs running mathematical computations in parallel.</em>
+        </div>
       </td>
-      <td align="center" width="33%">
+      <td align="center" valign="top" width="33%">
         <img src="https://git.keimai.space/algebraity/bestiary/raw/branch/main/art/screenshots/2026-04-26-201253_hyprshot.png" alt="Bestiary help page for Sokko" width="100%"><br>
-        <em>Integrated help pages for BEAST-specific commands.</em>
+        <div style="min-height: 3em;">
+          <em>Integrated help pages for BEAST-specific commands.</em>
+        </div>
       </td>
     </tr>
   </table>
