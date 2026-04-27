@@ -1,6 +1,7 @@
 #include<stdlib.h>
 #include<stdio.h>
 #include<string.h>
+#include<limits.h>
 #include "parser.h"
 #include "ast.h"
 #include "token.h"
@@ -161,10 +162,32 @@ static BinInfo peekBinop(P* p) {
 /* ---------- Literal parsing helpers ---------- */
 
 // Parse a base-10 integer literal text (the lexer guarantees it's digits)
-static long long parseIntLit(const char* s) {
-    long long v = 0;
-    for (; *s; s++) v = v * 10 + (*s - '0');
-    return v;
+static int parseUnsignedMagnitude(const char* s, unsigned long long limit, unsigned long long* out) {
+    unsigned long long v = 0;
+    if (!s || !*s || !out) return 0;
+    for (; *s; s++) {
+        unsigned digit = (unsigned)(*s - '0');
+        if (v > (limit - digit) / 10ULL) return 0;
+        v = v * 10ULL + digit;
+    }
+    *out = v;
+    return 1;
+}
+
+static int parseIntLit(const char* s, long long* out) {
+    unsigned long long v;
+    if (!parseUnsignedMagnitude(s, (unsigned long long)LLONG_MAX, &v)) return 0;
+    *out = (long long)v;
+    return 1;
+}
+
+static int parseNegIntLit(const char* s, long long* out) {
+    unsigned long long v;
+    unsigned long long limit = (unsigned long long)LLONG_MAX + 1ULL;
+    if (!parseUnsignedMagnitude(s, limit, &v)) return 0;
+    if (v == limit) *out = LLONG_MIN;
+    else *out = -(long long)v;
+    return 1;
 }
 
 // Parse a decimal literal text via strtod
@@ -279,7 +302,12 @@ static AstNode* parsePrimary(P* p) {
     switch (t->kind) {
         case TOK_NUMBER: {
             Token* x = advance(p);
-            return astNumber(parseIntLit(x->text ? x->text : "0"), x->line, x->col);
+            long long value;
+            if (!parseIntLit(x->text ? x->text : "0", &value)) {
+                parseError(p, "integer literal exceeds signed 64-bit range");
+                return NULL;
+            }
+            return astNumber(value, x->line, x->col);
         }
         case TOK_DECIMAL: {
             Token* x = advance(p);
@@ -354,7 +382,18 @@ static AstNode* parseSetLiteral(P* p) {
 // grouping semantics so expressions like A^{-1} continue to work.
 static AstNode* parseScriptOperand(P* p) {
     if (check(p, TOK_LBRACE)) return parseBraceGroup(p);
-    if (match(p, TOK_MINUS)) return astUnary(OP_NEG, parsePrimary(p));
+    if (match(p, TOK_MINUS)) {
+        if (check(p, TOK_NUMBER)) {
+            Token* x = advance(p);
+            long long value;
+            if (!parseNegIntLit(x->text ? x->text : "0", &value)) {
+                parseError(p, "integer literal exceeds signed 64-bit range");
+                return NULL;
+            }
+            return astNumber(value, x->line, x->col);
+        }
+        return astUnary(OP_NEG, parsePrimary(p));
+    }
     if (match(p, TOK_PLUS)) return astUnary(OP_POS, parsePrimary(p));
     if (check(p, TOK_COMMAND)) {
         Token* cmd = advance(p);
@@ -367,7 +406,18 @@ static AstNode* parseScriptOperand(P* p) {
 // unbraced limit token; braced limits still allow full expressions.
 static AstNode* parseIntegralScriptOperand(P* p) {
     if (check(p, TOK_LBRACE)) return parseBraceGroup(p);
-    if (match(p, TOK_MINUS)) return astUnary(OP_NEG, parsePrimary(p));
+    if (match(p, TOK_MINUS)) {
+        if (check(p, TOK_NUMBER)) {
+            Token* x = advance(p);
+            long long value;
+            if (!parseNegIntLit(x->text ? x->text : "0", &value)) {
+                parseError(p, "integer literal exceeds signed 64-bit range");
+                return NULL;
+            }
+            return astNumber(value, x->line, x->col);
+        }
+        return astUnary(OP_NEG, parsePrimary(p));
+    }
     if (match(p, TOK_PLUS)) return astUnary(OP_POS, parsePrimary(p));
     if (check(p, TOK_COMMAND)) {
         Token* cmd = advance(p);
@@ -866,7 +916,18 @@ static AstNode* parsePostfix(P* p) {
 
 // Parse prefix -x / +x (right-associative through chains)
 static AstNode* parseUnary(P* p) {
-    if (match(p, TOK_MINUS)) return astUnary(OP_NEG, parseUnary(p));
+    if (match(p, TOK_MINUS)) {
+        if (check(p, TOK_NUMBER)) {
+            Token* x = advance(p);
+            long long value;
+            if (!parseNegIntLit(x->text ? x->text : "0", &value)) {
+                parseError(p, "integer literal exceeds signed 64-bit range");
+                return NULL;
+            }
+            return astNumber(value, x->line, x->col);
+        }
+        return astUnary(OP_NEG, parseUnary(p));
+    }
     if (match(p, TOK_PLUS))  return astUnary(OP_POS, parseUnary(p));
     return parsePostfix(p);
 }

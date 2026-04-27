@@ -48,6 +48,7 @@ CombSet* setUnion(CombSet* A, CombSet* B);
 
 /* ---------- Basic invariants ---------- */
 
+bool getDiameterChecked(CombSet* combset, long long* out);
 long long getDiameter(CombSet* combset);
 Fraction getDensity(CombSet* combset);
 Fraction doublingConstant(CombSet* combset);

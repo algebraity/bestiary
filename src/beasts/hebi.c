@@ -2,6 +2,7 @@
 #include<stdio.h>
 #include<math.h>
 #include<complex.h>
+#include<limits.h>
 #include "hebi.h"
 
 /* ---------- Helper methods ---------- */
@@ -11,24 +12,88 @@ int comp(const void* a, const void* b) {
     return (*(long long*)a > *(long long*)b) - (*(long long*)a < *(long long*)b);
 }
 
+static unsigned long long llMagnitude(long long x) {
+    if (x >= 0) return (unsigned long long)x;
+    return (unsigned long long)(-(x + 1)) + 1ULL;
+}
+
+static unsigned long long gcdUnsignedLongLong(unsigned long long a, unsigned long long b) {
+    while (b) {
+        unsigned long long t = b;
+        b = a % b;
+        a = t;
+    }
+    return a ? a : 1ULL;
+}
+
+static int divideByUnsignedFactor(long long value, unsigned long long factor, long long* out) {
+    if (!out || factor == 0) return 0;
+    if (factor > (unsigned long long)LLONG_MAX) {
+        if (value == 0) {
+            *out = 0;
+            return 1;
+        }
+        if (factor == (1ULL << 63) && value == LLONG_MIN) {
+            *out = -1;
+            return 1;
+        }
+        return 0;
+    }
+    *out = value / (long long)factor;
+    return 1;
+}
+
+static int checkedAddLongLong(long long a, long long b, long long* out) {
+#if defined(__GNUC__) || defined(__clang__)
+    return !__builtin_add_overflow(a, b, out);
+#else
+    if ((b > 0 && a > LLONG_MAX - b) || (b < 0 && a < LLONG_MIN - b)) return 0;
+    *out = a + b;
+    return 1;
+#endif
+}
+
+static int checkedSubLongLong(long long a, long long b, long long* out) {
+#if defined(__GNUC__) || defined(__clang__)
+    return !__builtin_sub_overflow(a, b, out);
+#else
+    if ((b < 0 && a > LLONG_MAX + b) || (b > 0 && a < LLONG_MIN + b)) return 0;
+    *out = a - b;
+    return 1;
+#endif
+}
+
+static int checkedMulLongLong(long long a, long long b, long long* out) {
+#if defined(__GNUC__) || defined(__clang__)
+    return !__builtin_mul_overflow(a, b, out);
+#else
+    if (a == 0 || b == 0) {
+        *out = 0;
+        return 1;
+    }
+    if (a == -1 && b == LLONG_MIN) return 0;
+    if (b == -1 && a == LLONG_MIN) return 0;
+    long long r = a * b;
+    if (r / b != a) return 0;
+    *out = r;
+    return 1;
+#endif
+}
+
 /* ---------- Fractions ---------- */
 
 // Construct a Fraction with a given num and denom
 Fraction constructFraction(long long num, long long denom) {
     if (denom == 0) return (Fraction){0, 0}; // Invalid fraction
+
+    unsigned long long g = gcdUnsignedLongLong(llMagnitude(num), llMagnitude(denom));
     Fraction frac;
-
-    long long g = llabs(num), b = llabs(denom);
-    while (b) {
-	long long t = b;
-	b = g % b;
-	g = t;
+    if (!divideByUnsignedFactor(num, g, &frac.num)
+            || !divideByUnsignedFactor(denom, g, &frac.denom)) {
+        return (Fraction){0, 0};
     }
-    if (g == 0) g = 1;
-
-    frac.num = num / g;
-    frac.denom = denom / g;
     if (frac.denom < 0) {
+        if (frac.num == LLONG_MIN || frac.denom == LLONG_MIN) return (Fraction){0, 0};
 	frac.num = -frac.num;
 	frac.denom = -frac.denom;
     }
@@ -37,22 +102,59 @@ Fraction constructFraction(long long num, long long denom) {
 
 // Add two Fractions
 Fraction addFractions(Fraction p, Fraction q) {
-    return constructFraction(p.num * q.denom + q.num * p.denom, p.denom * q.denom);
+    if (p.denom == 0 || q.denom == 0) return (Fraction){0, 0};
+    unsigned long long g = gcdUnsignedLongLong(llMagnitude(p.denom), llMagnitude(q.denom));
+    long long pg = p.denom / (long long)g;
+    long long qg = q.denom / (long long)g;
+    long long left, right, num, denom;
+    if (!checkedMulLongLong(p.num, qg, &left)
+            || !checkedMulLongLong(q.num, pg, &right)
+            || !checkedAddLongLong(left, right, &num)
+            || !checkedMulLongLong(pg, q.denom, &denom)) {
+        return (Fraction){0, 0};
+    }
+    return constructFraction(num, denom);
 }
 
 // Subtract two Fractions
 Fraction subtractFractions(Fraction p, Fraction q) {
-    return constructFraction(p.num * q.denom - q.num * p.denom, p.denom * q.denom);
+    if (p.denom == 0 || q.denom == 0) return (Fraction){0, 0};
+    unsigned long long g = gcdUnsignedLongLong(llMagnitude(p.denom), llMagnitude(q.denom));
+    long long pg = p.denom / (long long)g;
+    long long qg = q.denom / (long long)g;
+    long long left, right, num, denom;
+    if (!checkedMulLongLong(p.num, qg, &left)
+            || !checkedMulLongLong(q.num, pg, &right)
+            || !checkedSubLongLong(left, right, &num)
+            || !checkedMulLongLong(pg, q.denom, &denom)) {
+        return (Fraction){0, 0};
+    }
+    return constructFraction(num, denom);
 }
 
 // Multiply two Fractions
 Fraction multiplyFractions(Fraction p, Fraction q) {
-    return constructFraction(p.num * q.num, p.denom * q.denom);
+    if (p.denom == 0 || q.denom == 0) return (Fraction){0, 0};
+    unsigned long long g1 = gcdUnsignedLongLong(llMagnitude(p.num), llMagnitude(q.denom));
+    unsigned long long g2 = gcdUnsignedLongLong(llMagnitude(q.num), llMagnitude(p.denom));
+    long long pnum, qnum, pden, qden, num, denom;
+    if (!divideByUnsignedFactor(p.num, g1, &pnum)
+            || !divideByUnsignedFactor(q.denom, g1, &qden)
+            || !divideByUnsignedFactor(q.num, g2, &qnum)
+            || !divideByUnsignedFactor(p.denom, g2, &pden)
+            || !checkedMulLongLong(pnum, qnum, &num)
+            || !checkedMulLongLong(pden, qden, &denom)) {
+        return (Fraction){0, 0};
+    }
+    return constructFraction(num, denom);
 }
 
 // Divide two Fractions
 Fraction divideFractions(Fraction p, Fraction q) {
-    return constructFraction(p.num * q.denom, p.denom * q.num);
+    if (p.denom == 0 || q.denom == 0 || q.num == 0) return (Fraction){0, 0};
+    Fraction reciprocal = constructFraction(q.denom, q.num);
+    if (reciprocal.denom == 0) return (Fraction){0, 0};
+    return multiplyFractions(p, reciprocal);
 }
 
 // Compare Fractions
@@ -248,4 +350,3 @@ long double phi(void) {
     long double x = 1.618033988749895;
     return x;
 }
-

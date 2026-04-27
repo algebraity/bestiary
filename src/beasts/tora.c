@@ -2,12 +2,46 @@
 #include<stdio.h>
 #include<string.h>
 #include<math.h>
+#include<limits.h>
 #include "hebi.h"
 #include "sokko.h"
 #include "usagi.h"
 #include "tora.h"
 
 /* ---------- Construct and free methods ---------- */
+
+static bool checkedIntMul(int a, int b, int* out) {
+    if (!out || a < 0 || b < 0) return false;
+    if (a != 0 && b > INT_MAX / a) return false;
+    *out = a * b;
+    return true;
+}
+
+static bool checkedIntAdd(int a, int b, int* out) {
+    if (!out) return false;
+    if ((b > 0 && a > INT_MAX - b) || (b < 0 && a < INT_MIN - b)) return false;
+    *out = a + b;
+    return true;
+}
+
+static bool checkedSizeMul(size_t a, size_t b, size_t* out) {
+    if (!out) return false;
+    if (a != 0 && b > ((size_t)-1) / a) return false;
+    *out = a * b;
+    return true;
+}
+
+static bool finiteComplex(ComplexNumber z) {
+    return isfinite(z.real) && isfinite(z.imag);
+}
+
+static bool roundedIntInRange(double x, int* out) {
+    if (!out || !isfinite(x)) return false;
+    double r = round(x);
+    if (r < (double)INT_MIN || r > (double)INT_MAX) return false;
+    *out = (int)r;
+    return true;
+}
 
 // Constructs a ConjugacyClass struct given a representative GroupElement and a Group
 ConjugacyClass* constructConjugacyClass(Group* group, GroupElement* rep) {
@@ -673,9 +707,11 @@ Representation* crossProductReps(Representation* V, Representation* W, Group* Gx
     Group* G = V->group;
     Group* H = W->group;
     if (!G || !H) return NULL;
-    if (GxH->card != G->card * H->card) return NULL;
+    int productCard;
+    if (!checkedIntMul(G->card, H->card, &productCard) || GxH->card != productCard) return NULL;
 
-    int dim = V->dim * W->dim;
+    int dim;
+    if (!checkedIntMul(V->dim, W->dim, &dim)) return NULL;
     Matrix** images = malloc(GxH->card * sizeof(Matrix*));
     if (!images) return NULL;
 
@@ -707,7 +743,8 @@ Representation* tensorProduct(Representation* V, Representation* W) {
     if (!cmpGroups(V->group, W->group)) return NULL;
     Group* G = V->group;
 
-    int dim = V->dim * W->dim;
+    int dim;
+    if (!checkedIntMul(V->dim, W->dim, &dim)) return NULL;
     Matrix** images = malloc(G->card * sizeof(Matrix*));
     if (!images) return NULL;
 
@@ -738,7 +775,10 @@ Representation* symmetricProduct(Representation* V) {
     if (!V) return NULL;
     Group* G = V->group;
     int n = V->dim;
-    int sdim = n * (n + 1) / 2;
+    int nPlusOne;
+    int twiceSdim;
+    if (!checkedIntAdd(n, 1, &nPlusOne) || !checkedIntMul(n, nPlusOne, &twiceSdim)) return NULL;
+    int sdim = twiceSdim / 2;
     if (sdim < 1) return NULL;
 
     Matrix** images = malloc(G->card * sizeof(Matrix*));
@@ -792,7 +832,10 @@ Representation* wedgeProduct(Representation* V) {
     if (!V) return NULL;
     Group* G = V->group;
     int n = V->dim;
-    int wdim = n * (n - 1) / 2;
+    int nMinusOne;
+    int twiceWdim;
+    if (!checkedIntAdd(n, -1, &nMinusOne) || !checkedIntMul(n, nMinusOne, &twiceWdim)) return NULL;
+    int wdim = twiceWdim / 2;
     if (wdim < 1) return NULL;
 
     Matrix** images = malloc(G->card * sizeof(Matrix*));
@@ -1100,7 +1143,12 @@ int* decomposeRepresentation(Representation* V, CharacterTable* T) {
     }
     for (int i = 0; i < T->numIrreps; i++) {
         ComplexNumber n = characterInnerProduct(chi, T->irreps[i]);
-        mults[i] = (int) round(n.real);
+        if (!finiteComplex(n) || !roundedIntInRange(n.real, &mults[i])) {
+            free(mults);
+            for (int j = 0; j < chi->numClasses; j++) freeConjugacyClass(chi->classes[j]);
+            freeCharacter(chi);
+            return NULL;
+        }
     }
 
     for (int i = 0; i < chi->numClasses; i++) freeConjugacyClass(chi->classes[i]);
@@ -1115,7 +1163,13 @@ int* decomposeRepresentation(Representation* V, CharacterTable* T) {
 //                     = #{ (x, y) : x in C_i, y in C_j, xy = z_k }
 // where z_k is a fixed representative of class C_k.
 static int* classAlgebraStructureConstants(Group* G, ConjugacyClass** classes, int r) {
-    int* c = calloc((size_t) r * r * r, sizeof(int));
+    size_t rr;
+    size_t rrr;
+    if (r < 1 || !checkedSizeMul((size_t)r, (size_t)r, &rr)
+            || !checkedSizeMul(rr, (size_t)r, &rrr)) {
+        return NULL;
+    }
+    int* c = calloc(rrr, sizeof(int));
     if (!c) return NULL;
 
     // Precompute inverse-index lookup for ambient group elements
@@ -1147,7 +1201,11 @@ static int* classAlgebraStructureConstants(Group* G, ConjugacyClass** classes, i
                 int x = Ci->indices[xi];
                 int y = G->table[invIdx[x]][z]; // y = x^{-1} * z, so x * y = z
                 int j = classOf[y];
-                if (j >= 0) c[i * r * r + j * r + k]++;
+                if (j >= 0) {
+                    size_t idx = (size_t)i * rr + (size_t)j * (size_t)r + (size_t)k;
+                    if (c[idx] == INT_MAX) { free(invIdx); free(classOf); free(c); return NULL; }
+                    c[idx]++;
+                }
             }
         }
     }
@@ -1197,7 +1255,7 @@ Character** allIrreducibleCharacters(Group* G, int* count) {
         }
         for (int k = 0; k < r; k++)
             for (int j = 0; j < r; j++)
-                setEntry(M[i], k, j, elemFromReal((double) c[i * r * r + j * r + k]));
+                setEntry(M[i], k, j, elemFromReal((double)c[(size_t)i * (size_t)r * (size_t)r + (size_t)j * (size_t)r + (size_t)k]));
     }
 
     // Locate identity class once (used for degree sorting/validation)
@@ -1277,6 +1335,7 @@ Character** allIrreducibleCharacters(Group* G, int* count) {
             }
             if (vmax < 1e-12) continue;
             ComplexNumber v_ref = elemToComplex(getEntry(v, jmax, 0));
+            if (!finiteComplex(v_ref)) continue;
 
             ComplexNumber* omega = malloc((size_t) r * sizeof(ComplexNumber));
             if (!omega) continue;
@@ -1290,6 +1349,7 @@ Character** allIrreducibleCharacters(Group* G, int* count) {
                 ComplexNumber Mv_jmax = elemToComplex(getEntry(Mv, jmax, 0));
                 omega[i] = complexDiv(Mv_jmax, v_ref);
                 freeMatrix(Mv);
+                if (!finiteComplex(omega[i])) { bad = true; break; }
             }
             if (bad) {
                 free(omega);
@@ -1301,12 +1361,16 @@ Character** allIrreducibleCharacters(Group* G, int* count) {
                 double mag2 = omega[j].real * omega[j].real + omega[j].imag * omega[j].imag;
                 sum += mag2 / (double) classes[j]->size;
             }
-            if (sum < 1e-15) {
+            if (!isfinite(sum) || sum < 1e-15) {
                 free(omega);
                 continue;
             }
             double dim_sq = (double) G->card / sum;
-            int dim = (int) round(sqrt(dim_sq));
+            int dim;
+            if (!isfinite(dim_sq) || !roundedIntInRange(sqrt(dim_sq), &dim)) {
+                free(omega);
+                continue;
+            }
             if (dim < 1) dim = 1;
 
             ComplexNumber* values = malloc((size_t) r * sizeof(ComplexNumber));
@@ -1317,11 +1381,19 @@ Character** allIrreducibleCharacters(Group* G, int* count) {
             for (int j = 0; j < r; j++) {
                 values[j].real = (double) dim * omega[j].real / (double) classes[j]->size;
                 values[j].imag = (double) dim * omega[j].imag / (double) classes[j]->size;
+                if (!finiteComplex(values[j])) {
+                    bad = true;
+                    break;
+                }
                 if (fabs(values[j].real - round(values[j].real)) < 1e-6) values[j].real = round(values[j].real);
                 if (fabs(values[j].imag - round(values[j].imag)) < 1e-6) values[j].imag = round(values[j].imag);
                 if (fabs(values[j].imag) < 1e-9) values[j].imag = 0.0;
             }
             free(omega);
+            if (bad) {
+                free(values);
+                continue;
+            }
 
             ConjugacyClass** classesCopy = malloc((size_t) r * sizeof(ConjugacyClass*));
             if (!classesCopy) {
@@ -1349,13 +1421,17 @@ Character** allIrreducibleCharacters(Group* G, int* count) {
             if (!chi) continue;
 
             double dReal = chi->values[idClassPos].real;
-            int d = (int) round(dReal);
+            int d;
+            if (!roundedIntInRange(dReal, &d)) {
+                freeCharacter(chi);
+                continue;
+            }
             if (d < 1 || fabs(dReal - (double) d) > 2e-2) {
                 freeCharacter(chi);
                 continue;
             }
             ComplexNumber self = characterInnerProduct(chi, chi);
-            if (fabs(self.real - 1.0) > 3e-2 || fabs(self.imag) > 3e-2) {
+            if (!finiteComplex(self) || fabs(self.real - 1.0) > 3e-2 || fabs(self.imag) > 3e-2) {
                 freeCharacter(chi);
                 continue;
             }
@@ -1412,11 +1488,13 @@ Character** allIrreducibleCharacters(Group* G, int* count) {
         int sumSq = 0;
         for (int i = 0; i < poolCount; i++) {
             double dReal = pool[i]->values[idClassPos].real;
-            int d = (int) round(dReal);
+            int d;
+            if (!roundedIntInRange(dReal, &d)) { valid = false; break; }
             if (d < 1 || fabs(dReal - (double) d) > 2e-2) { valid = false; break; }
-            sumSq += d * d;
+            int dSq;
+            if (!checkedIntMul(d, d, &dSq) || !checkedIntAdd(sumSq, dSq, &sumSq)) { valid = false; break; }
             ComplexNumber self = characterInnerProduct(pool[i], pool[i]);
-            if (fabs(self.real - 1.0) > 3e-2 || fabs(self.imag) > 3e-2) { valid = false; break; }
+            if (!finiteComplex(self) || fabs(self.real - 1.0) > 3e-2 || fabs(self.imag) > 3e-2) { valid = false; break; }
         }
         if (valid && sumSq == G->card) {
             for (int i = 0; i < poolCount && valid; i++) {
@@ -1652,4 +1730,3 @@ void printCharacterTable(CharacterTable* T) {
     printf("\n");
     free(colWidths);
 }
-

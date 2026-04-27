@@ -9,6 +9,7 @@
 #include<conio.h>
 #include<io.h>
 #include<windows.h>
+static int g_vtOutput = 0;
 #endif
 
 #define LINENOISE_MAX_LINE 4096
@@ -37,9 +38,16 @@ static void setLine(char* buf, size_t* len, size_t* pos, const char* value) {
 
 static void refreshLine(const char* prompt, const char* buf, size_t len, size_t pos) {
     fputc('\r', stdout);
+#ifdef _WIN32
+    if (g_vtOutput) fputs("\x1b[2K", stdout);
+#else
+    fputs("\x1b[2K", stdout);
+#endif
     fputs(prompt, stdout);
     fwrite(buf, 1, len, stdout);
-    fputs("  ", stdout);
+#ifdef _WIN32
+    if (!g_vtOutput) fputs("  ", stdout);
+#endif
     fputc('\r', stdout);
     fputs(prompt, stdout);
     fwrite(buf, 1, pos, stdout);
@@ -183,6 +191,13 @@ char* linenoise(const char* prompt) {
 
 #ifdef _WIN32
     if (!_isatty(_fileno(stdin))) return readLinePlain(prompt);
+    {
+        HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
+        DWORD mode = 0;
+        g_vtOutput = out != INVALID_HANDLE_VALUE &&
+                     GetConsoleMode(out, &mode) &&
+                     SetConsoleMode(out, mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+    }
 #else
     return readLinePlain(prompt);
 #endif

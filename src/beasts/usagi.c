@@ -2,6 +2,7 @@
 #include<stdio.h>
 #include<string.h>
 #include<math.h>
+#include<limits.h>
 #include "usagi.h"
 
 /* ---------- Free methods ---------- */
@@ -411,7 +412,11 @@ bool isPrime(int p) {
 // Compute n!
 int factorial(int n) {
     int result = 1;
-    for (int i = 2; i <= n; i++) result *= i;
+    if (n < 0) return 0;
+    for (int i = 2; i <= n; i++) {
+        if (result > INT_MAX / i) return 0;
+        result *= i;
+    }
     return result;
 }
 
@@ -572,6 +577,7 @@ Group* constructSymmetricGroup(int n) {
     if (n == 1) return trivialGroup();
 
     int card = factorial(n);
+    if (card < 1) return NULL;
 
     // Generate all permutations in lexicographic order
     int** perms = malloc(card * sizeof(int*));
@@ -681,6 +687,7 @@ Group* constructAlternatingGroup(int n) {
     if (n <= 2) return trivialGroup();
 
     int fullCard = factorial(n);
+    if (fullCard < 2) return NULL;
     int card = fullCard / 2;
 
     // Generate all permutations in lexicographic order
@@ -3970,4 +3977,3 @@ bool isField(Ring* R) {
 
     return isCommutativeRing(R);
 }
-
