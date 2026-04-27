@@ -2,6 +2,7 @@
 #include<stdio.h>
 #include<string.h>
 #include<math.h>
+#include<limits.h>
 #include "neko.h"
 
 /* ---------- Helper methods ---------- */
@@ -14,6 +15,13 @@ static char* dupstr(const char* s) {
     if (!out) return NULL;
     memcpy(out, s, n + 1);
     return out;
+}
+
+static bool checkedSizeMul(size_t a, size_t b, size_t* out) {
+    if (!out) return false;
+    if (a != 0 && b > ((size_t)-1) / a) return false;
+    *out = a * b;
+    return true;
 }
 
 // Allocate a blank expression node of the requested kind.
@@ -2252,20 +2260,25 @@ NekoOde* nekoOdeNthOrderIntegrable(int order, double a, const NekoExpr* rhs, dou
 // Construct a constant linear ODE-system descriptor.
 NekoOde* nekoOdeLinearSystemConst(const double* A, const double* y0, int dim, double x0) {
     if (!A || !y0 || dim < 1 || !isfinite(x0)) return NULL;
+    size_t dimSq;
+    if (!checkedSizeMul((size_t)dim, (size_t)dim, &dimSq)
+            || dimSq > (size_t)INT_MAX) {
+        return NULL;
+    }
 
     NekoOde* ode = calloc(1, sizeof(NekoOde));
     if (!ode) return NULL;
     ode->kind = NEKO_ODE_LINEAR_SYSTEM_CONST;
     ode->as.linearSystem.dim = dim;
     ode->as.linearSystem.x0 = x0;
-    ode->as.linearSystem.A = malloc((size_t)dim * (size_t)dim * sizeof(double));
+    ode->as.linearSystem.A = malloc(dimSq * sizeof(double));
     ode->as.linearSystem.y0 = malloc((size_t)dim * sizeof(double));
     if (!ode->as.linearSystem.A || !ode->as.linearSystem.y0) {
         nekoFreeOde(ode);
         return NULL;
     }
 
-    for (int i = 0; i < dim * dim; i++) {
+    for (size_t i = 0; i < dimSq; i++) {
         if (!isfinite(A[i])) {
             nekoFreeOde(ode);
             return NULL;
@@ -2441,6 +2454,12 @@ NekoOdeSystemResult nekoEvalOdeSystem(const NekoOde* ode, double x, int steps) {
     if (steps < 1) steps = 1024;
 
     int dim = ode->as.linearSystem.dim;
+    size_t dimSq;
+    if (!checkedSizeMul((size_t)dim, (size_t)dim, &dimSq)
+            || dimSq > (size_t)INT_MAX) {
+        r.status = NEKO_ERR_INVALID_ARG;
+        return r;
+    }
     r.dim = dim;
     r.values = malloc((size_t)dim * sizeof(double));
     double* k1 = malloc((size_t)dim * sizeof(double));

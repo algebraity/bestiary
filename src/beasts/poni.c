@@ -13,6 +13,19 @@
 static inline double re(MatrixElement e) { return e.value.real; }
 static inline MatrixElement R(double x) { return elemFromReal(x); }
 
+static bool vectorIsFinite(Vector* vector) {
+    if (!vector) return false;
+    for (int i = 0; i < vector->numRows; i++) {
+        MatrixElement elem = getEntry((Matrix*)vector, i, 0);
+        if (elem.isComplex) {
+            if (!isfinite(elem.value.complex.real) || !isfinite(elem.value.complex.imag)) return false;
+        } else if (!isfinite(elem.value.real)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 static char* poniDupstr(const char* s) {
     if (!s) return NULL;
     size_t n = strlen(s);
@@ -187,7 +200,7 @@ double angularVelocity(double vel, double radius) {
 
 // Construct a Body with a given mass, position, and initial velocity
 Body* constructBody(double mass, Vector* pos, Vector* initVel) {
-    if (mass <= 0 || !pos || !initVel) return NULL;
+    if (mass <= 0 || !isfinite(mass) || !vectorIsFinite(pos) || !vectorIsFinite(initVel)) return NULL;
     Body* body = (Body*)malloc(sizeof(Body));
     if (!body) return NULL;
 
@@ -206,7 +219,7 @@ Body* constructBody(double mass, Vector* pos, Vector* initVel) {
 
 // Construct a Force
 Force* constructForce(char* name, Vector* vector, Vector* tailPos) {
-    if (!name || *name == '\0' || !vector || !tailPos) return NULL;
+    if (!name || *name == '\0' || !vectorIsFinite(vector) || !vectorIsFinite(tailPos)) return NULL;
 
     Force* force = malloc(sizeof(Force));
     if (!force) return NULL;
@@ -445,7 +458,7 @@ Force* gravitationalForce(Body* body, Body* other) {
 }
 
 Body* stepBody(Body* body, double timeStep) {
-    if (!body || !body->pos || !body->velocity || timeStep < 0) return NULL;
+    if (!body || !vectorIsFinite(body->pos) || !vectorIsFinite(body->velocity) || timeStep < 0 || !isfinite(timeStep)) return NULL;
 
     Vector* acceleration = accelerationFromForce(body);
     if (!acceleration) return NULL;
@@ -458,8 +471,14 @@ Body* stepBody(Body* body, double timeStep) {
         double pos = re(getEntry(body->pos, i, 0));
         double vel = re(getEntry(body->velocity, i, 0));
         double accel = re(getEntry(acceleration, i, 0));
-        setEntry(body->pos, i, 0, R(pos + vel * timeStep + 0.5 * accel * timeStep * timeStep));
-        setEntry(body->velocity, i, 0, R(vel + accel * timeStep));
+        double nextPos = pos + vel * timeStep + 0.5 * accel * timeStep * timeStep;
+        double nextVel = vel + accel * timeStep;
+        if (!isfinite(nextPos) || !isfinite(nextVel)) {
+            freeVector(acceleration);
+            return NULL;
+        }
+        setEntry(body->pos, i, 0, R(nextPos));
+        setEntry(body->velocity, i, 0, R(nextVel));
     }
 
     freeVector(acceleration);

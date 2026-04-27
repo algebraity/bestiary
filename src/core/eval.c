@@ -779,6 +779,84 @@ static int valueToCombSetInt(Value v, long long* out) {
     return 1;
 }
 
+static int longLongFitsInt(long long value) {
+    return value >= (long long)INT_MIN && value <= (long long)INT_MAX;
+}
+
+static int valueToBoundedInt(Value v, int* out) {
+    if (v.kind == VAL_INT) {
+        if (!longLongFitsInt(v.as.i)) return 0;
+        if (out) *out = (int)v.as.i;
+        return 1;
+    }
+    return 0;
+}
+
+static Value integerOverflowError(const char* op) {
+    char buf[128];
+    snprintf(buf, sizeof(buf), "integer overflow in %s", op ? op : "operation");
+    return valError(buf);
+}
+
+static int checkedAddLongLong(long long a, long long b, long long* out) {
+#if defined(__GNUC__) || defined(__clang__)
+    return !__builtin_add_overflow(a, b, out);
+#else
+    if ((b > 0 && a > LLONG_MAX - b) || (b < 0 && a < LLONG_MIN - b)) return 0;
+    *out = a + b;
+    return 1;
+#endif
+}
+
+static int checkedSubLongLong(long long a, long long b, long long* out) {
+#if defined(__GNUC__) || defined(__clang__)
+    return !__builtin_sub_overflow(a, b, out);
+#else
+    if ((b < 0 && a > LLONG_MAX + b) || (b > 0 && a < LLONG_MIN + b)) return 0;
+    *out = a - b;
+    return 1;
+#endif
+}
+
+static int checkedMulLongLong(long long a, long long b, long long* out) {
+#if defined(__GNUC__) || defined(__clang__)
+    return !__builtin_mul_overflow(a, b, out);
+#else
+    if (a == 0 || b == 0) {
+        *out = 0;
+        return 1;
+    }
+    if (a == -1 && b == LLONG_MIN) return 0;
+    if (b == -1 && a == LLONG_MIN) return 0;
+    long long r = a * b;
+    if (r / b != a) return 0;
+    *out = r;
+    return 1;
+#endif
+}
+
+static int checkedNegLongLong(long long value, long long* out) {
+    if (value == LLONG_MIN) return 0;
+    *out = -value;
+    return 1;
+}
+
+static int checkedAbsLongLong(long long value, long long* out) {
+    if (value == LLONG_MIN) return 0;
+    *out = value < 0 ? -value : value;
+    return 1;
+}
+
+static int checkedFactorialLongLong(long long n, long long* out) {
+    if (n < 0 || !out) return 0;
+    long long result = 1;
+    for (long long i = 2; i <= n; i++) {
+        if (!checkedMulLongLong(result, i, &result)) return 0;
+    }
+    *out = result;
+    return 1;
+}
+
 static int valueToBodyMass(Value v, double* out) {
     if (!valIsNumeric(v)) return 0;
     if (out) *out = valToDouble(v);
@@ -797,6 +875,11 @@ static int doubleIsInt(double x) {
 }
 
 static int valueToUsagiInt(Value v, int* out) {
+    if (v.kind == VAL_INT) {
+        if (!longLongFitsInt(v.as.i)) return 0;
+        if (out) *out = (int)v.as.i;
+        return 1;
+    }
     if (!valIsNumeric(v)) return 0;
     double x = valToDouble(v);
     if (!doubleIsInt(x)) return 0;
@@ -1355,9 +1438,11 @@ static Value valueFromMatrixElement(MatrixElement elem) {
     if (elemIsNan(elem)) return valError("matrix operation returned NaN");
     if (elem.isComplex) {
         ComplexNumber c = elem.value.complex;
+        if (!isfinite(c.real) || !isfinite(c.imag)) return valError("matrix operation overflowed or returned a non-finite value");
         if (c.imag == 0.0) return valDecimal(c.real);
         return valComplex(c);
     }
+    if (!isfinite(elem.value.real)) return valError("matrix operation overflowed or returned a non-finite value");
     return valDecimal(elem.value.real);
 }
 
@@ -1367,7 +1452,7 @@ static Value matrixUnaryError(const char* msg, Value arg) {
 }
 
 static Value valueFromComplexNumber(ComplexNumber c) {
-    if (isnan(c.real) || isnan(c.imag)) return valError("complex operation returned NaN");
+    if (!isfinite(c.real) || !isfinite(c.imag)) return valError("complex operation overflowed or returned a non-finite value");
     if (c.imag == 0.0) return valDecimal(c.real);
     return valComplex(c);
 }
@@ -1665,6 +1750,10 @@ Value eval(EvalContext* ctx, AstNode* node) {
                 valFree(item);
             }
 
+            if (count > (size_t)INT_MAX) {
+                free(elems);
+                return valError("CombSet literal is too large");
+            }
             CombSet* combset = constructCombset(elems, (int)count);
             free(elems);
             if (!combset) return valError("failed to construct CombSet");
@@ -1729,12 +1818,20 @@ Value eval(EvalContext* ctx, AstNode* node) {
             }
 
             if (nrows == 1) {
+                if (ncols > (size_t)INT_MAX) {
+                    free(elems);
+                    return valError("vector literal is too large");
+                }
                 Vector* vector = constructVectorFromArray((int)ncols, elems, (int)ncols);
                 free(elems);
                 if (!vector) return valError("failed to construct vector");
                 return valPtr(VAL_VECTOR, vector);
             }
 
+            if (nrows > (size_t)INT_MAX || ncols > (size_t)INT_MAX || total > (size_t)INT_MAX) {
+                free(elems);
+                return valError("matrix literal is too large");
+            }
             Matrix* matrix = constructMatrixFromArray((int)nrows, (int)ncols, elems, (int)total);
             free(elems);
             if (!matrix) return valError("failed to construct matrix");
@@ -1799,14 +1896,26 @@ static Value numericBinop(Value a, Value b, char op) {
     }
     if (a.kind == VAL_INT && b.kind == VAL_INT) {
         long long x = a.as.i, y = b.as.i;
+        long long out;
         switch (op) {
-            case '+': return valInt(x + y);
-            case '-': return valInt(x - y);
-            case '*': return valInt(x * y);
+            case '+':
+                if (!checkedAddLongLong(x, y, &out)) return integerOverflowError("integer addition");
+                return valInt(out);
+            case '-':
+                if (!checkedSubLongLong(x, y, &out)) return integerOverflowError("integer subtraction");
+                return valInt(out);
+            case '*':
+                if (!checkedMulLongLong(x, y, &out)) return integerOverflowError("integer multiplication");
+                return valInt(out);
             case '/':
                 if (y == 0) return valError("division by zero");
+                if (x == LLONG_MIN && y == -1) return integerOverflowError("integer division");
                 if (x % y == 0) return valInt(x / y);
-                return valFraction(constructFraction(x, y));
+                {
+                    Fraction fraction = constructFraction(x, y);
+                    if (fraction.denom == 0) return integerOverflowError("fraction construction");
+                    return valFraction(fraction);
+                }
         }
     }
     if ((a.kind == VAL_INT || a.kind == VAL_FRACTION)
@@ -1825,7 +1934,7 @@ static Value numericBinop(Value a, Value b, char op) {
             default:
                 return valError("unsupported fraction operator");
         }
-        if (out.denom == 0) return valError("division by zero");
+        if (out.denom == 0) return integerOverflowError("fraction arithmetic");
         if (out.denom == 1) return valInt(out.num);
         return valFraction(out);
     }
@@ -1962,22 +2071,32 @@ static Value bi_mul(EvalContext* c, Value* a, size_t n) {
         return valPtr(VAL_RING_ELEMENT, prod);
     }
     if (valueIsRingElement(a[0]) && a[1].kind == VAL_INT) {
-        RingElement* prod = ringTimes((RingElement*)a[0].as.ptr, (int)a[1].as.i);
+        int k;
+        if (!valueToBoundedInt(a[1], &k)) {
+            return vectorBinaryError("ring '*' integer multiplier is outside the supported range", a[0], a[1]);
+        }
+        RingElement* prod = ringTimes((RingElement*)a[0].as.ptr, k);
         if (!prod) return vectorBinaryError("ring '*' with an integer requires a valid ring element", a[0], a[1]);
         valFree(a[0]);
         valFree(a[1]);
         return valPtr(VAL_RING_ELEMENT, prod);
     }
     if (a[0].kind == VAL_INT && valueIsRingElement(a[1])) {
-        RingElement* prod = ringTimes((RingElement*)a[1].as.ptr, (int)a[0].as.i);
+        int k;
+        if (!valueToBoundedInt(a[0], &k)) {
+            return vectorBinaryError("integer '*' ring multiplier is outside the supported range", a[0], a[1]);
+        }
+        RingElement* prod = ringTimes((RingElement*)a[1].as.ptr, k);
         if (!prod) return vectorBinaryError("integer '*' ring requires a valid ring element", a[0], a[1]);
         valFree(a[0]);
         valFree(a[1]);
         return valPtr(VAL_RING_ELEMENT, prod);
     }
     if (a[0].kind == VAL_INT && valueIsCombSet(a[1])) {
-        int k = (int)a[0].as.i;
+        int k;
+        if (!valueToBoundedInt(a[0], &k)) return combsetBinaryError("CombSet scalar '*' multiplier is outside the supported range", a[0], a[1]);
         if (k == 0) return combsetBinaryError("CombSet scalar '*' expects a non-zero integer multiplier", a[0], a[1]);
+        if (k == INT_MIN) return combsetBinaryError("CombSet scalar '*' multiplier is outside the supported range", a[0], a[1]);
         if (valueIsEmptyCombSet(a[1])) return wrapCombSetResult(NULL, NULL, a[0], a[1]);
 
         CombSet* out = k > 0
@@ -2177,9 +2296,20 @@ static Value bi_neg(EvalContext* c, Value* a, size_t n) {
         CombSet* neg = v.as.ptr ? negateSet((CombSet*)v.as.ptr) : NULL;
         r = valPtr(VAL_COMBSET, neg);
     }
-    else if (v.kind == VAL_INT)      r = valInt(-v.as.i);
+    else if (v.kind == VAL_INT)      {
+        long long out;
+        r = checkedNegLongLong(v.as.i, &out) ? valInt(out) : integerOverflowError("integer negation");
+    }
     else if (v.kind == VAL_DECIMAL)  r = valDecimal(-v.as.d);
-    else if (v.kind == VAL_FRACTION) r = valFraction(constructFraction(-v.as.frac.num, v.as.frac.denom));
+    else if (v.kind == VAL_FRACTION) {
+        long long num;
+        if (!checkedNegLongLong(v.as.frac.num, &num)) {
+            r = integerOverflowError("fraction negation");
+        } else {
+            Fraction out = constructFraction(num, v.as.frac.denom);
+            r = out.denom == 0 ? integerOverflowError("fraction negation") : valFraction(out);
+        }
+    }
     else if (v.kind == VAL_COMPLEX)  r = valComplex(complexNeg(v.as.cplx));
     else {
         int handled = 0;
@@ -2203,12 +2333,13 @@ static Value bi_pow(EvalContext* c, Value* a, size_t n) {
     Value b = a[0], e = a[1];
     Value r;
     if (valueIsCombSet(b)) {
-        if (e.kind != VAL_INT || e.as.i < 1) {
+        int exponent;
+        if (e.kind != VAL_INT || e.as.i < 1 || !valueToBoundedInt(e, &exponent)) {
             r = valError("CombSet '^' expects a positive integer exponent");
         } else if (valueIsEmptyCombSet(b)) {
             r = valPtr(VAL_COMBSET, NULL);
         } else {
-            CombSet* out = kmds((CombSet*)b.as.ptr, (int)e.as.i);
+            CombSet* out = kmds((CombSet*)b.as.ptr, exponent);
             r = out ? valPtr(VAL_COMBSET, out) : valError("CombSet '^' failed");
         }
     } else if (valueIsGroupElement(b)) {
@@ -2229,8 +2360,9 @@ static Value bi_pow(EvalContext* c, Value* a, size_t n) {
         }
     } else if (b.kind == VAL_MATRIX) {
         Matrix* out = NULL;
-        if (e.kind == VAL_INT) {
-            out = matrixPow((Matrix*)b.as.ptr, (int)e.as.i);
+        int exponent;
+        if (valueToBoundedInt(e, &exponent)) {
+            out = matrixPow((Matrix*)b.as.ptr, exponent);
             if (!out) {
                 r = valError("matrix power requires a square matrix and valid integer exponent");
             } else {
@@ -2287,7 +2419,12 @@ static Value bi_frac(EvalContext* c, Value* a, size_t n) {
     Value num = a[0], den = a[1];
     Value r;
     if (num.kind == VAL_INT && den.kind == VAL_INT) {
-        r = valFraction(constructFraction(num.as.i, den.as.i));
+        if (den.as.i == 0) {
+            r = valError("division by zero");
+        } else {
+            Fraction out = constructFraction(num.as.i, den.as.i);
+            r = out.denom == 0 ? integerOverflowError("fraction construction") : valFraction(out);
+        }
     } else {
         r = valError("\\frac expects two integers");
     }
@@ -2371,13 +2508,20 @@ static Value bi_abs_cmd(EvalContext* c, Value* a, size_t n) {
     (void)c; (void)n;
     Value x = a[0];
     if (x.kind == VAL_INT) {
-        long long value = x.as.i < 0 ? -x.as.i : x.as.i;
+        long long value;
+        if (!checkedAbsLongLong(x.as.i, &value)) {
+            valFree(x);
+            return integerOverflowError("integer absolute value");
+        }
         valFree(x);
         return valInt(value);
     }
     if (x.kind == VAL_FRACTION) {
         Fraction frac = x.as.frac;
-        if (frac.num < 0) frac.num = -frac.num;
+        if (frac.num < 0 && !checkedNegLongLong(frac.num, &frac.num)) {
+            valFree(x);
+            return integerOverflowError("fraction absolute value");
+        }
         valFree(x);
         return valFraction(frac);
     }
@@ -4774,12 +4918,13 @@ static Value bi_solveODESystem(EvalContext* c, Value* a, size_t n) {
 static Value bi_imatrix(EvalContext* c, Value* a, size_t n) {
     (void)c; (void)n;
     Value dim = a[0];
-    if (dim.kind != VAL_INT || dim.as.i < 1) {
+    int size;
+    if (dim.kind != VAL_INT || dim.as.i < 1 || !valueToBoundedInt(dim, &size)) {
         valFree(dim);
         return valError("\\iMatrix expects one positive integer");
     }
 
-    Matrix* matrix = idMatrix((int)dim.as.i);
+    Matrix* matrix = idMatrix(size);
     valFree(dim);
     if (!matrix) return valError("\\iMatrix failed to construct matrix");
     return valPtr(VAL_MATRIX, matrix);
@@ -4788,12 +4933,13 @@ static Value bi_imatrix(EvalContext* c, Value* a, size_t n) {
 static Value bi_zeromatrix(EvalContext* c, Value* a, size_t n) {
     (void)c; (void)n;
     Value dim = a[0];
-    if (dim.kind != VAL_INT || dim.as.i < 1) {
+    int size;
+    if (dim.kind != VAL_INT || dim.as.i < 1 || !valueToBoundedInt(dim, &size)) {
         valFree(dim);
         return valError("\\zeroMatrix expects one positive integer");
     }
 
-    Matrix* matrix = constructMatrix((int)dim.as.i, (int)dim.as.i);
+    Matrix* matrix = constructMatrix(size, size);
     valFree(dim);
     if (!matrix) return valError("\\zeroMatrix failed to construct matrix");
     return valPtr(VAL_MATRIX, matrix);
@@ -5199,7 +5345,11 @@ static Value bi_diam(EvalContext* c, Value* a, size_t n) {
     (void)c; (void)n;
     if (!valueIsCombSet(a[0])) return combsetUnaryError("\\diam expects one CombSet", a[0]);
     if (valueIsEmptyCombSet(a[0])) return combsetUnaryError("\\diam is undefined for the empty set", a[0]);
-    long long diam = getDiameter((CombSet*)a[0].as.ptr);
+    long long diam;
+    if (!getDiameterChecked((CombSet*)a[0].as.ptr, &diam)) {
+        valFree(a[0]);
+        return integerOverflowError("\\diam");
+    }
     valFree(a[0]);
     return valInt(diam);
 }
@@ -5210,6 +5360,7 @@ static Value bi_dc(EvalContext* c, Value* a, size_t n) {
     if (valueIsEmptyCombSet(a[0])) return combsetUnaryError("\\dc is undefined for the empty set", a[0]);
     Fraction dc = doublingConstant((CombSet*)a[0].as.ptr);
     valFree(a[0]);
+    if (dc.denom == 0) return integerOverflowError("\\dc");
     if (dc.denom == 1) return valInt(dc.num);
     return valFraction(dc);
 }
@@ -5220,6 +5371,7 @@ static Value bi_density(EvalContext* c, Value* a, size_t n) {
     if (valueIsEmptyCombSet(a[0])) return combsetUnaryError("\\density is undefined for the empty set", a[0]);
     Fraction density = getDensity((CombSet*)a[0].as.ptr);
     valFree(a[0]);
+    if (density.denom == 0) return integerOverflowError("\\density");
     if (density.denom == 1) return valInt(density.num);
     return valFraction(density);
 }
@@ -5263,7 +5415,9 @@ static Value bi_rangeSet(EvalContext* c, Value* a, size_t n) {
 
     if (step == 0) return valError("\\rangeSet expects a nonzero step");
     if ((step > 0 && start > end) || (step < 0 && start < end)) return valPtr(VAL_COMBSET, NULL);
-    return valPtr(VAL_COMBSET, constructRangeSet(start, end, step));
+    CombSet* out = constructRangeSet(start, end, step);
+    if (!out) return valError("\\rangeSet failed: range is too large or integer arithmetic overflowed");
+    return valPtr(VAL_COMBSET, out);
 }
 
 static Value bi_AP(EvalContext* c, Value* a, size_t n) {
@@ -5290,8 +5444,11 @@ static Value bi_AP(EvalContext* c, Value* a, size_t n) {
     valFree(a[0]);
     valFree(a[1]);
     valFree(a[2]);
-    if (terms < 0) return valError("\\AP expects a nonnegative number of terms");
-    return valPtr(VAL_COMBSET, constructArithmeticProgressionSet(first, diff, (int)terms));
+    if (terms < 0 || !longLongFitsInt(terms)) return valError("\\AP expects a nonnegative number of terms within the supported range");
+    if (terms == 0) return valPtr(VAL_COMBSET, NULL);
+    CombSet* out = constructArithmeticProgressionSet(first, diff, (int)terms);
+    if (!out) return valError("\\AP failed: progression is too large or integer arithmetic overflowed");
+    return valPtr(VAL_COMBSET, out);
 }
 
 static Value bi_GP(EvalContext* c, Value* a, size_t n) {
@@ -5318,8 +5475,11 @@ static Value bi_GP(EvalContext* c, Value* a, size_t n) {
     valFree(a[0]);
     valFree(a[1]);
     valFree(a[2]);
-    if (terms < 0) return valError("\\GP expects a nonnegative number of terms");
-    return valPtr(VAL_COMBSET, constructGeometricProgressionSet(first, ratio, (int)terms));
+    if (terms < 0 || !longLongFitsInt(terms)) return valError("\\GP expects a nonnegative number of terms within the supported range");
+    if (terms == 0) return valPtr(VAL_COMBSET, NULL);
+    CombSet* out = constructGeometricProgressionSet(first, ratio, (int)terms);
+    if (!out) return valError("\\GP failed: progression is too large or integer arithmetic overflowed");
+    return valPtr(VAL_COMBSET, out);
 }
 
 static Value bi_subsetSums(EvalContext* c, Value* a, size_t n) {
@@ -5348,10 +5508,10 @@ static Value bi_subsetSums(EvalContext* c, Value* a, size_t n) {
             valFree(a[1]);
             return valError("\\subsetSums expects an integer subset size when a second argument is provided");
         }
-        if (subsetSize < 0) {
+        if (subsetSize < 0 || !longLongFitsInt(subsetSize)) {
             valFree(a[0]);
             valFree(a[1]);
-            return valError("\\subsetSums expects subset size >= 0");
+            return valError("\\subsetSums expects subset size >= 0 and within the supported range");
         }
         valFree(a[1]);
     }
@@ -5438,6 +5598,7 @@ static Value bi_adsCard(EvalContext* c, Value* a, size_t n) {
     }
     int result = adsCard((CombSet*)a[0].as.ptr);
     valFree(a[0]);
+    if (result < 0) return integerOverflowError("\\adsCard");
     return valInt(result);
 }
 
@@ -5450,6 +5611,7 @@ static Value bi_ddsCard(EvalContext* c, Value* a, size_t n) {
     }
     int result = ddsCard((CombSet*)a[0].as.ptr);
     valFree(a[0]);
+    if (result < 0) return integerOverflowError("\\ddsCard");
     return valInt(result);
 }
 
@@ -5462,6 +5624,7 @@ static Value bi_mdsCard(EvalContext* c, Value* a, size_t n) {
     }
     int result = mdsCard((CombSet*)a[0].as.ptr);
     valFree(a[0]);
+    if (result < 0) return integerOverflowError("\\mdsCard");
     return valInt(result);
 }
 
@@ -5499,6 +5662,7 @@ static Value bi_rd(EvalContext* c, Value* a, size_t n) {
         : ruzsaDistance((CombSet*)a[0].as.ptr, (CombSet*)a[1].as.ptr));
     valFree(a[0]);
     valFree(a[1]);
+    if (isnan(result)) return integerOverflowError("\\ruzsaDistance");
     return valDecimal(result);
 }
 
@@ -5512,6 +5676,7 @@ static Value bi_rdpos(EvalContext* c, Value* a, size_t n) {
         : ruzsaDistancePositive((CombSet*)a[0].as.ptr, (CombSet*)a[1].as.ptr));
     valFree(a[0]);
     valFree(a[1]);
+    if (isnan(result)) return integerOverflowError("\\ruzsaDistancePositive");
     return valDecimal(result);
 }
 
@@ -5536,11 +5701,11 @@ static Value bi_kRepAdd(EvalContext* c, Value* a, size_t n) {
         valFree(a[2]);
         return valError("\\kRepAdd expects a CombSet, an integer k, and an integer x");
     }
-    if (k < 1) {
+    if (k < 1 || !longLongFitsInt(k)) {
         valFree(a[0]);
         valFree(a[1]);
         valFree(a[2]);
-        return valError("\\kRepAdd expects k >= 1");
+        return valError("\\kRepAdd expects k >= 1 and within the supported range");
     }
     long long result = valueIsEmptyCombSet(a[0]) ? 0 : kRepAdd((CombSet*)a[0].as.ptr, x, (int)k);
     valFree(a[0]);
@@ -5570,11 +5735,11 @@ static Value bi_kRepDiff(EvalContext* c, Value* a, size_t n) {
         valFree(a[2]);
         return valError("\\kRepDiff expects a CombSet, an integer k, and an integer x");
     }
-    if (k < 1) {
+    if (k < 1 || !longLongFitsInt(k)) {
         valFree(a[0]);
         valFree(a[1]);
         valFree(a[2]);
-        return valError("\\kRepDiff expects k >= 1");
+        return valError("\\kRepDiff expects k >= 1 and within the supported range");
     }
     long long result = valueIsEmptyCombSet(a[0]) ? 0 : kRepDiff((CombSet*)a[0].as.ptr, x, (int)k);
     valFree(a[0]);
@@ -5604,11 +5769,11 @@ static Value bi_kRepMult(EvalContext* c, Value* a, size_t n) {
         valFree(a[2]);
         return valError("\\kRepMult expects a CombSet, an integer k, and an integer x");
     }
-    if (k < 1) {
+    if (k < 1 || !longLongFitsInt(k)) {
         valFree(a[0]);
         valFree(a[1]);
         valFree(a[2]);
-        return valError("\\kRepMult expects k >= 1");
+        return valError("\\kRepMult expects k >= 1 and within the supported range");
     }
     long long result = valueIsEmptyCombSet(a[0]) ? 0 : kRepMult((CombSet*)a[0].as.ptr, x, (int)k);
     valFree(a[0]);
@@ -5631,7 +5796,7 @@ static Value bi_kEnergyAdd(EvalContext* c, Value* a, size_t n) {
     if (!valueIsCombSet(a[0]) || !valueToCombSetInt(a[1], &k)) {
         return combsetBinaryError("\\kEnergyAdd expects a CombSet and an integer k", a[0], a[1]);
     }
-    if (k < 1) return combsetBinaryError("\\kEnergyAdd expects k >= 1", a[0], a[1]);
+    if (k < 1 || !longLongFitsInt(k)) return combsetBinaryError("\\kEnergyAdd expects k >= 1 and within the supported range", a[0], a[1]);
     long long result = valueIsEmptyCombSet(a[0]) ? 0 : kEnergyAdd((CombSet*)a[0].as.ptr, (int)k);
     valFree(a[0]);
     valFree(a[1]);
@@ -5652,7 +5817,7 @@ static Value bi_kEnergyDiff(EvalContext* c, Value* a, size_t n) {
     if (!valueIsCombSet(a[0]) || !valueToCombSetInt(a[1], &k)) {
         return combsetBinaryError("\\kEnergyDiff expects a CombSet and an integer k", a[0], a[1]);
     }
-    if (k < 1) return combsetBinaryError("\\kEnergyDiff expects k >= 1", a[0], a[1]);
+    if (k < 1 || !longLongFitsInt(k)) return combsetBinaryError("\\kEnergyDiff expects k >= 1 and within the supported range", a[0], a[1]);
     long long result = valueIsEmptyCombSet(a[0]) ? 0 : kEnergyDiff((CombSet*)a[0].as.ptr, (int)k);
     valFree(a[0]);
     valFree(a[1]);
@@ -5673,7 +5838,7 @@ static Value bi_kEnergyMult(EvalContext* c, Value* a, size_t n) {
     if (!valueIsCombSet(a[0]) || !valueToCombSetInt(a[1], &k)) {
         return combsetBinaryError("\\kEnergyMult expects a CombSet and an integer k", a[0], a[1]);
     }
-    if (k < 1) return combsetBinaryError("\\kEnergyMult expects k >= 1", a[0], a[1]);
+    if (k < 1 || !longLongFitsInt(k)) return combsetBinaryError("\\kEnergyMult expects k >= 1 and within the supported range", a[0], a[1]);
     long long result = valueIsEmptyCombSet(a[0]) ? 0 : kEnergyMult((CombSet*)a[0].as.ptr, (int)k);
     valFree(a[0]);
     valFree(a[1]);
@@ -5727,6 +5892,11 @@ static Value bi_bodySystem(EvalContext* c, Value* a, size_t n) {
         for (size_t i = 0; i < n; i++) valFree(a[i]);
         free(bodies);
         return valError("\\bodySystem expects one or more bodies");
+    }
+    if (count > (size_t)INT_MAX) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        free(bodies);
+        return valError("\\bodySystem has too many bodies");
     }
 
     BodySystem* system = constructBodySystem(bodies, (int)count);
@@ -6177,6 +6347,12 @@ static Value bi_simulate_cmd(EvalContext* c, Value* a, size_t n) {
         for (size_t i = 0; i < n; i++) valFree(a[i]);
         return valError("\\simulate expects a body system, a numeric time step, and an integer step count");
     }
+    if (steps < 0 || !longLongFitsInt(steps)) {
+        valFree(a[0]);
+        valFree(a[1]);
+        valFree(a[2]);
+        return valError("\\simulate expects a nonnegative step count within the supported range");
+    }
     if (!simulateBodySystem((BodySystem*)a[0].as.ptr, dt, (int)steps)) {
         valFree(a[0]);
         valFree(a[1]);
@@ -6308,6 +6484,11 @@ static Value bi_centerOfMass(EvalContext* c, Value* a, size_t n) {
         free(bodies);
         return valError("\\centerOfMass expects one or more bodies");
     }
+    if (count > (size_t)INT_MAX) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        free(bodies);
+        return valError("\\centerOfMass has too many bodies");
+    }
     Vector* out = centerOfMass(bodies, (int)count);
     free(bodies);
     for (size_t i = 0; i < n; i++) valFree(a[i]);
@@ -6323,6 +6504,11 @@ static Value bi_centerOfMassVelocity(EvalContext* c, Value* a, size_t n) {
         for (size_t i = 0; i < n; i++) valFree(a[i]);
         free(bodies);
         return valError("\\centerOfMassVelocity expects one or more bodies");
+    }
+    if (count > (size_t)INT_MAX) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        free(bodies);
+        return valError("\\centerOfMassVelocity has too many bodies");
     }
     Vector* out = centerOfMassVelocity(bodies, (int)count);
     free(bodies);
@@ -6602,14 +6788,18 @@ static Value bi_isPrime_cmd(EvalContext* c, Value* a, size_t n) {
 
 static Value bi_factorial_cmd(EvalContext* c, Value* a, size_t n) {
     (void)c; (void)n;
-    int input;
-    if (!valueToUsagiInt(a[0], &input)) {
+    long long input;
+    if (!valueToCombSetInt(a[0], &input)) {
         valFree(a[0]);
         return valError("\\factorial expects one integer");
     }
     valFree(a[0]);
     if (input < 0) return valError("\\factorial requires n >= 0");
-    return valInt(factorial(input));
+    long long out;
+    if (!checkedFactorialLongLong(input, &out)) {
+        return integerOverflowError("\\factorial");
+    }
+    return valInt(out);
 }
 
 static Value bi_listElements(EvalContext* c, Value* a, size_t n) {
@@ -7776,7 +7966,10 @@ static Value bi_charDegree_cmd(EvalContext* c, Value* a, size_t n) {
     if (!found) return valError("\\charDegree failed");
     if (fabs(degree.imag) < 1e-9) {
         double rounded = round(degree.real);
-        if (fabs(degree.real - rounded) < 1e-9) return valInt((long long)rounded);
+        if (fabs(degree.real - rounded) < 1e-9) {
+            if (rounded < (double)LLONG_MIN || rounded > (double)LLONG_MAX) return integerOverflowError("\\charDegree");
+            return valInt((long long)rounded);
+        }
         return valDecimal(degree.real);
     }
     return valueFromComplexNumber(degree);
@@ -7937,7 +8130,10 @@ static Value bi_listIrrpes_cmd(EvalContext* c, Value* a, size_t n) {
                 break;
             }
         }
-        int dim = (int)llround(irreps[k]->values[idPos].real);
+        double dReal = irreps[k]->values[idPos].real;
+        int dim = (isfinite(dReal) && dReal >= (double)INT_MIN && dReal <= (double)INT_MAX)
+            ? (int)llround(dReal)
+            : 0;
         char label[64] = {0};
         snprintf(label, sizeof(label), "%s(dim=%d)", irreps[k]->repr ? irreps[k]->repr : "chi", dim);
         items[k] = valString(label);

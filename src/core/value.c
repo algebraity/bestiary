@@ -395,13 +395,28 @@ static double zeroTiny(double x) {
     return fabs(x) < 1e-15 ? 0.0 : x;
 }
 
+static bool matrixIsFinite(Matrix* matrix) {
+    if (!matrix) return true;
+    for (int r = 0; r < matrix->numRows; r++) {
+        for (int c = 0; c < matrix->numCols; c++) {
+            MatrixElement elem = getEntry(matrix, r, c);
+            if (elem.isComplex) {
+                if (!isfinite(elem.value.complex.real) || !isfinite(elem.value.complex.imag)) return false;
+            } else if (!isfinite(elem.value.real)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 Value valNone(void)               { Value v = {0}; v.kind = VAL_NONE;     return v; }
 Value valError(const char* msg)   { Value v = {0}; v.kind = VAL_ERROR;    v.as.str = dupstr(msg); return v; }
 Value valBool(bool b)             { Value v = {0}; v.kind = VAL_BOOL;     v.as.b = b;             return v; }
 Value valInt(long long n)         { Value v = {0}; v.kind = VAL_INT;      v.as.i = n;             return v; }
-Value valDecimal(double x)        { Value v = {0}; v.kind = VAL_DECIMAL;  v.as.d = zeroTiny(x);   return v; }
+Value valDecimal(double x)        { if (!isfinite(x)) return valError("numeric overflow or undefined decimal result"); Value v = {0}; v.kind = VAL_DECIMAL;  v.as.d = zeroTiny(x);   return v; }
 Value valFraction(Fraction f)     { Value v = {0}; v.kind = VAL_FRACTION; v.as.frac = f;          return v; }
-Value valComplex(ComplexNumber c) { Value v = {0}; v.kind = VAL_COMPLEX;  c.real = zeroTiny(c.real); c.imag = zeroTiny(c.imag); v.as.cplx = c; return v; }
+Value valComplex(ComplexNumber c) { if (!isfinite(c.real) || !isfinite(c.imag)) return valError("numeric overflow or undefined complex result"); Value v = {0}; v.kind = VAL_COMPLEX;  c.real = zeroTiny(c.real); c.imag = zeroTiny(c.imag); v.as.cplx = c; return v; }
 Value valString(const char* s)    { Value v = {0}; v.kind = VAL_STRING;   v.as.str = dupstr(s);   return v; }
 Value valSymbol(const char* s)    { Value v = {0}; v.kind = VAL_SYMBOL;   v.as.str = dupstr(s);   return v; }
 
@@ -414,6 +429,10 @@ Value valList(Value* items, size_t n) {
 }
 
 Value valPtr(ValueKind kind, void* p) {
+    if ((kind == VAL_MATRIX || kind == VAL_VECTOR) && !matrixIsFinite((Matrix*)p)) {
+        freeMatrix((Matrix*)p);
+        return valError("numeric overflow or undefined matrix/vector result");
+    }
     Value v = {0};
     v.kind = kind;
     v.as.ptr = p;

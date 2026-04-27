@@ -532,13 +532,14 @@ private:
         wxClientDC dc(this);
         dc.SetFont(m_font);
 
-        // GetCharWidth/Height use font advance metrics, which are correct for
-        // monospace fonts on both GDI (Windows) and Pango (Linux/Mac).
         wxCoord charW = dc.GetCharWidth();
         wxCoord charH = dc.GetCharHeight();
 
         if (charW <= 0 || charH <= 0) {
-            wxCoord width = 0, height = 0, descent = 0, leading = 0;
+            wxCoord width = 0;
+            wxCoord height = 0;
+            wxCoord descent = 0;
+            wxCoord leading = 0;
             dc.GetTextExtent("MMMMMMMMMM", &width, &height, &descent, &leading);
             charW = width > 0 ? width / 10 : 9;
             charH = height > 0 ? height : 18;
@@ -1422,6 +1423,7 @@ private:
 struct HelpSearchTarget {
     wxWindow* control;
     wxString text;
+    long textPosition = -1;
 };
 
 struct WrappedBlock {
@@ -1873,6 +1875,30 @@ private:
         BindHelpCopy(block, text);
     }
 
+    wxTextCtrl* AddSelectableHelpTextArea(wxScrolledWindow* page,
+                                          wxBoxSizer* sizer,
+                                          const wxString& text,
+                                          const wxFont& font,
+                                          int bottomPadding,
+                                          const std::shared_ptr<std::vector<WrappedBlock>>& wrappedBlocks,
+                                          const std::shared_ptr<HelpPageState>& helpPageState,
+                                          std::vector<wxWindow*>& scrollTargets) {
+        auto* block = CreateHelpTextBlock(page, text, font);
+        sizer->Add(block, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxEXPAND, bottomPadding);
+        wrappedBlocks->push_back({block, text, 48, -1});
+        helpPageState->controlFonts.push_back({block, font});
+        scrollTargets.push_back(block);
+        BindHelpCopy(block, text);
+        return block;
+    }
+
+    void AddHelpTextPositionTarget(const std::shared_ptr<HelpPageState>& helpPageState,
+                                   wxTextCtrl* control,
+                                   const wxString& text,
+                                   long position) const {
+        helpPageState->targets.push_back({control, text, position});
+    }
+
     void AddHelpCommandBlock(wxScrolledWindow* page,
                              wxBoxSizer* sizer,
                              const BestiaryHelpPage::Command& command,
@@ -2115,7 +2141,8 @@ private:
         evt.Skip();
     }
 
-    void ScrollHelpTargetIntoView(const std::shared_ptr<HelpPageState>& helpPage, wxWindow* control) {
+    void ScrollHelpTargetIntoView(const std::shared_ptr<HelpPageState>& helpPage, const HelpSearchTarget& target) {
+        wxWindow* control = target.control;
         if (!helpPage || !helpPage->page || !control) return;
         auto* page = helpPage->page;
 
@@ -2127,12 +2154,30 @@ private:
         page->Layout();
         page->FitInside();
 
+        int targetPixelOffsetY = 0;
+        if (target.textPosition >= 0) {
+            if (auto* text = wxDynamicCast(control, wxTextCtrl)) {
+                long row = 0;
+                long col = 0;
+                text->PositionToXY(target.textPosition, &col, &row);
+                wxClientDC dc(text);
+                dc.SetFont(text->GetFont());
+                wxCoord ignoredW = 0;
+                wxCoord lineH = 0;
+                dc.GetTextExtent("M", &ignoredW, &lineH);
+                if (lineH <= 0) lineH = 16;
+                targetPixelOffsetY = (int)row * ((int)lineH + 2);
+                text->SetInsertionPoint(target.textPosition);
+                text->ShowPosition(target.textPosition);
+            }
+        }
+
         // Translate the control's screen position into the page's logical
         // (unscrolled) coordinate space. Going through screen coords is
         // platform-independent and correctly handles arbitrary nesting
         // (e.g. lines inside a command panel inside the page) without
         // assuming whether wxScrolledWindow children move with scroll.
-        auto computeTargetUnits = [page](wxWindow* c) -> std::pair<int, int> {
+        auto computeTargetUnits = [page, targetPixelOffsetY](wxWindow* c) -> std::pair<int, int> {
             wxPoint clientPos = c->GetScreenPosition() - page->GetScreenPosition();
             wxPoint virt = page->CalcUnscrolledPosition(clientPos);
             int unitX = 1, unitY = 1;
@@ -2141,7 +2186,7 @@ private:
             if (unitY <= 0) unitY = 1;
             int curX = 0;
             page->GetViewStart(&curX, nullptr);
-            int targetY = std::max(0, (virt.y - 12) / unitY);
+            int targetY = std::max(0, (virt.y + targetPixelOffsetY - 12) / unitY);
             return {curX, targetY};
         };
 
@@ -2197,7 +2242,7 @@ private:
             if (helpPage->targets[index].text.Lower().Find(needle) == wxNOT_FOUND) continue;
             helpPage->lastQuery = query;
             helpPage->lastMatchIndex = index;
-            ScrollHelpTargetIntoView(helpPage, helpPage->targets[index].control);
+            ScrollHelpTargetIntoView(helpPage, helpPage->targets[index]);
             return;
         }
 
@@ -2297,18 +2342,46 @@ private:
         std::vector<wxWindow*> scrollTargets = {
             title, fullTitle, link, gettingStartedLabel, commandsLabel
         };
-        for (const wxString& line : SplitHelpLines(section->gettingStarted))
-            AddHelpTextBlock(page, sizer, line, monoFont, 8, wrappedBlocks, helpPageState, scrollTargets);
+        wxString gettingStartedText;
+        for (const wxString& line : SplitHelpLines(section->gettingStarted)) {
+            if (!gettingStartedText.empty()) gettingStartedText += "\n";
+            gettingStartedText += line;
+        }
+        auto* gettingStartedTextBlock = AddSelectableHelpTextArea(
+            page, sizer, gettingStartedText, monoFont, 16, wrappedBlocks, helpPageState, scrollTargets);
+        long gettingPos = 0;
+        for (const wxString& line : SplitHelpLines(section->gettingStarted)) {
+            AddHelpTextPositionTarget(helpPageState, gettingStartedTextBlock, line, gettingPos);
+            gettingPos += (long)line.length() + 1;
+        }
 
         sizer->Add(commandsLabel, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxTOP, 16);
         helpPageState->targets.push_back({commandsLabel, "Commands"});
         helpPageState->controlFonts.push_back({commandsLabel, sectionFont});
+        wxString commandsText;
+        std::vector<std::pair<wxString, long>> commandTargets;
         for (size_t i = 0; i < BestiaryHelpPage::kCommandCount; i++) {
             const auto& command = BestiaryHelpPage::kCommands[i];
             if (command.beast != section->beast) continue;
-            AddHelpCommandBlock(page, sizer, command, monoFont, wrappedBlocks,
-                                helpPageState, scrollTargets);
+            if (!commandsText.empty()) commandsText += "\n\n";
+            long commandStart = (long)commandsText.length();
+            std::vector<wxString> fields = BuildHelpCommandFields(command);
+            wxString commandText;
+            for (const wxString& field : fields) {
+                if (!commandText.empty()) commandText += "\n";
+                commandText += field;
+            }
+            commandsText += commandText;
+            commandTargets.push_back({commandText, commandStart});
+            for (const wxString& field : fields) {
+                long fieldStart = commandStart + commandText.Find(field);
+                commandTargets.push_back({field, fieldStart});
+            }
         }
+        auto* commandsTextBlock = AddSelectableHelpTextArea(
+            page, sizer, commandsText, monoFont, 16, wrappedBlocks, helpPageState, scrollTargets);
+        for (const auto& target : commandTargets)
+            AddHelpTextPositionTarget(helpPageState, commandsTextBlock, target.first, target.second);
         for (wxWindow* control : scrollTargets)
         {
             ForwardMouseWheelToPage(page, control);
@@ -2359,9 +2432,18 @@ private:
         helpPageState->controlFonts.push_back({title, tf});
 
         sizer->Add(title, 0, wxALL, 16);
-        for (const wxString& paragraph : SplitHelpParagraphs(BestiaryHelpPage::kIntroText))
-            AddHelpTextBlock(page, sizer, paragraph, bodyFont, 12, wrappedBlocks,
-                             helpPageState, scrollTargets);
+        wxString introText;
+        std::vector<std::pair<wxString, long>> introTargets;
+        for (const wxString& paragraph : SplitHelpParagraphs(BestiaryHelpPage::kIntroText)) {
+            if (!introText.empty()) introText += "\n\n";
+            long paragraphStart = (long)introText.length();
+            introText += paragraph;
+            introTargets.push_back({paragraph, paragraphStart});
+        }
+        auto* introTextBlock = AddSelectableHelpTextArea(
+            page, sizer, introText, bodyFont, 12, wrappedBlocks, helpPageState, scrollTargets);
+        for (const auto& target : introTargets)
+            AddHelpTextPositionTarget(helpPageState, introTextBlock, target.first, target.second);
         sizer->Add(link, 0, wxLEFT | wxRIGHT | wxBOTTOM, 16);
 
         for (size_t i = 0; i < BestiaryHelpPage::kSectionCount; i++) {
