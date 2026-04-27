@@ -16,6 +16,8 @@ ifeq ($(PLATFORM),windows)
   ifeq ($(origin CXX),default)
     CXX := x86_64-w64-mingw32-g++
   endif
+  WINDRES ?= x86_64-w64-mingw32-windres
+  IMAGEMAGICK ?= $(shell command -v magick 2>/dev/null || command -v convert 2>/dev/null)
 	ifneq ($(filter undefined default,$(origin WX_CONFIG)),)
 		ifneq ($(wildcard /usr/x86_64-w64-mingw32/bin/wx-config),)
 			WX_CONFIG := /usr/x86_64-w64-mingw32/bin/wx-config
@@ -48,6 +50,12 @@ ifeq ($(PLATFORM),windows)
   LDFLAGS += -static -static-libgcc
   LDLIBS := -lm
   GUI_LIBS :=
+  GUI_LDFLAGS_EXTRA := -mwindows
+  WINDOWS_RC_SRC := packaging/windows/bestiary.rc
+  WINDOWS_MANIFEST := packaging/windows/bestiary.manifest
+  WINDOWS_ICON_PNG := art/icon.png
+  WINDOWS_ICON_ICO := $(OBJDIR)/bestiary.ico
+  WINDOWS_RC_OBJ := $(OBJDIR)/bestiary_resources.o
   LINE_INPUT_SRCS := src/platform/line_input_linenoise.c third_party/linenoise/linenoise.c
 else
   ifeq ($(origin CC),default)
@@ -76,6 +84,9 @@ else
   CPPFLAGS += -Iinclude
   LDLIBS := -lm -lreadline
   GUI_LIBS := -lutil
+  GUI_LDFLAGS_EXTRA :=
+  WINDOWS_RC_OBJ :=
+  WINDOWS_ICON_ICO :=
   LINE_INPUT_SRCS := src/platform/line_input_readline.c
 endif
 
@@ -185,9 +196,14 @@ $(CLI_BIN): $(CORE_OBJS) $(REPL_OBJ) $(LINE_INPUT_OBJS) $(BEAST_OBJS) | $(BINDIR
 $(REPL_BIN): $(CLI_BIN) | $(BINDIR)
 	cp $< $@
 
-$(GUI_BIN): $(GUI_OBJ) $(CLI_BIN) | $(BINDIR)
+src/gui/embedded_icon.h: art/icon.png tools/embed_png.sh
+	./tools/embed_png.sh art/icon.png src/gui/embedded_icon.h BestiaryEmbeddedIcon kIconBase64
+
+$(GUI_OBJ): src/gui/embedded_icon.h
+
+$(GUI_BIN): $(GUI_OBJ) $(WINDOWS_RC_OBJ) $(CLI_BIN) | $(BINDIR)
 	@command -v $(WX_CONFIG) >/dev/null 2>&1 || { echo "wxWidgets config tool not found: $(WX_CONFIG)"; echo "Install wxWidgets development packages or set WX_CONFIG=/path/to/wx-config."; exit 1; }
-	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $(GUI_OBJ) `$(WX_CONFIG) --libs` $(GUI_LIBS)
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(GUI_LDFLAGS_EXTRA) -o $@ $(GUI_OBJ) $(WINDOWS_RC_OBJ) `$(WX_CONFIG) --libs` $(GUI_LIBS)
 
 $(WINDOWS_BUNDLE_DIR): FORCE $(CLI_BIN) $(REPL_BIN) $(GUI_BIN) $(WINDOWS_RUNTIME_BINS) $(WINDOWS_INSTALLER_FILES)
 	@if [ "$(PLATFORM)" != "windows" ]; then \
@@ -222,6 +238,21 @@ $(WINDOWS_RELEASE_DIR): FORCE $(CLI_BIN) $(GUI_BIN) $(WINDOWS_RUNTIME_BINS)
 
 $(WINDOWS_RELEASE_ARCHIVE): $(WINDOWS_RELEASE_DIR)
 	cd $(DISTDIR) && zip -rq $(notdir $@) $(notdir $(WINDOWS_RELEASE_DIR))
+
+ifeq ($(PLATFORM),windows)
+$(WINDOWS_ICON_ICO): $(WINDOWS_ICON_PNG)
+	@mkdir -p $(dir $@)
+	@if [ -z "$(IMAGEMAGICK)" ]; then \
+		echo "ImageMagick (magick or convert) is required to build the Windows icon"; \
+		echo "Install imagemagick or set IMAGEMAGICK=/path/to/magick"; \
+		exit 1; \
+	fi
+	$(IMAGEMAGICK) "$<" -define icon:auto-resize=256,128,96,64,48,32,16 "$@"
+
+$(WINDOWS_RC_OBJ): $(WINDOWS_RC_SRC) $(WINDOWS_ICON_ICO)
+	@mkdir -p $(dir $@)
+	$(WINDRES) -I packaging/windows -I $(dir $(WINDOWS_ICON_ICO)) -i $(WINDOWS_RC_SRC) -O coff -o $@
+endif
 
 $(BINDIR)/%.dll: | $(BINDIR)
 	@if [ "$(PLATFORM)" != "windows" ]; then \

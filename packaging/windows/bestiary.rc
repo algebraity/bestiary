@@ -1,0 +1,11 @@
+#include <winuser.h>
+
+// Application icon. The build system converts art/icon.png to bestiary.ico
+// at build time, then windres pulls it in here.
+1 ICON "bestiary.ico"
+
+// DPI awareness is set programmatically at startup via
+// SetProcessDpiAwarenessContext (see BestiaryGuiApp::OnInit). Embedding a
+// manifest here also activates Windows Common Controls v6 theming, which
+// causes wxTextCtrl backgrounds to ignore our SetBackgroundColour calls,
+// so we deliberately do NOT include a manifest in this resource file.
