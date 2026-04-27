@@ -1,6 +1,8 @@
 .DEFAULT_GOAL := all
 
 PLATFORM ?= linux
+RELEASE_NAME ?= bestiary
+RELEASE_SUFFIX := $(if $(VERSION),-$(VERSION),)
 CFLAGS   ?= -Wall -Wextra -O2
 CXXFLAGS ?= -std=c++17 -Wall -Wextra -O2
 LDFLAGS  ?=
@@ -37,6 +39,9 @@ ifeq ($(PLATFORM),windows)
 		liblzma-5.dll
 	WINDOWS_RUNTIME_BINS := $(addprefix $(BINDIR)/,$(WINDOWS_RUNTIME_DLLS))
 	WINDOWS_BUNDLE_DIR := $(DISTDIR)/bestiary
+	WINDOWS_RELEASE_STEM := $(RELEASE_NAME)$(RELEASE_SUFFIX)-windows
+	WINDOWS_RELEASE_DIR := $(DISTDIR)/$(WINDOWS_RELEASE_STEM)
+	WINDOWS_RELEASE_ARCHIVE := $(DISTDIR)/$(WINDOWS_RELEASE_STEM).zip
 	WINDOWS_INSTALLER_FILES := packaging/windows/install.bat packaging/windows/README-WINDOWS.txt
 	CPPFLAGS += -Iinclude -Ithird_party/linenoise -DBST_PLATFORM_WINDOWS -DWINVER=0x0A00 -D_WIN32_WINNT=0x0A00
   LDFLAGS += -static -static-libgcc
@@ -55,7 +60,12 @@ else
   OBJDIR := build/obj/linux
   BINDIR := build/bin/linux
 	DISTDIR := build/dist/linux
+	LINUX_RELEASE_STEM := $(RELEASE_NAME)$(RELEASE_SUFFIX)-linux
+	LINUX_RELEASE_DIR := $(DISTDIR)/$(LINUX_RELEASE_STEM)
+	LINUX_RELEASE_ARCHIVE := $(DISTDIR)/$(LINUX_RELEASE_STEM).tar.gz
 	WINDOWS_RUNTIME_BINS :=
+	WINDOWS_RELEASE_DIR :=
+	WINDOWS_RELEASE_ARCHIVE :=
 	WINDOWS_INSTALLER_FILES :=
   CPPFLAGS += -Iinclude
   LDLIBS := -lm -lreadline
@@ -112,7 +122,7 @@ TEST_BINS = \
 
 DEPFILES = $(BEAST_OBJS:.o=.d) $(CORE_OBJS:.o=.d) $(REPL_OBJ:.o=.d) $(GUI_OBJ:.o=.d) $(LINE_INPUT_OBJS:.o=.d) $(TEST_OBJS:.o=.d)
 
-.PHONY: all bestiary bestiary-cli cli repl gui linux linux-gui windows windows-gui windows-bundle bundle release release-gui beasts pipeline tests clean FORCE
+.PHONY: all bestiary bestiary-cli cli repl gui linux linux-gui windows windows-gui windows-bundle bundle release release-gui linux-release linux-release-package windows-release windows-release-package release-artifacts beasts pipeline tests clean FORCE
 
 all: bestiary
 
@@ -142,6 +152,18 @@ windows-bundle:
 release: linux windows
 
 release-gui: linux-gui windows-gui
+
+linux-release:
+	$(MAKE) PLATFORM=linux RELEASE_NAME="$(RELEASE_NAME)" VERSION="$(VERSION)" linux-release-package
+
+linux-release-package: $(LINUX_RELEASE_ARCHIVE)
+
+windows-release:
+	$(MAKE) PLATFORM=windows RELEASE_NAME="$(RELEASE_NAME)" VERSION="$(VERSION)" windows-release-package
+
+windows-release-package: $(WINDOWS_RELEASE_ARCHIVE)
+
+release-artifacts: linux-release windows-release
 
 bundle: $(WINDOWS_BUNDLE_DIR)
 
@@ -173,6 +195,30 @@ $(WINDOWS_BUNDLE_DIR): FORCE $(CLI_BIN) $(REPL_BIN) $(GUI_BIN) $(GUI_ASSETS) $(W
 	@mkdir -p $@
 	cp $(CLI_BIN) $(REPL_BIN) $(GUI_BIN) $(GUI_ASSETS) $(WINDOWS_RUNTIME_BINS) $@/
 	cp $(WINDOWS_INSTALLER_FILES) $@/
+
+$(LINUX_RELEASE_DIR): FORCE $(CLI_BIN) $(GUI_BIN) $(GUI_ASSETS)
+	@if [ "$(PLATFORM)" != "linux" ]; then \
+		echo "linux release packaging is only supported with PLATFORM=linux"; \
+		exit 1; \
+	fi
+	rm -rf $@
+	@mkdir -p $@
+	cp $(CLI_BIN) $(GUI_BIN) $(GUI_ASSETS) $@/
+
+$(LINUX_RELEASE_ARCHIVE): $(LINUX_RELEASE_DIR)
+	cd $(DISTDIR) && tar -czf $(notdir $@) $(notdir $(LINUX_RELEASE_DIR))
+
+$(WINDOWS_RELEASE_DIR): FORCE $(CLI_BIN) $(GUI_BIN) $(GUI_ASSETS) $(WINDOWS_RUNTIME_BINS)
+	@if [ "$(PLATFORM)" != "windows" ]; then \
+		echo "windows release packaging is only supported with PLATFORM=windows"; \
+		exit 1; \
+	fi
+	rm -rf $@
+	@mkdir -p $@
+	cp $(CLI_BIN) $(GUI_BIN) $(GUI_ASSETS) $(WINDOWS_RUNTIME_BINS) $@/
+
+$(WINDOWS_RELEASE_ARCHIVE): $(WINDOWS_RELEASE_DIR)
+	cd $(DISTDIR) && zip -rq $(notdir $@) $(notdir $(WINDOWS_RELEASE_DIR))
 
 $(BINDIR)/%.dll: | $(BINDIR)
 	@if [ "$(PLATFORM)" != "windows" ]; then \
