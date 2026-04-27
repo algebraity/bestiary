@@ -1,19 +1,53 @@
 ![](https://git.keimai.space/algebraity/bestiary/raw/branch/main/bestiary-banner.png)
 
-# Bestiary - v1.0.0: release the BEASTs!!
+# Bestiary - v1.0.0: Release the BEASTs!
 
 ...the Bundles of Efficient Algorithms for Science and Technology, that is!!
 
-Bestiary is a language, command-line interface, and GUI application through which a collection of C-based animal-themed mathematics libraries are accessed and used together seamlessly, as though they were all one program. Each library is referred to as a "BEAST," and provides a set of commands that can be accessed in Bestiary. All commands in Bestiary start with a backslash `\` character, and the language is themed after LaTeX, such that many objects can be defined in a way identical to how they would be typed in LaTeX.
+Bestiary is a LaTeX-inspired mathematical computing environment built around seven C-based, animal-themed mathematics libraries. It combines a language, command-line interface, and GUI application so that these libraries can be used together as one unified system. Its core idea is simple: mathematical expressions should be typed the way mathematicians already write them. Each library is referred to as a "BEAST," and provides a set of commands that can be accessed in Bestiary. All commands in Bestiary start with a backslash `\` character, and the language is themed after LaTeX, such that many objects can be defined in a way identical to how they would be typed in LaTeX.
 
 Each BEAST is written from scratch in C, and the wxWidgets-based GUI application, which allows for easy access to documentation while working and running multiple Bestiary shells in parallel, is written in the C++ language. For full documentation on each of the hundreds of commands and operations available in Bestiary, see the "Help" tab in the application. More information on each BEAST and its functionality can be found below.
+
+Bestiary is currently in active development, but as of v1.0.0, it can be expected to be stable and efficient for regular use. Future releases will add new features to the core BEAST libraries where useful and fix any bugs that may be discovered, but the core architecture and functionality will remain the same. Bestiary has mostly been tested on the GNU/Linux operating system, but it is fully supported and developed for Windows as well.
+
+## Installation
+
+To install Bestiary, download the latest release for your platform from the repository's Releases page. Extract the downloaded archive to a convenient location.
+
+On Windows, open the extracted folder and run:
+
+```bat
+install.bat
+```
+This installs Bestiary into the default local application folder and creates shortcuts when possible. You can also run `bestiary.exe` directly from the extracted folder if you prefer to use it as a portable application.
+
+On GNU/Linux, the extracted archive contains the Bestiary executables. You can run them directly from the extracted folder, or move them to a directory used for applications on your system, such as `/bin`, `/usr/bin`, `/usr/local/bin`, or another directory on your `PATH`. If you want Bestiary to appear in your desktop environment's application launcher, you may also create a `.desktop` file pointing to the bestiary executable.
+
+## GUI application
+
+Bestiary can be used either through the GUI application, `bestiary`, or through the command-line interpreter, `bestiary-cli`. The GUI is recommended for serious work, since it provides multiple shell tabs, searchable documentation, script tabs, and convenient access to the same evaluator used by the CLI.
+
+Here are some screenshots from Bestiary:
+
+![](https://git.keimai.space/algebraity/bestiary/raw/branch/main/art/screenshots/2026-04-26-201124_hyprshot.png)
+
+*The Bestiary start page.*
+
+![](https://git.keimai.space/algebraity/bestiary/raw/branch/main/art/screenshots/2026-04-26-201240_hyprshot.png)
+
+*An example of a Bestiary shell.*
+
+![](https://git.keimai.space/algebraity/bestiary/raw/branch/main/art/screenshots/2026-04-26-201253_hyprshot.png)
+
+*The main help page, with links to BEAST-specific help pages.*
 
 ## Usage examples
 
 To get an idea of how Bestiary is used and why it is powerful, consider a series of commands executed in Bestiary:
 
 ```
-Bestiary v0.0.1 (flags: --tokens --ast)  -- Ctrl+C cancels, Ctrl-D quits
+Bestiary v1.0.0 -- Ctrl+C cancels, Ctrl+D quits, Ctrl+L clears screen
+\help lists commands, \help{commandName} displays command info
 > A = \begin{matrix} 1 & 1 \\ 1 & 0 \end{matrix}
 => ()
 > A
@@ -33,7 +67,7 @@ Bestiary v0.0.1 (flags: --tokens --ast)  -- Ctrl+C cancels, Ctrl-D quits
 > 
 ```
 
-As can be seen from this example, there are both easier native ways to define objects, and methods which are identical to how LaTeX is commonly used to define objects. This means it is in theory possible to paste a line into Bestiary directly from a paper to compute a result. This goes farther than just defining objects. Consider this example, using the same definition of `A` as in the first:
+As can be seen from this example, there are both easier native ways to define objects, and methods which are identical to how LaTeX is commonly used. In many cases, this makes it possible to paste mathematical expressions directly from LaTeX source into Bestiary and compute with them. This goes farther than just defining objects. Consider this example, using the same definition of `A` as in the first:
 
 ```
 > A \otimes A
@@ -47,121 +81,108 @@ As can be seen from this example, there are both easier native ways to define ob
 => 1
 ```
 
-Yet again, a line that is often used in LaTeX source documents can be directly pasted into Bestiary to get the desired result. There's no need to study documentation carefully and learn how to perform basic operations or compute invariants: you can type as you would a paper, and it will work out.
+Yet again, a line that is often used in LaTeX source documents can be directly pasted into Bestiary to get the desired result. For common operations and invariants, the goal is that you should not need to translate mathematics into a special programming idiom: you should be able to type something close to the way you would write it in a paper.
 
-There are many commands in Bestiary that are not commonly used in TeX, but they are a combination of TeX syntax with intuitive function names, e.g. `\isIrrep` determines whether a representation is irreducible or not, and `\listElements` lists the elements of a group or a ring. The idea is that all you need to learn Bestiary is familiarity with TeX, which any mathematician will have, and the rest will follow naturally. That's what makes it powerful.
+There are many commands in Bestiary that are not commonly used in LaTeX, but they are a combination of LaTeX syntax with intuitive function names, e.g. `\isIrrep` determines whether a representation is irreducible or not, and `\listElements` lists the elements of a group or a ring. The idea is that all you need to learn Bestiary is familiarity with LaTeX, which any mathematician will have, and the rest will follow naturally. That's what makes it powerful.
 
+## Scripting
+
+Bestiary can run any ".bsy" file as a line-by-line script:
+
+```sh
+./build/bin/linux/bestiary-cli file.bsy
+```
+
+Inside of a Bestiary environment, use `\run{file.bsy}` or `\run{"path with spaces.bsy"}` to run
+a script in the current session. Script lines share the same evaluator and
+environment as the REPL, so assignments made by a script remain available after
+`\run` finishes. Scripts can also be loaded into the GUI application as tabs.
+
+To write a script, simply create a `.bsy` file with a series of commands as you would type them into the interpreter. Semicolons are not needed to end lines.
 
 ## Meet the BEASTs
 
 Bestiary is powered by 7 C-based mathematics libraries, each of which is named after the Japanese word for an animal, which also functions as a backronym for the full name. They each provide different commands and functions to the program, and they build on and require each other to be complete.
 
-* HEBI (蛇): Highly Efficient Basic math Interpreter
-  * the versatile serpent, provides shared libaries used by the other BEASTs
-  * powers other powerful BEASTs, and provides shared libraries for basic mathematics
+* HEBI (蛇): Highly Efficient Basic math Interpreter (basic math and shared libraries)
+  * the versatile serpent, providing shared libraries used by the other BEASTs
+  * powers other powerful BEASTs, and provides efficient functions and structs for basic mathematics
   * Main features: complex arithmetic, basic functions, transcendental constants
-* OOKAMI-ng (狼): Operations Over K-fold Addition and Multiplicative Integer sets
-  * the fearless wolf, hunting down the properites of sets of integers with ferocious intensity
-  * a self-contained libary for integer combinatorics based on [OOKAMI](https://git.keimai.space/algebraity/ookami)
-  * Main features: computing sumsets, difference sets, product sets, rep functions, energies, APs and GPs, and much more
-* Sokko (速狐): Speedy Kitsune
-  * the swift fox, providing a full linear algebra library at the speed of fast, well-written C
+* Sokko (速狐): Speedy Kitsune (linear algebra)
+  * the swift fox, providing a fast, self-contained linear algebra library
   * provides fully self-contained matrix and vector operations, and provides the backbone for other BEASTs requiring linear algebra
   * Main features: matrices, vectors, row reduction, column reduction, eigenvalues and eigenvectors, efficient LU decomposition
-* USAGI (兎): Utilities Bundle for Algebra and Group Invariants
+* USAGI (兎): Utilities Bundle for Algebra and Group Invariants (finite group and ring theory)
   * the petite rabbit, hopping through rings, skipping through fields, and always staying in a group (;3)
-  * provides a fully library for finite group and ring theory, including constructors for common objects, quotients, homomorphisms, and much more
+  * provides a full library for finite group and ring theory, including constructors for common objects, quotients, homomorphisms, and much more
   * Main features: groups, rings, fields, sub-objects, quotients, homomorphisms, ideals, advanced computations
-* PONI (ポニ): Physics Operations and Numerical Interpreter
-  * the majestic pony, providing solutions to basic physics problems and multibody simulations
-  * makes use of Sokko to provide vector-based kinematics and dynamics, with more planned for future updates
-  * Main features: kinemtics, dynamics, force, energy, work, multibody simulations
-* TORA (虎): Toolkit Of Representation-theoretic Algorithms
+* NEKO (猫): Numerical Estimation Kernel with Optimizations (calculus,numerical analysis, and solvers)
+  * the supple feline, squeezing quickly and leanly into even the tightest of functions and ODEs
+  * offers symbolic and numerical methods for calculus and applications
+  * Main features: differentiation, integration, numerical rootfinding, ODE solvers, polynomial factorization over R and C
+* TORA (虎): Toolkit Of Representation-theoretic Algorithms (representation theory of finite groups)
   * the ferocious tiger, suitable for wrangling representations of even the trickiest of finite groups
   * provides a full library for representation and character computation
   * Main features: representations, characters, speedy character table computations for finite groups
-
-
-## GUI application
-
-Bestiary is both a CLI-based language and interpreter, and a GUI application. Use of the latter is recommended for serious work, as the GUI provides convenience and access to extensive and searchable documentation, and this is the intended way to use the program for most users.
-
-Here are some screenshots from Bestiary:
-
-![](https://git.keimai.space/algebraity/bestiary/raw/branch/main/art/2026-04-26-183526_hyprshot.png)
-
-![](https://git.keimai.space/algebraity/bestiary/raw/branch/main/art/2026-04-26-184635_hyprshot.png)
-
-![](https://git.keimai.space/algebraity/bestiary/raw/branch/main/art/2026-04-26-184559_hyprshot.png)
-
-## Scripting
-
-Bestiary can run any text file as a line-by-line script:
-
-```sh
-./build/bin/linux/bestiary file.bsy
-```
-
-Inside the REPL, use `\run{file.bsy}` or `\run{"path with spaces.bsy"}` to run
-a script in the current session. Script lines share the same evaluator and
-environment as the REPL, so assignments made by a script remain available after
-`\run` finishes. Scripts can also be loaded into the GUI application as tabs.
-
-To write a script, simply create a text file with a series of commands as you would type them
-into the interpreter, and running the script will have the same result as if the commands had
-been run in succession in the REPL. Semicolons are not needed to ends lines.
+* PONI (ポニ): Physics Operations and Numerical Interpreter (physics, kinematics, simulations)
+  * the majestic pony, providing solutions to basic physics problems and multibody simulations
+  * makes use of Sokko to provide vector-based kinematics and dynamics, with more planned for future updates
+  * Main features: kinematics, dynamics, force, energy, work, multibody simulations
+* OOKAMI-ng (狼): Operations Over K-fold Addition and Multiplicative Integer sets (integer combinatorics)
+  * the fearless wolf, hunting down the properties of sets of integers with ferocious intensity
+  * a self-contained library for integer combinatorics based on [OOKAMI](https://git.keimai.space/algebraity/ookami)
+  * Main features: computing sumsets, difference sets, product sets, rep functions, energies, APs and GPs, and much more
 
 ## Dependencies
 
-For GNU/Linux, Bestiary is expected to run out of the box. for Windows, the necessary DLL files are shipped with `bestiary.exe`, and are installed when the user runs `install.bat`. If any dependencies are missing, please create an issue to report a bug.
+For GNU/Linux, Bestiary is expected to run out of the box. For Windows, the necessary DLL files are shipped with `bestiary.exe`, and are installed when the user runs `install.bat`. If any dependencies are missing, please create an issue to report a bug.
 
 ## Building
 
-GNU/Linux is the default build path and uses GNU readline for interactive
-history, editing, and tab completion:
+Bestiary can be built on GNU/Linux with:
 
 ```sh
 make
-./build/bin/linux/bestiary
 ```
 
-The Windows build path uses the vendored linenoise backend for interactive
-history, editing, and tab completion without requiring readline:
+This produces the GUI application and command-line interpreter under:
+
+```sh
+./build/bin/linux/
+```
+
+The main executables are:
+
+```sh
+./build/bin/linux/bestiary
+./build/bin/linux/bestiary-cli
+```
+
+To build the Windows version from GNU/Linux, use a MinGW-w64 toolchain and run:
 
 ```sh
 make windows
 ```
 
-The Windows build process produces `build/bin/windows/repl.exe` when a MinGW-w64 compiler such as
-`x86_64-w64-mingw32-gcc` is installed. The Windows target statically links the
-MinGW support library where possible; with UCRT-based MinGW toolchains it still
-uses Microsoft's standard Windows/UCRT runtime DLLs. `make release` builds both
-supported platform targets.
+To build release artifacts for all supported platforms, run:
 
-To make a runnable Windows bundle with the required MinGW runtime DLLs copied
-next to the executables, use:
+```sh
+make release
+```
+
+A portable Windows bundle can be created with:
 
 ```sh
 make windows-bundle
 ```
 
-That produces a portable folder at `build/dist/windows/bestiary/` containing
-`bestiary.exe`, `repl.exe`, `bestiary-gui.exe`, `bestiary-banner.png`, and the
-needed MinGW DLLs such as `libpng16-16.dll`, `libtiff-6.dll`, `libjpeg-8.dll`,
-`libexpat-1.dll`, `zlib1.dll`, `libgcc_s_seh-1.dll`, `libwinpthread-1.dll`,
-`libssp-0.dll`, and `liblzma-5.dll`. This is the simplest way to distribute
-the Windows build to users.
+This places the Windows executables, required DLLs, banner image, and installer script in:
 
-The bundle also includes `install.bat`, which copies the whole folder into
-`%LOCALAPPDATA%\Bestiary` by default and creates Start Menu shortcuts when
-possible. Users can also run `bestiary-gui.exe` directly from the portable
-bundle folder. Do not distribute or move the `.exe` files by themselves; the
-DLLs need to stay next to the executables.
+```sh
+build/dist/windows/bestiary/
+```
 
-If you want a traditional installer that creates Start Menu entries or installs
-into `Program Files`, use an external installer builder such as Inno Setup or
-NSIS and include the contents of that bundle folder. Bestiary itself should not
-try to install DLLs into a user's system directories at runtime.
+The resulting folder can be distributed directly. On Windows, users may either run `bestiary.exe` from the bundle folder or run `install.bat` to install Bestiary into `%LOCALAPPDATA%\Bestiary`.
 
 ## License and attribution
 
