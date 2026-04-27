@@ -1671,7 +1671,7 @@ private:
         m_startTitleBasePointSize = titleFont.GetPointSize();
         center->Add(title, 0, wxALIGN_CENTER | wxBOTTOM, 8);
 
-        auto* version = new wxStaticText(page, wxID_ANY, "v1.0.1");
+        auto* version = new wxStaticText(page, wxID_ANY, "v1.0.2");
         StyleDarkLabel(version, true);
         wxFont versionFont = version->GetFont();
         versionFont.SetPointSize(versionFont.GetPointSize() + 1);
