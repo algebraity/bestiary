@@ -28,6 +28,7 @@
 #ifdef __WXMSW__
 #  define WIN32_LEAN_AND_MEAN
 #  include<windows.h>
+#  include<uxtheme.h>
 #else
 #  include<errno.h>
 #  include<fcntl.h>
@@ -91,6 +92,13 @@ static void StyleDarkButton(wxButton* button, bool accent = false) {
     if (!button) return;
     button->SetBackgroundColour(ColourFromRgb(accent ? theme::kButtonAltBg : theme::kButtonBg));
     button->SetForegroundColour(ColourFromRgb(theme::kText));
+#ifdef __WXMSW__
+    // Strip the native Windows visual style from this button so the OS doesn't
+    // repaint a white themed background on hover/focus over our dark colours
+    // (which left light text unreadable on a light background).
+    HWND hwnd = (HWND)button->GetHandle();
+    if (hwnd) ::SetWindowTheme(hwnd, L"", L"");
+#endif
 }
 
 static void StyleDarkHyperlink(wxHyperlinkCtrl* link) {
@@ -549,7 +557,21 @@ public:
         m_pty.Write(u8.data(), u8.length());
     }
 
-    void ZoomFont(int delta) { ChangeTerminalResolution(delta); }
+    static constexpr int kBaseFontPointSize = 11;
+
+    int GetZoomDelta() const { return m_zoomDelta; }
+
+    void SetZoomDelta(int delta) {
+        delta = std::clamp(delta, kMinFontSize - kBaseFontPointSize,
+                                   kMaxFontSize - kBaseFontPointSize);
+        if (delta == m_zoomDelta && m_font.GetPointSize() == kBaseFontPointSize + delta) return;
+        m_zoomDelta = delta;
+        m_font = BestiaryTerminalFont();
+        m_font.SetPointSize(kBaseFontPointSize + m_zoomDelta);
+        m_charW = 0;
+        m_charH = 0;
+        UpdateGeometry(true);
+    }
 
 private:
     struct Cell {
@@ -825,14 +847,6 @@ private:
         Refresh(false);
     }
 
-    void ChangeTerminalResolution(int delta) {
-        int pointSize = m_font.GetPointSize();
-        if (pointSize <= 0) pointSize = 11;
-        int newSize = std::clamp(pointSize + delta, kMinFontSize, kMaxFontSize);
-        if (newSize == pointSize) return;
-        m_font.SetPointSize(newSize);
-        UpdateGeometry(true);
-    }
 
     BufferPos ScreenPointToBufferPos(const wxPoint& pt) const {
         BufferPos pos;
@@ -1359,8 +1373,8 @@ private:
         if (ctrl && !alt) {
             if (shift && (kc == 'C' || kc == 'c' || kc == WXK_INSERT)) { CopySelection(); return; }
             if (shift && (kc == 'V' || kc == 'v')) { PasteClipboard(); return; }
-            if (kc == '-' || kc == '_' || kc == WXK_SUBTRACT) { ChangeTerminalResolution(-1); return; }
-            if (kc == '+' || kc == '=' || kc == WXK_ADD)      { ChangeTerminalResolution(1); return; }
+            // Ctrl+-/+/= zoom is handled by the frame-level accelerator so it
+            // applies the same zoom to every terminal tab. Don't intercept here.
             if (kc == 'D' || kc == 'd') {
                 if (m_closeCallback) {
                     CallAfter([closeCallback = m_closeCallback]() { closeCallback(); });
@@ -1430,6 +1444,7 @@ private:
     PtySession m_pty;
     wxTimer    m_timer;
     wxFont     m_font;
+    int        m_zoomDelta = 0;
     bool       m_running = false;
 
     int m_charW = 0, m_charH = 0;
@@ -1487,9 +1502,10 @@ struct HelpPageState {
     int lastMatchIndex = -1;
     std::function<void()> applyWrapAndLayout;
     // Zoom support: base fonts per control + invalidation hook into wrappedBlocks.
+    // Current zoom level is owned by MainFrame (m_helpZoomDelta) so it's
+    // shared across all help tabs and persists when tabs are closed.
     std::vector<std::pair<wxWindow*, wxFont>> controlFonts;
     std::shared_ptr<std::vector<WrappedBlock>> wrappedBlocks;
-    int fontZoomDelta = 0;
     wxString highlightedQuery;
 };
 
@@ -1773,6 +1789,10 @@ private:
         tab.terminal = terminal;
         tab.helpPage = std::move(helpPageState);
         m_tabs.push_back(tab);
+        // Apply current shared zoom level so a freshly opened help tab matches
+        // any zoom the user has already set on other help tabs.
+        if (m_tabs.back().helpPage && m_helpZoomDelta != 0)
+            ApplyHelpZoomToPage(m_tabs.back().helpPage);
         RebuildTabStrip();
         SelectTab((int)m_tabs.size() - 1);
     }
@@ -1790,6 +1810,7 @@ private:
 
         auto* term = new TerminalView(m_pages);
         term->SetCloseCallback([this, term]() { CloseTabByPage(term); });
+        term->SetZoomDelta(m_terminalZoomDelta);
         AddPage(title, term, true, number, term);
 
         wxString exe = BestiaryExecutablePath();
@@ -1901,16 +1922,13 @@ private:
                     SearchCurrentHelpPage();
                     return;
                 }
-                if (m_selected >= 0 && m_selected < (int)m_tabs.size() && m_tabs[m_selected].helpPage) {
-                    auto& hp = m_tabs[m_selected].helpPage;
-                    if (kc == '-' || kc == WXK_SUBTRACT || kc == WXK_NUMPAD_SUBTRACT) {
-                        ApplyHelpPageFontZoom(hp, -1);
-                        return;
-                    }
-                    if (kc == '+' || kc == '=' || kc == WXK_ADD || kc == WXK_NUMPAD_ADD) {
-                        ApplyHelpPageFontZoom(hp, +1);
-                        return;
-                    }
+                if (kc == '-' || kc == WXK_SUBTRACT || kc == WXK_NUMPAD_SUBTRACT) {
+                    ZoomActiveTab(-1);
+                    return;
+                }
+                if (kc == '+' || kc == '=' || kc == WXK_ADD || kc == WXK_NUMPAD_ADD) {
+                    ZoomActiveTab(+1);
+                    return;
                 }
             }
             evt.Skip();
@@ -2349,20 +2367,53 @@ private:
         });
     }
 
-    void ApplyHelpPageFontZoom(const std::shared_ptr<HelpPageState>& helpPage, int delta) {
+    void ApplyHelpZoomToPage(const std::shared_ptr<HelpPageState>& helpPage) {
         if (!helpPage) return;
-        helpPage->fontZoomDelta = std::clamp(helpPage->fontZoomDelta + delta, -5, 8);
+        const wxColour fg = ColourFromRgb(theme::kText);
+        const wxColour bg = ColourFromRgb(theme::kPanelBg);
         for (auto& [control, baseFont] : helpPage->controlFonts) {
             if (!control) continue;
             wxFont f = baseFont;
-            f.SetPointSize(std::max(6, f.GetPointSize() + helpPage->fontZoomDelta));
+            f.SetPointSize(std::max(6, f.GetPointSize() + m_helpZoomDelta));
             control->SetFont(f);
+            // wxTextCtrl on Windows (Rich Edit) clears the foreground colour
+            // when SetFont is called. Re-apply the dark-theme colours to the
+            // existing range so text doesn't go grey on zoom.
+            control->SetForegroundColour(fg);
+            if (auto* tc = wxDynamicCast(control, wxTextCtrl)) {
+                tc->SetBackgroundColour(bg);
+                wxTextAttr style(fg, bg);
+                style.SetFlags(wxTEXT_ATTR_TEXT_COLOUR | wxTEXT_ATTR_BACKGROUND_COLOUR);
+                long end = tc->GetLastPosition();
+                if (end > 0) tc->SetStyle(0, end, style);
+            }
         }
         if (helpPage->wrappedBlocks) {
             for (auto& block : *helpPage->wrappedBlocks)
                 block.lastWrapWidth = -1;
         }
         if (helpPage->applyWrapAndLayout) helpPage->applyWrapAndLayout();
+        // Re-apply highlights so existing search matches survive the restyle.
+        if (!helpPage->lastQuery.empty())
+            ApplyHelpPageSearchHighlights(helpPage, helpPage->lastQuery);
+    }
+
+    void AdjustHelpZoom(int delta) {
+        int next = std::clamp(m_helpZoomDelta + delta, -5, 8);
+        if (next == m_helpZoomDelta) return;
+        m_helpZoomDelta = next;
+        for (auto& tab : m_tabs)
+            if (tab.helpPage) ApplyHelpZoomToPage(tab.helpPage);
+    }
+
+    void AdjustTerminalZoom(int delta) {
+        int next = std::clamp(m_terminalZoomDelta + delta,
+                              TerminalView::kMinFontSize - TerminalView::kBaseFontPointSize,
+                              TerminalView::kMaxFontSize - TerminalView::kBaseFontPointSize);
+        if (next == m_terminalZoomDelta) return;
+        m_terminalZoomDelta = next;
+        for (auto& tab : m_tabs)
+            if (tab.terminal) tab.terminal->SetZoomDelta(m_terminalZoomDelta);
     }
 
     void SearchCurrentHelpPage() {
@@ -2416,35 +2467,26 @@ private:
     void ZoomActiveTab(int delta) {
         if (m_selected < 0 || m_selected >= (int)m_tabs.size()) return;
         Tab& tab = m_tabs[m_selected];
-        if (tab.helpPage) {
-            ApplyHelpPageFontZoom(tab.helpPage, delta);
-            return;
-        }
-        if (tab.terminal) {
-            tab.terminal->ZoomFont(delta);
-            return;
-        }
+        if (tab.helpPage) { AdjustHelpZoom(delta); return; }
+        if (tab.terminal) { AdjustTerminalZoom(delta); return; }
     }
 
     void OnCharHook(wxKeyEvent& evt) {
         int kc = evt.GetKeyCode();
         if (evt.ControlDown() && !evt.AltDown()) {
-            if (kc == 'F' || kc == 'f') {
-                if (m_selected >= 0 && m_selected < (int)m_tabs.size() && m_tabs[m_selected].helpPage) {
-                    SearchCurrentHelpPage();
-                    return;
-                }
+            if ((kc == 'F' || kc == 'f') &&
+                m_selected >= 0 && m_selected < (int)m_tabs.size() &&
+                m_tabs[m_selected].helpPage) {
+                SearchCurrentHelpPage();
+                return;
             }
-            if (m_selected >= 0 && m_selected < (int)m_tabs.size() && m_tabs[m_selected].helpPage) {
-                auto& hp = m_tabs[m_selected].helpPage;
-                if (kc == '-' || kc == WXK_SUBTRACT || kc == WXK_NUMPAD_SUBTRACT) {
-                    ApplyHelpPageFontZoom(hp, -1);
-                    return;
-                }
-                if (kc == '+' || kc == '=' || kc == WXK_ADD || kc == WXK_NUMPAD_ADD) {
-                    ApplyHelpPageFontZoom(hp, +1);
-                    return;
-                }
+            if (kc == '-' || kc == WXK_SUBTRACT || kc == WXK_NUMPAD_SUBTRACT) {
+                ZoomActiveTab(-1);
+                return;
+            }
+            if (kc == '+' || kc == '=' || kc == WXK_ADD || kc == WXK_NUMPAD_ADD) {
+                ZoomActiveTab(+1);
+                return;
             }
         }
         evt.Skip();
@@ -2730,6 +2772,12 @@ private:
     int               m_startTitleBasePointSize = 0;
     int               m_startVersionBasePointSize = 0;
     int               m_startButtonBasePointSize = 0;
+
+    // Shared zoom levels persisted for the lifetime of the frame.
+    // Help pages and terminals each have their own level so the user can
+    // tune them independently; closing a tab does not lose the setting.
+    int               m_helpZoomDelta = 0;
+    int               m_terminalZoomDelta = 0;
 };
 
 #ifdef __WXMSW__
