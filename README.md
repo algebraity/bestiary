@@ -8,7 +8,7 @@ Bestiary is a LaTeX-inspired mathematical computing environment built around sev
 
 Each BEAST is written from scratch in C, and the wxWidgets-based GUI application, which allows for easy access to documentation while working and running multiple Bestiary shells in parallel, is written in the C++ language. For full documentation on each of the hundreds of commands and operations available in Bestiary, see the "Help" tab in the application. More information on each BEAST and its functionality can be found below.
 
-Bestiary is currently in active development, but as of v1.0.0, it can be expected to be stable and efficient for regular use. Future releases will add new features to the core BEAST libraries where useful and fix any bugs that may be discovered, but the core architecture and functionality will remain the same. Bestiary has mostly been tested on the GNU/Linux operating system, but it is fully supported and developed for Windows as well.
+Bestiary is currently in active development, but as of v1.0.0, it can be expected to be stable and efficient for regular use. Future releases will add new features to the core BEAST libraries where useful and fix any bugs that may be discovered, but the core architecture and functionality will remain the same. Bestiary has mostly been tested on the GNU/Linux operating system, so it is expected to be less stable on Windows, but it is supported and developed for Windows as well.
 
 ## Installation
 
@@ -53,6 +53,8 @@ Here are some screenshots from Bestiary:
     </tr>
   </table>
 </div>
+
+Note that, as Bestiary is primarily developed for GNU/Linux, there may be some issues with the GUI application on Windows systems. Users are advised to rely on the CLI implementation on Windows systems for work that requires high levels of stability.
 
 ## Usage examples
 
