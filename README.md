@@ -33,16 +33,16 @@ Here are some screenshots from Bestiary:
   <table width="100%">
     <tr>
       <td align="center" width="33%">
-        <img src="https://git.keimai.space/algebraity/bestiary/raw/branch/main/art/screenshots/2026-04-26-201124_hyprshot.png" alt="The Bestiary start page" width="100%"><br>
+        <img src="https://git.keimai.space/algebraity/bestiary/raw/branch/main/art/screenshots/2026-04-26-201124_hyprshot.png" alt="Bestiary start page" width="100%"><br>
         <em>The Bestiary start page.</em>
       </td>
       <td align="center" width="33%">
-        <img src="https://git.keimai.space/algebraity/bestiary/raw/branch/main/art/screenshots/2026-04-26-201240_hyprshot.png" alt="An example of a Bestiary shell" width="100%"><br>
-        <em>An example of a Bestiary shell.</em>
+        <img src="https://git.keimai.space/algebraity/bestiary/raw/branch/main/art/screenshots/2026-04-26-201240_hyprshot.png" alt="Bestiary shell with character table output" width="100%"><br>
+        <em>Multiple shell tabs running mathematical computations in parallel.</em>
       </td>
       <td align="center" width="33%">
-        <img src="https://git.keimai.space/algebraity/bestiary/raw/branch/main/art/screenshots/2026-04-26-201253_hyprshot.png" alt="The main help page, with links to BEAST-specific help pages" width="100%"><br>
-        <em>The help page for Sokko.</em>
+        <img src="https://git.keimai.space/algebraity/bestiary/raw/branch/main/art/screenshots/2026-04-26-201253_hyprshot.png" alt="Bestiary help page for Sokko" width="100%"><br>
+        <em>Integrated help pages for BEAST-specific commands.</em>
       </td>
     </tr>
   </table>
