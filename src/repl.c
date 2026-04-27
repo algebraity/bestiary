@@ -178,7 +178,8 @@ int main(int argc, char** argv) {
     bstLineInputInit(NULL);
     bstLineInputSetPlainMode(opt_plain_input);
 
-    puts("Bestiary v0.0.1 (flags: --tokens --ast)  -- Ctrl+C cancels, Ctrl-D quits");
+    puts("Bestiary v1.0.0 -- Ctrl+C cancels, Ctrl+D quits, Ctrl+L clears screen");
+    puts("\\help lists commands, \\help{commandName} displays command info");
     for (;;) {
 #ifndef BST_PLATFORM_WINDOWS
         if (sigsetjmp(g_repl_jmp, 1) != 0) {
@@ -203,7 +204,7 @@ int main(int argc, char** argv) {
         g_active_line = line;
         g_repl_state = REPL_STATE_IDLE;
 
-        if (!line) { putchar('\n'); break; }     // Ctrl-D
+        if (!line) { putchar('\n'); break; }     // Ctrl+D
         if (*line == '\0') {
             clearActiveObjects();
             continue;

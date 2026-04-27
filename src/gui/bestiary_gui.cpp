@@ -104,7 +104,7 @@ static void StyleDarkTextCtrl(wxTextCtrl* text) {
 
 static wxString BestiaryExecutablePath() {
     wxFileName exe(wxStandardPaths::Get().GetExecutablePath());
-    wxFileName bestiary(exe.GetPath(), "bestiary");
+    wxFileName bestiary(exe.GetPath(), "bestiary-cli");
 #ifdef __WXMSW__
     bestiary.SetExt("exe");
 #endif
@@ -1500,6 +1500,13 @@ private:
             titleFont.SetWeight(wxFONTWEIGHT_BOLD);
             m_startTitle->SetFont(titleFont);
         }
+        if (m_startVersion) {
+            wxFont versionFont = m_startVersion->GetFont();
+            int pointSize = std::clamp((int)(pageSize.y * 0.032), m_startVersionBasePointSize, 18);
+            versionFont.SetPointSize(pointSize);
+            versionFont.SetWeight(wxFONTWEIGHT_NORMAL);
+            m_startVersion->SetFont(versionFont);
+        }
 
         if (m_startBanner && m_startBannerImage.IsOk()) {
             int titleWidth = m_startTitle ? m_startTitle->GetBestSize().x : 0;
@@ -1558,7 +1565,17 @@ private:
         title->SetFont(titleFont);
         m_startTitle = title;
         m_startTitleBasePointSize = titleFont.GetPointSize();
-        center->Add(title, 0, wxALIGN_CENTER | wxBOTTOM, 24);
+        center->Add(title, 0, wxALIGN_CENTER | wxBOTTOM, 8);
+
+        auto* version = new wxStaticText(page, wxID_ANY, "v1.0.0");
+        StyleDarkLabel(version, true);
+        wxFont versionFont = version->GetFont();
+        versionFont.SetPointSize(versionFont.GetPointSize() + 1);
+        versionFont.SetWeight(wxFONTWEIGHT_NORMAL);
+        version->SetFont(versionFont);
+        m_startVersion = version;
+        m_startVersionBasePointSize = versionFont.GetPointSize();
+        center->Add(version, 0, wxALIGN_CENTER | wxBOTTOM, 24);
 
         auto* startButton  = new wxButton(page, wxID_ANY, "Start Bestiary", wxDefaultPosition, wxSize(220, 34));
         auto* scriptButton = new wxButton(page, wxID_ANY, "Run script",     wxDefaultPosition, wxSize(220, 34));
@@ -2444,10 +2461,12 @@ private:
     wxStaticBitmap*   m_startBanner = nullptr;
     wxImage           m_startBannerImage;
     wxStaticText*     m_startTitle = nullptr;
+    wxStaticText*     m_startVersion = nullptr;
     wxButton*         m_startButton = nullptr;
     wxButton*         m_scriptButton = nullptr;
     wxButton*         m_helpButton = nullptr;
     int               m_startTitleBasePointSize = 0;
+    int               m_startVersionBasePointSize = 0;
     int               m_startButtonBasePointSize = 0;
 };
 

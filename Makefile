@@ -98,9 +98,9 @@ GUI_OBJ = $(patsubst src/%.cpp,$(OBJDIR)/src/%.o,$(GUI_SRC))
 LINE_INPUT_OBJS = $(patsubst %.c,$(OBJDIR)/%.o,$(LINE_INPUT_SRCS))
 TEST_OBJS = $(patsubst tests/%.c,$(OBJDIR)/tests/%.o,$(TEST_SRCS))
 
-APP_BIN := $(BINDIR)/bestiary$(EXEEXT)
+CLI_BIN := $(BINDIR)/bestiary-cli$(EXEEXT)
 REPL_BIN := $(BINDIR)/repl$(EXEEXT)
-GUI_BIN := $(BINDIR)/bestiary-gui$(EXEEXT)
+GUI_BIN := $(BINDIR)/bestiary$(EXEEXT)
 GUI_ASSETS := $(BINDIR)/bestiary-banner.png
 TEST_BINS = \
 	$(BINDIR)/test_sokko$(EXEEXT) \
@@ -112,15 +112,17 @@ TEST_BINS = \
 
 DEPFILES = $(BEAST_OBJS:.o=.d) $(CORE_OBJS:.o=.d) $(REPL_OBJ:.o=.d) $(GUI_OBJ:.o=.d) $(LINE_INPUT_OBJS:.o=.d) $(TEST_OBJS:.o=.d)
 
-.PHONY: all bestiary repl gui linux linux-gui windows windows-gui windows-bundle bundle release release-gui beasts pipeline tests clean
+.PHONY: all bestiary bestiary-cli cli repl gui linux linux-gui windows windows-gui windows-bundle bundle release release-gui beasts pipeline tests clean FORCE
 
-all: bestiary repl
+all: bestiary
 
-bestiary: $(APP_BIN)
+bestiary: $(GUI_BIN) $(GUI_ASSETS) $(WINDOWS_RUNTIME_BINS)
+
+bestiary-cli cli: $(CLI_BIN)
 
 repl: $(REPL_BIN)
 
-gui: $(GUI_BIN) $(GUI_ASSETS) $(WINDOWS_RUNTIME_BINS)
+gui: bestiary
 
 linux:
 	$(MAKE) PLATFORM=linux bestiary repl
@@ -149,26 +151,27 @@ pipeline: $(CORE_OBJS) $(REPL_OBJ) $(LINE_INPUT_OBJS)
 
 tests: $(TEST_BINS)
 
-$(APP_BIN): $(CORE_OBJS) $(REPL_OBJ) $(LINE_INPUT_OBJS) $(BEAST_OBJS) | $(BINDIR)
+$(CLI_BIN): $(CORE_OBJS) $(REPL_OBJ) $(LINE_INPUT_OBJS) $(BEAST_OBJS) | $(BINDIR)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
-$(REPL_BIN): $(APP_BIN) | $(BINDIR)
+$(REPL_BIN): $(CLI_BIN) | $(BINDIR)
 	cp $< $@
 
-$(GUI_BIN): $(GUI_OBJ) $(APP_BIN) | $(BINDIR)
+$(GUI_BIN): $(GUI_OBJ) $(CLI_BIN) | $(BINDIR)
 	@command -v $(WX_CONFIG) >/dev/null 2>&1 || { echo "wxWidgets config tool not found: $(WX_CONFIG)"; echo "Install wxWidgets development packages or set WX_CONFIG=/path/to/wx-config."; exit 1; }
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $(GUI_OBJ) `$(WX_CONFIG) --libs` $(GUI_LIBS)
 
 $(GUI_ASSETS): bestiary-banner.png | $(BINDIR)
 	cp $< $@
 
-$(WINDOWS_BUNDLE_DIR): $(APP_BIN) $(REPL_BIN) $(GUI_BIN) $(GUI_ASSETS) $(WINDOWS_RUNTIME_BINS) $(WINDOWS_INSTALLER_FILES)
+$(WINDOWS_BUNDLE_DIR): FORCE $(CLI_BIN) $(REPL_BIN) $(GUI_BIN) $(GUI_ASSETS) $(WINDOWS_RUNTIME_BINS) $(WINDOWS_INSTALLER_FILES)
 	@if [ "$(PLATFORM)" != "windows" ]; then \
 		echo "bundle is only supported with PLATFORM=windows"; \
 		exit 1; \
 	fi
+	rm -rf $@
 	@mkdir -p $@
-	cp $(APP_BIN) $(REPL_BIN) $(GUI_BIN) $(GUI_ASSETS) $(WINDOWS_RUNTIME_BINS) $@/
+	cp $(CLI_BIN) $(REPL_BIN) $(GUI_BIN) $(GUI_ASSETS) $(WINDOWS_RUNTIME_BINS) $@/
 	cp $(WINDOWS_INSTALLER_FILES) $@/
 
 $(BINDIR)/%.dll: | $(BINDIR)
