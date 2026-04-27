@@ -49,7 +49,7 @@ ifeq ($(PLATFORM),windows)
 	CPPFLAGS += -Iinclude -Ithird_party/linenoise -DBST_PLATFORM_WINDOWS -DWINVER=0x0A00 -D_WIN32_WINNT=0x0A00
   LDFLAGS += -static -static-libgcc
   LDLIBS := -lm
-  GUI_LIBS :=
+  GUI_LIBS := -lutil
   GUI_LDFLAGS_EXTRA := -mwindows
   WINDOWS_RC_SRC := packaging/windows/bestiary.rc
   WINDOWS_MANIFEST := packaging/windows/bestiary.manifest
@@ -57,6 +57,46 @@ ifeq ($(PLATFORM),windows)
   WINDOWS_ICON_ICO := $(OBJDIR)/bestiary.ico
   WINDOWS_RC_OBJ := $(OBJDIR)/bestiary_resources.o
   LINE_INPUT_SRCS := src/platform/line_input_linenoise.c third_party/linenoise/linenoise.c
+else ifeq ($(PLATFORM),macos)
+  ifeq ($(origin CC),default)
+    CC := clang
+  endif
+  ifeq ($(origin CXX),default)
+    CXX := clang++
+  endif
+  WX_CONFIG ?= wx-config
+  EXEEXT :=
+	ifneq ($(SANITIZE_ENABLED),)
+		OBJDIR := build/obj/macos-sanitize
+		BINDIR := build/bin/macos-sanitize
+	else
+		OBJDIR := build/obj/macos
+		BINDIR := build/bin/macos
+	endif
+	DISTDIR := build/dist/macos
+	MACOS_RELEASE_STEM := $(RELEASE_NAME)$(RELEASE_SUFFIX)-macos
+	MACOS_RELEASE_DIR := $(DISTDIR)/$(MACOS_RELEASE_STEM)
+	MACOS_RELEASE_ARCHIVE := $(DISTDIR)/$(MACOS_RELEASE_STEM).tar.gz
+	WINDOWS_RUNTIME_BINS :=
+	WINDOWS_RELEASE_DIR :=
+	WINDOWS_RELEASE_ARCHIVE :=
+	WINDOWS_INSTALLER_FILES :=
+  CPPFLAGS += -Iinclude
+  # Homebrew readline is preferred if installed; otherwise macOS may provide
+  # a libedit-backed readline compatibility library.
+  ifneq ($(wildcard /opt/homebrew/opt/readline/include),)
+    CPPFLAGS += -I/opt/homebrew/opt/readline/include
+    LDFLAGS += -L/opt/homebrew/opt/readline/lib
+  else ifneq ($(wildcard /usr/local/opt/readline/include),)
+    CPPFLAGS += -I/usr/local/opt/readline/include
+    LDFLAGS += -L/usr/local/opt/readline/lib
+  endif
+  LDLIBS := -lm -lreadline
+  GUI_LIBS := -lutil
+  GUI_LDFLAGS_EXTRA :=
+  WINDOWS_RC_OBJ :=
+  WINDOWS_ICON_ICO :=
+  LINE_INPUT_SRCS := src/platform/line_input_readline.c
 else
   ifeq ($(origin CC),default)
     CC := gcc
@@ -139,7 +179,7 @@ TEST_BINS = \
 DEPFILES = $(BEAST_OBJS:.o=.d) $(CORE_OBJS:.o=.d) $(REPL_OBJ:.o=.d) $(GUI_OBJ:.o=.d) $(LINE_INPUT_OBJS:.o=.d) $(TEST_OBJS:.o=.d)
 BUILD_CONFIG_STAMP := $(OBJDIR)/.build-config
 
-.PHONY: all bestiary bestiary-cli cli repl gui linux linux-gui windows windows-gui windows-bundle bundle release release-gui linux-release linux-release-package windows-release windows-release-package release-artifacts beasts pipeline tests clean FORCE
+.PHONY: all bestiary bestiary-cli cli repl gui linux linux-gui macos macos-gui windows windows-gui windows-bundle bundle release release-gui linux-release linux-release-package macos-release macos-release-package windows-release windows-release-package release-artifacts beasts pipeline tests clean FORCE
 
 all: bestiary
 
@@ -157,6 +197,12 @@ linux:
 linux-gui:
 	$(MAKE) PLATFORM=linux gui
 
+macos:
+	$(MAKE) PLATFORM=macos bestiary repl
+
+macos-gui:
+	$(MAKE) PLATFORM=macos gui
+
 windows:
 	$(MAKE) PLATFORM=windows bestiary repl
 
@@ -166,21 +212,26 @@ windows-gui:
 windows-bundle:
 	$(MAKE) PLATFORM=windows bundle
 
-release: linux windows
+release: linux macos windows
 
-release-gui: linux-gui windows-gui
+release-gui: linux-gui macos-gui windows-gui
 
 linux-release:
 	$(MAKE) PLATFORM=linux RELEASE_NAME="$(RELEASE_NAME)" VERSION="$(VERSION)" linux-release-package
 
 linux-release-package: $(LINUX_RELEASE_ARCHIVE)
 
+macos-release:
+	$(MAKE) PLATFORM=macos RELEASE_NAME="$(RELEASE_NAME)" VERSION="$(VERSION)" macos-release-package
+
+macos-release-package: $(MACOS_RELEASE_ARCHIVE)
+
 windows-release:
 	$(MAKE) PLATFORM=windows RELEASE_NAME="$(RELEASE_NAME)" VERSION="$(VERSION)" windows-release-package
 
 windows-release-package: $(WINDOWS_RELEASE_ARCHIVE)
 
-release-artifacts: linux-release windows-release
+release-artifacts: linux-release macos-release windows-release
 
 bundle: $(WINDOWS_BUNDLE_DIR)
 
@@ -226,6 +277,18 @@ $(LINUX_RELEASE_DIR): FORCE $(CLI_BIN) $(GUI_BIN)
 
 $(LINUX_RELEASE_ARCHIVE): $(LINUX_RELEASE_DIR)
 	cd $(DISTDIR) && tar -czf $(notdir $@) $(notdir $(LINUX_RELEASE_DIR))
+
+$(MACOS_RELEASE_DIR): FORCE $(CLI_BIN) $(GUI_BIN)
+	@if [ "$(PLATFORM)" != "macos" ]; then \
+		echo "macOS release packaging is only supported with PLATFORM=macos"; \
+		exit 1; \
+	fi
+	rm -rf $@
+	@mkdir -p $@
+	cp $(CLI_BIN) $(GUI_BIN) $@/
+
+$(MACOS_RELEASE_ARCHIVE): $(MACOS_RELEASE_DIR)
+	cd $(DISTDIR) && tar -czf $(notdir $@) $(notdir $(MACOS_RELEASE_DIR))
 
 $(WINDOWS_RELEASE_DIR): FORCE $(CLI_BIN) $(GUI_BIN) $(WINDOWS_RUNTIME_BINS)
 	@if [ "$(PLATFORM)" != "windows" ]; then \

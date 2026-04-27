@@ -33,12 +33,17 @@
 #else
 #  include<errno.h>
 #  include<fcntl.h>
-#  include<pty.h>
 #  include<signal.h>
 #  include<sys/ioctl.h>
 #  include<sys/wait.h>
 #  include<termios.h>
 #  include<unistd.h>
+#endif
+
+#ifdef __APPLE__
+#  include <util.h>
+#else
+#  include <pty.h>
 #endif
 
 namespace {
