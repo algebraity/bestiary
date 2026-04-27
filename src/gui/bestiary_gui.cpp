@@ -1,6 +1,7 @@
 #include<wx/wx.h>
 #include<wx/clipbrd.h>
 #include<wx/base64.h>
+#include<wx/config.h>
 #include<wx/dcbuffer.h>
 #include<wx/filename.h>
 #include<wx/filedlg.h>
@@ -1544,6 +1545,8 @@ public:
           m_selected(wxNOT_FOUND) {
                 StyleDarkWindow(this, theme::kFrameBg);
 
+        LoadPersistedZoom();
+
         wxIconBundle icons = BuildEmbeddedIconBundle();
         if (icons.GetIconCount() > 0) SetIcons(icons);
 
@@ -1668,7 +1671,7 @@ private:
         m_startTitleBasePointSize = titleFont.GetPointSize();
         center->Add(title, 0, wxALIGN_CENTER | wxBOTTOM, 8);
 
-        auto* version = new wxStaticText(page, wxID_ANY, "v1.0.0");
+        auto* version = new wxStaticText(page, wxID_ANY, "v1.0.1");
         StyleDarkLabel(version, true);
         wxFont versionFont = version->GetFont();
         versionFont.SetPointSize(versionFont.GetPointSize() + 1);
@@ -2399,11 +2402,12 @@ private:
     }
 
     void AdjustHelpZoom(int delta) {
-        int next = std::clamp(m_helpZoomDelta + delta, -5, 8);
+        int next = std::clamp(m_helpZoomDelta + delta, kHelpZoomMin, kHelpZoomMax);
         if (next == m_helpZoomDelta) return;
         m_helpZoomDelta = next;
         for (auto& tab : m_tabs)
             if (tab.helpPage) ApplyHelpZoomToPage(tab.helpPage);
+        SavePersistedZoom();
     }
 
     void AdjustTerminalZoom(int delta) {
@@ -2414,6 +2418,36 @@ private:
         m_terminalZoomDelta = next;
         for (auto& tab : m_tabs)
             if (tab.terminal) tab.terminal->SetZoomDelta(m_terminalZoomDelta);
+        SavePersistedZoom();
+    }
+
+    static constexpr int kHelpZoomMin = -5;
+    static constexpr int kHelpZoomMax = 8;
+    static constexpr const char* kZoomConfigGroup = "/Zoom";
+    static constexpr const char* kHelpZoomKey     = "HelpDelta";
+    static constexpr const char* kTerminalZoomKey = "TerminalDelta";
+
+    void LoadPersistedZoom() {
+        wxConfigBase* config = wxConfigBase::Get(true);
+        if (!config) return;
+        long help = 0, term = 0;
+        config->Read(wxString(kZoomConfigGroup) + "/" + kHelpZoomKey, &help, 0);
+        config->Read(wxString(kZoomConfigGroup) + "/" + kTerminalZoomKey, &term, 0);
+        m_helpZoomDelta = std::clamp((int)help, kHelpZoomMin, kHelpZoomMax);
+        m_terminalZoomDelta = std::clamp(
+            (int)term,
+            TerminalView::kMinFontSize - TerminalView::kBaseFontPointSize,
+            TerminalView::kMaxFontSize - TerminalView::kBaseFontPointSize);
+    }
+
+    void SavePersistedZoom() {
+        wxConfigBase* config = wxConfigBase::Get(true);
+        if (!config) return;
+        config->Write(wxString(kZoomConfigGroup) + "/" + kHelpZoomKey,
+                      (long)m_helpZoomDelta);
+        config->Write(wxString(kZoomConfigGroup) + "/" + kTerminalZoomKey,
+                      (long)m_terminalZoomDelta);
+        config->Flush();
     }
 
     void SearchCurrentHelpPage() {
@@ -2825,6 +2859,11 @@ public:
 #ifdef __WXMSW__
         EnableWindowsDpiAwareness();
 #endif
+        // Stable identity for wxConfigBase::Get(): the registry path
+        // HKCU\Software\Bestiary\Bestiary on Windows and ~/.config/Bestiary
+        // (or similar) on Linux. Used to persist the help/terminal zoom.
+        SetAppName("Bestiary");
+        SetVendorName("Bestiary");
         wxInitAllImageHandlers();
         auto* frame = new MainFrame();
         frame->Show(true);
