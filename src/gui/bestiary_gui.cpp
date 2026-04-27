@@ -1,9 +1,11 @@
 #include<wx/wx.h>
 #include<wx/clipbrd.h>
+#include<wx/base64.h>
 #include<wx/dcbuffer.h>
 #include<wx/filename.h>
 #include<wx/filedlg.h>
 #include<wx/hyperlink.h>
+#include<wx/mstream.h>
 #include<wx/scrolwin.h>
 #include<wx/simplebook.h>
 #include<wx/stdpaths.h>
@@ -20,6 +22,7 @@
 #include<vector>
 
 #include"help_page_content.h"
+#include"embedded_banner.h"
 
 #ifdef __WXMSW__
 #  define WIN32_LEAN_AND_MEAN
@@ -109,6 +112,17 @@ static wxString BestiaryExecutablePath() {
     bestiary.SetExt("exe");
 #endif
     return bestiary.GetFullPath();
+}
+
+static wxImage LoadEmbeddedBannerImage() {
+    wxMemoryBuffer decoded = wxBase64Decode(BestiaryEmbeddedBanner::kBannerBase64,
+                                            wxNO_LEN,
+                                            wxBase64DecodeMode_Strict);
+    if (decoded.IsEmpty()) return wxImage();
+
+    wxMemoryInputStream stream(decoded.GetData(), decoded.GetDataLen());
+    wxImage image(stream, wxBITMAP_TYPE_PNG);
+    return image.IsOk() ? image : wxImage();
 }
 
 // ============================================================
@@ -1547,16 +1561,11 @@ private:
 
         m_startPage = page;
 
-        wxString bannerPath = wxFileName(wxStandardPaths::Get().GetExecutablePath()).GetPathWithSep()
-                            + "bestiary-banner.png";
-        if (!wxFileExists(bannerPath)) bannerPath = "bestiary-banner.png";
-        if (wxFileExists(bannerPath)) {
-            wxImage image(bannerPath);
-            if (image.IsOk()) {
-                m_startBannerImage = image;
-                m_startBanner = new wxStaticBitmap(page, wxID_ANY, wxBitmap(image));
-                center->Add(m_startBanner, 0, wxALIGN_CENTER | wxBOTTOM, 12);
-            }
+        wxImage image = LoadEmbeddedBannerImage();
+        if (image.IsOk()) {
+            m_startBannerImage = image;
+            m_startBanner = new wxStaticBitmap(page, wxID_ANY, wxBitmap(image));
+            center->Add(m_startBanner, 0, wxALIGN_CENTER | wxBOTTOM, 12);
         }
 
         auto* title = new wxStaticText(page, wxID_ANY, "Bestiary: Release the BEASTs!");

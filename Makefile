@@ -7,6 +7,7 @@ CFLAGS   ?= -Wall -Wextra -O2
 CXXFLAGS ?= -std=c++17 -Wall -Wextra -O2
 LDFLAGS  ?=
 DEPFLAGS  = -MMD -MP
+SANITIZE_ENABLED := $(strip $(findstring -fsanitize,$(CFLAGS) $(CXXFLAGS) $(LDFLAGS)))
 
 ifeq ($(PLATFORM),windows)
   ifeq ($(origin CC),default)
@@ -57,8 +58,13 @@ else
   endif
   WX_CONFIG ?= wx-config
   EXEEXT :=
-  OBJDIR := build/obj/linux
-  BINDIR := build/bin/linux
+	ifneq ($(SANITIZE_ENABLED),)
+		OBJDIR := build/obj/linux-sanitize
+		BINDIR := build/bin/linux-sanitize
+	else
+		OBJDIR := build/obj/linux
+		BINDIR := build/bin/linux
+	endif
 	DISTDIR := build/dist/linux
 	LINUX_RELEASE_STEM := $(RELEASE_NAME)$(RELEASE_SUFFIX)-linux
 	LINUX_RELEASE_DIR := $(DISTDIR)/$(LINUX_RELEASE_STEM)
@@ -111,7 +117,6 @@ TEST_OBJS = $(patsubst tests/%.c,$(OBJDIR)/tests/%.o,$(TEST_SRCS))
 CLI_BIN := $(BINDIR)/bestiary-cli$(EXEEXT)
 REPL_BIN := $(BINDIR)/repl$(EXEEXT)
 GUI_BIN := $(BINDIR)/bestiary$(EXEEXT)
-GUI_ASSETS := $(BINDIR)/bestiary-banner.png
 TEST_BINS = \
 	$(BINDIR)/test_sokko$(EXEEXT) \
 	$(BINDIR)/test_usagi$(EXEEXT) \
@@ -121,12 +126,13 @@ TEST_BINS = \
 	$(BINDIR)/test_neko$(EXEEXT)
 
 DEPFILES = $(BEAST_OBJS:.o=.d) $(CORE_OBJS:.o=.d) $(REPL_OBJ:.o=.d) $(GUI_OBJ:.o=.d) $(LINE_INPUT_OBJS:.o=.d) $(TEST_OBJS:.o=.d)
+BUILD_CONFIG_STAMP := $(OBJDIR)/.build-config
 
 .PHONY: all bestiary bestiary-cli cli repl gui linux linux-gui windows windows-gui windows-bundle bundle release release-gui linux-release linux-release-package windows-release windows-release-package release-artifacts beasts pipeline tests clean FORCE
 
 all: bestiary
 
-bestiary: $(GUI_BIN) $(GUI_ASSETS) $(WINDOWS_RUNTIME_BINS)
+bestiary: $(GUI_BIN) $(WINDOWS_RUNTIME_BINS)
 
 bestiary-cli cli: $(CLI_BIN)
 
@@ -183,39 +189,36 @@ $(GUI_BIN): $(GUI_OBJ) $(CLI_BIN) | $(BINDIR)
 	@command -v $(WX_CONFIG) >/dev/null 2>&1 || { echo "wxWidgets config tool not found: $(WX_CONFIG)"; echo "Install wxWidgets development packages or set WX_CONFIG=/path/to/wx-config."; exit 1; }
 	$(CXX) $(CXXFLAGS) $(LDFLAGS) -o $@ $(GUI_OBJ) `$(WX_CONFIG) --libs` $(GUI_LIBS)
 
-$(GUI_ASSETS): bestiary-banner.png | $(BINDIR)
-	cp $< $@
-
-$(WINDOWS_BUNDLE_DIR): FORCE $(CLI_BIN) $(REPL_BIN) $(GUI_BIN) $(GUI_ASSETS) $(WINDOWS_RUNTIME_BINS) $(WINDOWS_INSTALLER_FILES)
+$(WINDOWS_BUNDLE_DIR): FORCE $(CLI_BIN) $(REPL_BIN) $(GUI_BIN) $(WINDOWS_RUNTIME_BINS) $(WINDOWS_INSTALLER_FILES)
 	@if [ "$(PLATFORM)" != "windows" ]; then \
 		echo "bundle is only supported with PLATFORM=windows"; \
 		exit 1; \
 	fi
 	rm -rf $@
 	@mkdir -p $@
-	cp $(CLI_BIN) $(REPL_BIN) $(GUI_BIN) $(GUI_ASSETS) $(WINDOWS_RUNTIME_BINS) $@/
+	cp $(CLI_BIN) $(REPL_BIN) $(GUI_BIN) $(WINDOWS_RUNTIME_BINS) $@/
 	cp $(WINDOWS_INSTALLER_FILES) $@/
 
-$(LINUX_RELEASE_DIR): FORCE $(CLI_BIN) $(GUI_BIN) $(GUI_ASSETS)
+$(LINUX_RELEASE_DIR): FORCE $(CLI_BIN) $(GUI_BIN)
 	@if [ "$(PLATFORM)" != "linux" ]; then \
 		echo "linux release packaging is only supported with PLATFORM=linux"; \
 		exit 1; \
 	fi
 	rm -rf $@
 	@mkdir -p $@
-	cp $(CLI_BIN) $(GUI_BIN) $(GUI_ASSETS) $@/
+	cp $(CLI_BIN) $(GUI_BIN) $@/
 
 $(LINUX_RELEASE_ARCHIVE): $(LINUX_RELEASE_DIR)
 	cd $(DISTDIR) && tar -czf $(notdir $@) $(notdir $(LINUX_RELEASE_DIR))
 
-$(WINDOWS_RELEASE_DIR): FORCE $(CLI_BIN) $(GUI_BIN) $(GUI_ASSETS) $(WINDOWS_RUNTIME_BINS)
+$(WINDOWS_RELEASE_DIR): FORCE $(CLI_BIN) $(GUI_BIN) $(WINDOWS_RUNTIME_BINS)
 	@if [ "$(PLATFORM)" != "windows" ]; then \
 		echo "windows release packaging is only supported with PLATFORM=windows"; \
 		exit 1; \
 	fi
 	rm -rf $@
 	@mkdir -p $@
-	cp $(CLI_BIN) $(GUI_BIN) $(GUI_ASSETS) $(WINDOWS_RUNTIME_BINS) $@/
+	cp $(CLI_BIN) $(GUI_BIN) $(WINDOWS_RUNTIME_BINS) $@/
 
 $(WINDOWS_RELEASE_ARCHIVE): $(WINDOWS_RELEASE_DIR)
 	cd $(DISTDIR) && zip -rq $(notdir $@) $(notdir $(WINDOWS_RELEASE_DIR))
@@ -249,11 +252,29 @@ $(BINDIR)/test_tora$(EXEEXT): $(OBJDIR)/tests/test_tora.o $(OBJDIR)/src/beasts/t
 $(BINDIR)/test_neko$(EXEEXT): $(OBJDIR)/tests/test_neko.o $(OBJDIR)/src/beasts/neko.o | $(BINDIR)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ -lm
 
-$(OBJDIR)/%.o: %.c
+$(BUILD_CONFIG_STAMP): FORCE
+	@mkdir -p $(dir $@)
+	@printf '%s\n' \
+		'PLATFORM=$(PLATFORM)' \
+		'CC=$(CC)' \
+		'CXX=$(CXX)' \
+		'CPPFLAGS=$(CPPFLAGS)' \
+		'CFLAGS=$(CFLAGS)' \
+		'CXXFLAGS=$(CXXFLAGS)' \
+		'LDFLAGS=$(LDFLAGS)' \
+		'LDLIBS=$(LDLIBS)' \
+		'WX_CONFIG=$(WX_CONFIG)' > $@.tmp
+	@if [ ! -f $@ ] || ! cmp -s $@.tmp $@; then \
+		mv $@.tmp $@; \
+	else \
+		rm -f $@.tmp; \
+	fi
+
+$(OBJDIR)/%.o: %.c $(BUILD_CONFIG_STAMP)
 	@mkdir -p $(dir $@)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(DEPFLAGS) -c $< -o $@
 
-$(OBJDIR)/%.o: %.cpp
+$(OBJDIR)/%.o: %.cpp $(BUILD_CONFIG_STAMP)
 	@command -v $(WX_CONFIG) >/dev/null 2>&1 || { echo "wxWidgets config tool not found: $(WX_CONFIG)"; echo "Install wxWidgets development packages or set WX_CONFIG=/path/to/wx-config."; exit 1; }
 	@mkdir -p $(dir $@)
 	$(CXX) $(CPPFLAGS) `$(WX_CONFIG) --cxxflags` $(CXXFLAGS) $(DEPFLAGS) -c $< -o $@

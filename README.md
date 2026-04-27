@@ -210,7 +210,7 @@ bestiary
 bestiary-cli
 ```
 
-On Windows, the required DLLs and `bestiary-banner.png` are included alongside the executables. The test binaries and `repl` are not included in these release archives.
+On Windows, the required DLLs are included alongside the executables. The test binaries and `repl` are not included in these release archives.
 
 A portable Windows bundle can be created with:
 
@@ -218,7 +218,7 @@ A portable Windows bundle can be created with:
 make windows-bundle
 ```
 
-This places the Windows executables, required DLLs, banner image, and installer script in:
+This places the Windows executables, required DLLs, and installer script in:
 
 ```sh
 build/dist/windows/bestiary/
