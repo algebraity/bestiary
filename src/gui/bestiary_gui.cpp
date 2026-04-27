@@ -61,6 +61,8 @@ static constexpr uint32_t kTerminalBg    = 0x0B0F14u;
 static constexpr uint32_t kTerminalText  = 0xD7DEE6u;
 static constexpr uint32_t kTerminalCursor = 0x8BD5FFu;
 static constexpr uint32_t kSelectionBg   = 0x23435Fu;
+static constexpr uint32_t kSearchHighlightBg = 0x7AD7E0u;
+static constexpr uint32_t kSearchHighlightText = 0x0B0F14u;
 }
 
 static wxFont BestiaryTerminalFont() {
@@ -1438,6 +1440,7 @@ struct HelpSearchTarget {
     wxWindow* control;
     wxString text;
     long textPosition = -1;
+    int priority = 50;
 };
 
 struct WrappedBlock {
@@ -1457,6 +1460,19 @@ struct HelpPageState {
     std::vector<std::pair<wxWindow*, wxFont>> controlFonts;
     std::shared_ptr<std::vector<WrappedBlock>> wrappedBlocks;
     int fontZoomDelta = 0;
+    wxString highlightedQuery;
+};
+
+enum HelpSearchPriority {
+    kHelpSearchPriorityCommandName = 0,
+    kHelpSearchPriorityCommandUsage = 10,
+    kHelpSearchPriorityCommandPurpose = 20,
+    kHelpSearchPrioritySectionTitle = 30,
+    kHelpSearchPrioritySectionLabel = 40,
+    kHelpSearchPriorityBodyText = 50,
+    kHelpSearchPriorityCommandValues = 60,
+    kHelpSearchPriorityCommandReturns = 70,
+    kHelpSearchPriorityCommandArity = 80,
 };
 
 struct Tab {
@@ -1860,11 +1876,45 @@ private:
     wxTextCtrl* CreateHelpTextBlock(wxWindow* parent, const wxString& text, const wxFont& font) const {
         auto* block = new wxTextCtrl(parent, wxID_ANY, text, wxDefaultPosition, wxDefaultSize,
                                      wxTE_READONLY | wxTE_MULTILINE | wxTE_WORDWRAP |
-                                     wxTE_NO_VSCROLL | wxBORDER_NONE);
+                                     wxTE_NO_VSCROLL | wxTE_RICH2 | wxBORDER_NONE);
         StyleDarkTextCtrl(block);
         block->SetFont(font);
         block->SetEditable(false);
         return block;
+    }
+
+    void ApplyHelpPageSearchHighlights(const std::shared_ptr<HelpPageState>& helpPage,
+                                       const wxString& query) {
+        if (!helpPage || !helpPage->wrappedBlocks) return;
+
+        wxTextAttr baseStyle(ColourFromRgb(theme::kText), ColourFromRgb(theme::kPanelBg));
+        baseStyle.SetFlags(wxTEXT_ATTR_TEXT_COLOUR | wxTEXT_ATTR_BACKGROUND_COLOUR);
+        wxTextAttr highlightStyle(ColourFromRgb(theme::kSearchHighlightText),
+                                  ColourFromRgb(theme::kSearchHighlightBg));
+        highlightStyle.SetFlags(wxTEXT_ATTR_TEXT_COLOUR | wxTEXT_ATTR_BACKGROUND_COLOUR);
+
+        wxString needle = query.Lower();
+        for (const auto& block : *helpPage->wrappedBlocks) {
+            if (!block.control) continue;
+            wxTextCtrl* control = block.control;
+            long end = control->GetLastPosition();
+            control->SetStyle(0, end, baseStyle);
+
+            if (needle.empty()) continue;
+
+            wxString haystack = block.source.Lower();
+            size_t offset = 0;
+            while (offset < haystack.length()) {
+                int pos = haystack.Mid(offset).Find(needle);
+                if (pos == wxNOT_FOUND) break;
+                long start = (long)(offset + (size_t)pos);
+                long matchEnd = start + (long)needle.length();
+                control->SetStyle(start, matchEnd, highlightStyle);
+                offset = (size_t)matchEnd;
+            }
+        }
+
+        helpPage->highlightedQuery = query;
     }
 
     void AddHelpTextBlock(wxScrolledWindow* page,
@@ -1904,8 +1954,35 @@ private:
     void AddHelpTextPositionTarget(const std::shared_ptr<HelpPageState>& helpPageState,
                                    wxTextCtrl* control,
                                    const wxString& text,
-                                   long position) const {
-        helpPageState->targets.push_back({control, text, position});
+                                   long position,
+                                   int priority = kHelpSearchPriorityBodyText) const {
+        helpPageState->targets.push_back({control, text, position, priority});
+    }
+
+    int HelpCommandFieldPriority(size_t fieldIndex) const {
+        switch (fieldIndex) {
+            case 0: return kHelpSearchPriorityCommandName;
+            case 1: return kHelpSearchPriorityCommandUsage;
+            case 2: return kHelpSearchPriorityCommandPurpose;
+            case 3: return kHelpSearchPriorityCommandValues;
+            case 4: return kHelpSearchPriorityCommandReturns;
+            case 5: return kHelpSearchPriorityCommandArity;
+            default: return kHelpSearchPriorityBodyText;
+        }
+    }
+
+    int ScoreHelpSearchTarget(const HelpSearchTarget& target, const wxString& needleLower) const {
+        wxString haystack = target.text.Lower();
+        int pos = haystack.Find(needleLower);
+        if (pos == wxNOT_FOUND) return INT_MAX;
+
+        int score = target.priority * 1000;
+        if (haystack == needleLower) score += 0;
+        else if (haystack.StartsWith(needleLower)) score += 50;
+        else if (pos == 0) score += 100;
+        else score += 200 + std::min(pos, 200);
+        score += std::min((int)haystack.length(), 400);
+        return score;
     }
 
     void AddHelpCommandBlock(wxScrolledWindow* page,
@@ -2237,18 +2314,35 @@ private:
 
         wxString query = wxGetTextFromUser("Find in this help page:", "Find", helpPage->lastQuery, this);
         if (query.empty()) return;
+        ApplyHelpPageSearchHighlights(helpPage, query);
 
         wxString needle = query.Lower();
         int count = (int)helpPage->targets.size();
         if (count == 0) return;
 
-        int start = 0;
-        if (helpPage->lastQuery == query && helpPage->lastMatchIndex >= 0)
-            start = (helpPage->lastMatchIndex + 1) % count;
+        std::vector<std::pair<int, int>> matches;
+        matches.reserve((size_t)count);
+        for (int index = 0; index < count; index++) {
+            int score = ScoreHelpSearchTarget(helpPage->targets[index], needle);
+            if (score == INT_MAX) continue;
+            matches.push_back({score, index});
+        }
 
-        for (int offset = 0; offset < count; offset++) {
-            int index = (start + offset) % count;
-            if (helpPage->targets[index].text.Lower().Find(needle) == wxNOT_FOUND) continue;
+        std::stable_sort(matches.begin(), matches.end(), [](const auto& lhs, const auto& rhs) {
+            if (lhs.first != rhs.first) return lhs.first < rhs.first;
+            return lhs.second < rhs.second;
+        });
+
+        if (!matches.empty()) {
+            int matchPos = 0;
+            if (helpPage->lastQuery == query && helpPage->lastMatchIndex >= 0) {
+                for (size_t i = 0; i < matches.size(); i++) {
+                    if (matches[i].second != helpPage->lastMatchIndex) continue;
+                    matchPos = (int)((i + 1) % matches.size());
+                    break;
+                }
+            }
+            int index = matches[(size_t)matchPos].second;
             helpPage->lastQuery = query;
             helpPage->lastMatchIndex = index;
             ScrollHelpTargetIntoView(helpPage, helpPage->targets[index]);
@@ -2337,15 +2431,15 @@ private:
         auto scheduleRelayout = MakeHelpPageRelayoutScheduler(page, wrappedBlocks);
 
         sizer->Add(title, 0, wxALL, 16);
-        helpPageState->targets.push_back({title, tabTitle});
+        helpPageState->targets.push_back({title, tabTitle, -1, kHelpSearchPrioritySectionTitle});
         helpPageState->controlFonts.push_back({title, titleFont});
         sizer->Add(fullTitle, 0, wxLEFT | wxRIGHT | wxBOTTOM, 16);
-        helpPageState->targets.push_back({fullTitle, section->fullTitle});
+        helpPageState->targets.push_back({fullTitle, section->fullTitle, -1, kHelpSearchPrioritySectionTitle});
         helpPageState->controlFonts.push_back({fullTitle, sectionFont});
         sizer->Add(link, 0, wxLEFT | wxRIGHT | wxBOTTOM, 16);
-        helpPageState->targets.push_back({link, link->GetLabel()});
+        helpPageState->targets.push_back({link, link->GetLabel(), -1, kHelpSearchPrioritySectionLabel});
         sizer->Add(gettingStartedLabel, 0, wxLEFT | wxRIGHT | wxBOTTOM, 16);
-        helpPageState->targets.push_back({gettingStartedLabel, "Getting started"});
+        helpPageState->targets.push_back({gettingStartedLabel, "Getting started", -1, kHelpSearchPrioritySectionLabel});
         helpPageState->controlFonts.push_back({gettingStartedLabel, sectionFont});
 
         std::vector<wxWindow*> scrollTargets = {
@@ -2360,15 +2454,20 @@ private:
             page, sizer, gettingStartedText, monoFont, 16, wrappedBlocks, helpPageState, scrollTargets);
         long gettingPos = 0;
         for (const wxString& line : SplitHelpLines(section->gettingStarted)) {
-            AddHelpTextPositionTarget(helpPageState, gettingStartedTextBlock, line, gettingPos);
+            AddHelpTextPositionTarget(helpPageState, gettingStartedTextBlock, line, gettingPos, kHelpSearchPriorityBodyText);
             gettingPos += (long)line.length() + 1;
         }
 
         sizer->Add(commandsLabel, 0, wxLEFT | wxRIGHT | wxBOTTOM | wxTOP, 16);
-        helpPageState->targets.push_back({commandsLabel, "Commands"});
+        helpPageState->targets.push_back({commandsLabel, "Commands", -1, kHelpSearchPrioritySectionLabel});
         helpPageState->controlFonts.push_back({commandsLabel, sectionFont});
         wxString commandsText;
-        std::vector<std::pair<wxString, long>> commandTargets;
+        struct CommandSearchTargetSpec {
+            wxString text;
+            long position;
+            int priority;
+        };
+        std::vector<CommandSearchTargetSpec> commandTargets;
         for (size_t i = 0; i < BestiaryHelpPage::kCommandCount; i++) {
             const auto& command = BestiaryHelpPage::kCommands[i];
             if (command.beast != section->beast) continue;
@@ -2381,16 +2480,17 @@ private:
                 commandText += field;
             }
             commandsText += commandText;
-            commandTargets.push_back({commandText, commandStart});
-            for (const wxString& field : fields) {
+            commandTargets.push_back({commandText, commandStart, kHelpSearchPriorityBodyText});
+            for (size_t fieldIndex = 0; fieldIndex < fields.size(); fieldIndex++) {
+                const wxString& field = fields[fieldIndex];
                 long fieldStart = commandStart + commandText.Find(field);
-                commandTargets.push_back({field, fieldStart});
+                commandTargets.push_back({field, fieldStart, HelpCommandFieldPriority(fieldIndex)});
             }
         }
         auto* commandsTextBlock = AddSelectableHelpTextArea(
             page, sizer, commandsText, monoFont, 16, wrappedBlocks, helpPageState, scrollTargets);
         for (const auto& target : commandTargets)
-            AddHelpTextPositionTarget(helpPageState, commandsTextBlock, target.first, target.second);
+            AddHelpTextPositionTarget(helpPageState, commandsTextBlock, target.text, target.position, target.priority);
         for (wxWindow* control : scrollTargets)
         {
             ForwardMouseWheelToPage(page, control);
