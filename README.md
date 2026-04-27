@@ -200,3 +200,5 @@ The resulting folder can be distributed directly. On Windows, users may either r
 ## License and attribution
 
 The contents of this repository and the corresponding Releases page are licensed under the GNU General Public License v3.0 (GPL-3.0).
+
+Bestiary is brought to you by Algebraity and Mizufuwa. Special thanks to Mizufuwa for help with the lexer and an early version of the README file. (<3)
