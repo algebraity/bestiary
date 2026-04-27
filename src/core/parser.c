@@ -333,14 +333,14 @@ static AstNode* parsePrimary(P* p) {
     }
 }
 
-// Parse '| expr |' and lower it to \l2norm{expr}
+// Parse '| expr |' and lower it to \l2Norm{expr}
 static AstNode* parsePipeGroup(P* p) {
     Token* pipe = peek(p);
     if (!match(p, TOK_PIPE)) { parseError(p, "expected '|'"); return NULL; }
     NodeBuf args; nbInit(&args);
     nbPush(&args, parseExpr(p));
     if (!match(p, TOK_PIPE)) { parseError(p, "expected closing '|' "); }
-    return astCall("l2norm", args.data, args.len, pipe->line, pipe->col);
+    return astCall("l2Norm", args.data, args.len, pipe->line, pipe->col);
 }
 
 // Parse '{ expr }'; returns the inner expression (the braces are grouping)

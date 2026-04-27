@@ -140,7 +140,7 @@ static const BuiltinDoc BUILTIN_DOCS[] = {
     { "int", "Integrates a NEKO expression with respect to x by default, optionally over numeric bounds, or with respect to an explicit variable.", "expression alone for symbolic integration in x; expression and Symbol/String variable for symbolic integration in that variable; expression plus numeric lower and upper bounds for definite integration in x; or expression, variable, lower bound, upper bound for definite integration in that variable", "NEKO expression for symbolic integrals, Decimal for definite integrals" },
     { "integral", "Alias for int.", "expression alone for symbolic integration in x; expression and Symbol/String variable for symbolic integration in that variable; expression plus numeric lower and upper bounds for definite integration in x; or expression, variable, lower bound, upper bound for definite integration in that variable", "NEKO expression for symbolic integrals, Decimal for definite integrals" },
     { "eval", "Evaluates a NEKO expression at a numeric value, using x by default or an explicit variable.", "expression and numeric value, or expression, Symbol/String variable, and numeric value", "Decimal" },
-    { "roots", "Finds roots of a supported expression in x.", "Symbol/numeric/NEKO expression", "List of Decimal or Complex roots" },
+    { "roots", "Finds roots of a supported expression in x, using real factorization before complex fallback for polynomials.", "Symbol/numeric/NEKO expression", "List of Decimal or Complex roots" },
     { "factorPoly", "Factors a polynomial in x over real roots currently found by the real factorer.", "Symbol/numeric/NEKO expression representing a polynomial in x", "NEKO expression" },
     { "factorPolyReal", "Factors a polynomial in x over real roots.", "Symbol/numeric/NEKO expression representing a polynomial in x", "NEKO expression" },
     { "factorPolyComplex", "Factors a polynomial in x over complex roots.", "Symbol/numeric/NEKO expression representing a polynomial in x", "Symbol containing a formatted complex factorization" },
@@ -175,7 +175,8 @@ static const BuiltinDoc BUILTIN_DOCS[] = {
     { "rowSpace", "Computes a basis for the row space of a matrix.", "Matrix", "List of Vector values" },
     { "columnSpace", "Computes a basis for the column space of a matrix.", "Matrix", "List of Vector values" },
     { "solveLinEq", "Solves A*x=b.", "square Matrix A and compatible column Vector or Matrix b", "Vector when the solution has one column, otherwise Matrix" },
-    { "l2Norm", "Computes vector Euclidean norm, or set cardinality for a CombSet.", "Vector or CombSet", "Decimal for Vector, Int for CombSet" },
+    { "l2Norm", "Computes vector Euclidean norm.", "Vector", "Decimal" },
+    { "cardinality", "Computes cardinality/order of a finite set, group, or ring.", "CombSet, Group, or Ring", "Int" },
     { "normalize", "Normalizes a nonzero vector.", "Vector", "Vector" },
     { "vdist", "Computes Euclidean distance between two vectors.", "two same-dimension Vectors, or one List containing two Vectors", "Decimal" },
     { "vangle", "Computes the angle in radians between two nonzero vectors.", "two compatible nonzero Vectors, or one List containing two Vectors", "Decimal" },
@@ -3877,6 +3878,18 @@ static Value rootsList(double* roots, int nroots) {
     return valList(items, (size_t)nroots);
 }
 
+static void appendRealRoot(double* roots, int* nroots, double root) {
+    if (*nroots >= NEKO_REPL_MAX_ROOTS || !isfinite(root)) return;
+    if (fabs(root) < 1e-12) root = 0.0;
+    int i = *nroots;
+    while (i > 0 && roots[i - 1] > root) {
+        roots[i] = roots[i - 1];
+        i--;
+    }
+    roots[i] = root;
+    (*nroots)++;
+}
+
 static ComplexNumber cAdd(ComplexNumber a, ComplexNumber b) {
     return (ComplexNumber){ .real = a.real + b.real, .imag = a.imag + b.imag };
 }
@@ -3981,16 +3994,6 @@ static int polynomialComplexRoots(const double* coeffs, int degree, ComplexNumbe
     return degree;
 }
 
-static Value complexRootsList(ComplexNumber* roots, int nroots) {
-    Value* items = calloc((size_t)nroots, sizeof(Value));
-    if (!items && nroots > 0) return valError("out of memory while building complex root list");
-    for (int i = 0; i < nroots; i++) {
-        if (fabs(roots[i].imag) < 1e-10) items[i] = valDecimal(roots[i].real);
-        else items[i] = valComplex(roots[i]);
-    }
-    return valList(items, (size_t)nroots);
-}
-
 static NekoExpr* polynomialExprFromCoeffs(const double* coeffs, int degree) {
     NekoExpr* out = nekoConst(0.0);
     for (int i = 0; i <= degree; i++) {
@@ -4012,6 +4015,61 @@ static int syntheticDivide(const double* coeffs, int degree, double root, double
     for (int i = degree - 2; i >= 0; i--) quotient[i] = coeffs[i + 1] + root * quotient[i + 1];
     if (rem) *rem = coeffs[0] + root * quotient[0];
     return 1;
+}
+
+static int factorOutRealRoots(const double* coeffs, int degree,
+                              double* realRoots, int* nRealRoots,
+                              double* remCoeffs, int* remDegree) {
+    if (!coeffs || !realRoots || !nRealRoots || !remCoeffs || !remDegree) return 0;
+    for (int i = 0; i <= degree; i++) remCoeffs[i] = coeffs[i];
+    *remDegree = degreeFromCoeffs(remCoeffs, degree);
+    *nRealRoots = 0;
+
+    double uniqueRoots[NEKO_REPL_MAX_ROOTS] = {0};
+    int nUniqueRoots = 0;
+    polynomialRealRoots(coeffs, degree, uniqueRoots, &nUniqueRoots);
+
+    for (int i = 0; i < nUniqueRoots && *remDegree > 0; i++) {
+        for (;;) {
+            double q[NEKO_REPL_MAX_POLY_DEG + 1] = {0};
+            double remainder = 0.0;
+            syntheticDivide(remCoeffs, *remDegree, uniqueRoots[i], q, &remainder);
+            if (fabs(remainder) > 1e-7) break;
+            appendRealRoot(realRoots, nRealRoots, uniqueRoots[i]);
+            for (int k = 0; k < *remDegree; k++) remCoeffs[k] = q[k];
+            remCoeffs[*remDegree] = 0.0;
+            *remDegree = degreeFromCoeffs(remCoeffs, *remDegree - 1);
+            if (*remDegree <= 0 ||
+                fabs(evalPolyCoeffs(remCoeffs, *remDegree, uniqueRoots[i])) > 1e-7) {
+                break;
+            }
+        }
+    }
+    return 1;
+}
+
+static Value polynomialRootsRealThenComplexList(const double* coeffs, int degree) {
+    double realRoots[NEKO_REPL_MAX_ROOTS] = {0};
+    int nRealRoots = 0;
+    double remCoeffs[NEKO_REPL_MAX_POLY_DEG + 1] = {0};
+    int remDegree = 0;
+    factorOutRealRoots(coeffs, degree, realRoots, &nRealRoots, remCoeffs, &remDegree);
+
+    if (remDegree <= 0) return rootsList(realRoots, nRealRoots);
+
+    ComplexNumber complexRoots[NEKO_REPL_MAX_POLY_DEG] = {0};
+    int nComplexRoots = polynomialComplexRoots(remCoeffs, remDegree, complexRoots);
+    const int total = nRealRoots + nComplexRoots;
+    Value* items = calloc((size_t)total, sizeof(Value));
+    if (!items && total > 0) return valError("out of memory while building root list");
+
+    for (int i = 0; i < nRealRoots; i++) items[i] = valDecimal(realRoots[i]);
+    for (int i = 0; i < nComplexRoots; i++) {
+        ComplexNumber root = complexRoots[i];
+        if (fabs(root.imag) < 1e-10) items[nRealRoots + i] = valDecimal(root.real);
+        else items[nRealRoots + i] = valComplex(root);
+    }
+    return valList(items, (size_t)total);
 }
 
 static int complexIsNearZero(double x) {
@@ -4156,10 +4214,8 @@ static Value bi_roots(EvalContext* c, Value* a, size_t n) {
     double coeffs[NEKO_REPL_MAX_POLY_DEG + 1] = {0};
     int degree = 0;
     if (extractPolyCoeffs(expr, "x", coeffs, &degree)) {
-        ComplexNumber croots[NEKO_REPL_MAX_POLY_DEG] = {0};
-        int ncroots = polynomialComplexRoots(coeffs, degree, croots);
         nekoFreeExpr(expr);
-        return complexRootsList(croots, ncroots);
+        return polynomialRootsRealThenComplexList(coeffs, degree);
     } else {
         arbitraryRealRoots(expr, roots, &nroots);
     }
@@ -5312,17 +5368,42 @@ static Value bi_eigenvectors(EvalContext* c, Value* a, size_t n) {
     return valList(items, count);
 }
 
+static Value bi_cardinality(EvalContext* c, Value* a, size_t n);
+
 static Value bi_l2norm(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (valueIsVector(a[0])) {
+        double norm = l2Norm((Vector*)a[0].as.ptr);
+        valFree(a[0]);
+        return valDecimal(norm);
+    }
+    if (valueIsCombSet(a[0]) || valueIsGroup(a[0]) || valueIsRing(a[0])) {
+        return bi_cardinality(c, a, n);
+    }
+    return vectorUnaryError("\\l2Norm expects one Vector, CombSet, Group, or Ring", a[0]);
+}
+
+static Value bi_cardinality(EvalContext* c, Value* a, size_t n) {
     (void)c; (void)n;
     if (valueIsCombSet(a[0])) {
         int card = combsetCard(a[0]);
         valFree(a[0]);
         return valInt(card);
     }
-    if (!valueIsVector(a[0])) return vectorUnaryError("\\l2norm expects one vector", a[0]);
-    double norm = l2Norm((Vector*)a[0].as.ptr);
+    if (valueIsGroup(a[0])) {
+        Group* group = (Group*)a[0].as.ptr;
+        int card = group ? group->card : 0;
+        valFree(a[0]);
+        return valInt(card);
+    }
+    if (valueIsRing(a[0])) {
+        Ring* ring = (Ring*)a[0].as.ptr;
+        int card = ring ? ring->card : 0;
+        valFree(a[0]);
+        return valInt(card);
+    }
     valFree(a[0]);
-    return valDecimal(norm);
+    return valError("\\cardinality expects one CombSet, Group, or Ring");
 }
 
 static Value bi_isSubset(EvalContext* c, Value* a, size_t n) {
@@ -9041,6 +9122,7 @@ void registerBuiltins(void) {
     registerCommand("columnSpace",  1, bi_columnSpace);
     registerCommand("solveLinEq",  2, bi_solveLinEq);
     registerCommand("l2Norm",  1, bi_l2norm);
+    registerCommand("cardinality",  1, bi_cardinality);
     registerCommand("normalize",  1, bi_normalize);
     registerCommand("vdist", -1, bi_vdist);
     registerCommand("vangle", -1, bi_vangle);

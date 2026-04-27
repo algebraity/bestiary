@@ -178,7 +178,7 @@ int main(int argc, char** argv) {
     bstLineInputInit(NULL);
     bstLineInputSetPlainMode(opt_plain_input);
 
-    puts("Bestiary v1.0.1 -- Ctrl+C cancels, Ctrl+D quits, Ctrl+L clears screen");
+    puts("Bestiary v1.0.2 -- Ctrl+C cancels, Ctrl+D quits, Ctrl+L clears screen");
     puts("\\help lists commands, \\help{commandName} displays command info");
     for (;;) {
 #ifndef BST_PLATFORM_WINDOWS
