@@ -176,7 +176,7 @@ static constexpr Command kCommands[] = {
     HELP_CMD("rowSpace", 1, Beast::Sokko, "Computes a basis for the row space of a matrix.", "Matrix", "List of Vector values"),
     HELP_CMD("columnSpace", 1, Beast::Sokko, "Computes a basis for the column space of a matrix.", "Matrix", "List of Vector values"),
     HELP_CMD("solveLinEq", 2, Beast::Sokko, "Solves A*x=b.", "square Matrix A and compatible column Vector or Matrix b", "Vector when the solution has one column, otherwise Matrix"),
-    HELP_CMD("l2Norm", 1, Beast::Sokko, "Computes vector Euclidean norm.", "Vector", "Decimal"),
+    HELP_CMD("l2Norm", 1, Beast::Sokko, "Computes vector Euclidean norm. Bar syntax |v| also computes this for Vector input.", "Vector", "Decimal"),
     HELP_CMD("normalize", 1, Beast::Sokko, "Normalizes a nonzero vector.", "Vector", "Vector"),
     HELP_CMD("vdist", -1, Beast::Sokko, "Computes Euclidean distance between two vectors.", "two same-dimension Vectors, or one List containing two Vectors", "Decimal"),
     HELP_CMD("vangle", -1, Beast::Sokko, "Computes the angle in radians between two nonzero vectors.", "two compatible nonzero Vectors, or one List containing two Vectors", "Decimal"),

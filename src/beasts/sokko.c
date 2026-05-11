@@ -41,20 +41,20 @@ void freeMatrix(Matrix* matrix) {
 /* ---------- Accessors ---------- */
 
 // Get the values at position (i, j) of the matrix, 0-indexed
-MatrixElement getEntry(const Matrix* matrix, int i, int j) {
+MatrixElement getEntry(const Matrix* matrix, size_t i, size_t j) {
     return matrix->data[i * matrix->numCols + j];
 }
 
 // Set the value at position (i, j) of the matrix, 0-indexed
-void setEntry(Matrix* matrix, int i, int j, MatrixElement x) {
+void setEntry(Matrix* matrix, size_t i, size_t j, MatrixElement x) {
     matrix->data[i * matrix->numCols + j] = x;
     resetMatrixCache(matrix);
 }
 
 /* ---------- MatrixElement operations ---------- */
 
-// Wrap a double in a MatrixElement
-MatrixElement elemFromReal(double x) {
+// Wrap a long double in a MatrixElement
+MatrixElement elemFromReal(long double x) {
     MatrixElement e;
     e.value.real = x;
     e.isComplex = false;
@@ -131,13 +131,13 @@ MatrixElement elemConj(MatrixElement a) {
 }
 
 // Return |a|, always a real number
-double elemAbs(MatrixElement a) {
-    if (!a.isComplex) return fabs(a.value.real);
+long double elemAbs(MatrixElement a) {
+    if (!a.isComplex) return fabsl(a.value.real);
     return complexAbs(a.value.complex);
 }
 
 // Tell if a MatrixElement is within tol of zero
-bool elemIsZero(MatrixElement a, double tol) {
+bool elemIsZero(MatrixElement a, long double tol) {
     return elemAbs(a) <= tol;
 }
 
@@ -148,26 +148,26 @@ bool elemIsNan(MatrixElement a) {
 }
 
 // Tell if two MatrixElements are equal up to some tolerance
-bool elemEq(MatrixElement a, MatrixElement b, double tol) {
+bool elemEq(MatrixElement a, MatrixElement b, long double tol) {
     return elemAbs(elemSub(a, b)) <= tol;
 }
 
 static void formatElem(MatrixElement e, char* out, size_t outSize) {
     if (!e.isComplex) {
-        snprintf(out, outSize, "%g", e.value.real);
+        snprintf(out, outSize, "%Lg", e.value.real);
         return;
     }
-    double re = e.value.complex.real;
-    double im = e.value.complex.imag;
-    if (im >= 0) snprintf(out, outSize, "%g+%gi", re, im);
-    else snprintf(out, outSize, "%g-%gi", re, -im);
+    long double re = e.value.complex.real;
+    long double im = e.value.complex.imag;
+    if (im >= 0) snprintf(out, outSize, "%Lg+%Lgi", re, im);
+    else snprintf(out, outSize, "%Lg-%Lgi", re, -im);
 }
 
 /* ---------- LU methods ----------- */
 
 // Compute the determinant of an LU
 MatrixElement luDet(LU* lu) {
-    MatrixElement det = elemFromReal((double) lu->sign);
+    MatrixElement det = elemFromReal((long double) lu->sign);
     for (int i = 0; i < lu->n; i++) det = elemMul(det, lu->data[i*lu->n + i]);
     return det;
 }
@@ -195,9 +195,9 @@ LU* luDecompose(Matrix* matrix) {
     for (int k = 0; k < n; k++) {
         // Partial pivoting: find the row with the largest |a[i,k]| for i >= k
         int pivot = k;
-        double maxVal = elemAbs(a[k * n + k]);
+        long double maxVal = elemAbs(a[k * n + k]);
         for (int i = k + 1; i < n; i++) {
-            double v = elemAbs(a[i * n + k]);
+            long double v = elemAbs(a[i * n + k]);
             if (v > maxVal) { maxVal = v; pivot = i; }
         }
 
@@ -339,7 +339,7 @@ Matrix* luInverse(LU* lu) {
 /* ----------- Main methods ---------- */
 
 // Construct a Matrix object
-Matrix* constructMatrix(int numRows, int numCols) {
+Matrix* constructMatrix(size_t numRows, size_t numCols) {
     if (numRows < 1 || numCols < 1) return NULL;
 
     Matrix* matrix = calloc(1, sizeof(Matrix));
@@ -360,7 +360,7 @@ Matrix* constructMatrix(int numRows, int numCols) {
 }
 
 // Construct a matrix from a 2D data matrix
-Matrix* constructMatrixFromMatrix(int numRows, int numCols, MatrixElement** data, int lenData, int colLenData) {
+Matrix* constructMatrixFromMatrix(size_t numRows, size_t numCols, MatrixElement** data, size_t lenData, size_t colLenData) {
     if (lenData != numRows || colLenData != numCols) return NULL;
 
     Matrix* matrix = constructMatrix(numRows, numCols);
@@ -375,7 +375,7 @@ Matrix* constructMatrixFromMatrix(int numRows, int numCols, MatrixElement** data
 }
 
 // Construct a matrix from a flattened data matrix
-Matrix* constructMatrixFromArray(int numRows, int numCols, MatrixElement* data, int lenData) {
+Matrix* constructMatrixFromArray(size_t numRows, size_t numCols, MatrixElement* data, size_t lenData) {
     if (lenData != numRows * numCols) return NULL;
 
     Matrix* matrix = constructMatrix(numRows, numCols);
@@ -444,7 +444,7 @@ Matrix* copyMatrix(Matrix* matrix) {
 }
 
 // Tell if two matrices are equal up to some tolerance
-bool matrixComp(Matrix* A, Matrix* B, double tol) {
+bool matrixComp(Matrix* A, Matrix* B, long double tol) {
     if (!A || !B) return false;
     if (A->numRows != B->numRows || A->numCols != B->numCols) return false;
 
@@ -458,7 +458,7 @@ bool matrixComp(Matrix* A, Matrix* B, double tol) {
 }
 
 // Get the n x n identity matrix
-Matrix* idMatrix(int n) {
+Matrix* idMatrix(size_t n) {
     Matrix* id = constructMatrix(n, n);
     if (!id) return NULL;
 
@@ -471,7 +471,7 @@ Matrix* idMatrix(int n) {
 /* ---------- Basic operations ---------- */
 
 // Compute the dot product of two arrays
-MatrixElement simpleDotProduct(MatrixElement* v, MatrixElement* w, int vlen, int wlen) {
+MatrixElement simpleDotProduct(MatrixElement* v, MatrixElement* w, size_t vlen, size_t wlen) {
     if (vlen != wlen) return elemFromReal(NAN);
 
     MatrixElement dp = elemFromReal(0.0);
@@ -669,7 +669,7 @@ void freeVector(Vector* vector) {
 }
 
 // Construct a Vector of positive dim with no data
-Vector* constructVector(int dim) {
+Vector* constructVector(size_t dim) {
     if (dim < 1) return NULL;
 
     Vector* vec = constructMatrix(dim, 1);
@@ -678,7 +678,7 @@ Vector* constructVector(int dim) {
 }
 
 // Construct a Vector of positive dim from an array
-Vector* constructVectorFromArray(int dim, MatrixElement *data, int dataLen) {
+Vector* constructVectorFromArray(size_t dim, MatrixElement *data, size_t dataLen) {
     if (dim < 1) return NULL;
     if (!data) return NULL;
     if (dim != dataLen) return NULL;
@@ -778,17 +778,17 @@ Vector* crossProduct(Vector* v1, Vector* v2) {
 }
 
 // Returns the L2 norm of a Vector (sqrt of sum of |v_i|^2, always real)
-double l2Norm(Vector* vect) {
+long double l2Norm(Vector* vect) {
     if (!vect) return NAN;
 
     int dim = vect->numRows;
-    double norm = 0;
+    long double norm = 0;
     for (int i = 0; i < dim; i++) {
-        double m = elemAbs(getEntry(vect, i, 0));
+        long double m = elemAbs(getEntry(vect, i, 0));
         norm += m * m;
     }
 
-    return sqrt(norm);
+    return sqrtl(norm);
 }
 
 // Return the opposite of a vector
@@ -838,21 +838,21 @@ Vector* subtractVectors(Vector* v1, Vector* v2) {
 Vector* normalizeVector(Vector* vect) {
 	if (!vect) return NULL;
 
-	double norm = l2Norm(vect);
+	long double norm = l2Norm(vect);
 	if (norm == 0) return NULL;
 
 	return scaleVector(vect, elemFromReal(1.0 / norm));
 }
 
 // Compute the distance between two Vectors
-double vectorDistance(Vector* v1, Vector* v2) {
+long double vectorDistance(Vector* v1, Vector* v2) {
 	if (!v1 || !v2) return NAN;
 	if (v1->numRows != v2->numRows || v1->numCols != v2->numCols || v1->numCols != 1) return NAN;
 
 	Vector* diff = subtractVectors(v1, v2);
 	if (!diff) return NAN;
 
-	double dist = l2Norm(diff);
+	long double dist = l2Norm(diff);
 	freeMatrix(diff);
 	return dist;
 }
@@ -860,22 +860,22 @@ double vectorDistance(Vector* v1, Vector* v2) {
 // Compute the angle between two Vectors in radians.
 // Uses Re(<v1, v2>) / (||v1|| ||v2||); returns NAN if either vector has
 // a strictly complex dot product component that prevents a real angle.
-double vectorAngle(Vector* v1, Vector* v2) {
+long double vectorAngle(Vector* v1, Vector* v2) {
 	if (!v1 || !v2) return NAN;
 	if (v1->numRows != v2->numRows || v1->numCols != v2->numCols || v1->numCols != 1) return NAN;
 
 	MatrixElement dot = vectorDotProduct(v1, v2);
 	if (elemIsNan(dot)) return NAN;
-	double normV1 = l2Norm(v1);
-	double normV2 = l2Norm(v2);
+	long double normV1 = l2Norm(v1);
+	long double normV2 = l2Norm(v2);
 	if (normV1 == 0 || normV2 == 0) return NAN;
 
-	double reDot = dot.isComplex ? dot.value.complex.real : dot.value.real;
-	double cosTheta = reDot / (normV1 * normV2);
+	long double reDot = dot.isComplex ? dot.value.complex.real : dot.value.real;
+	long double cosTheta = reDot / (normV1 * normV2);
 	if (cosTheta > 1) cosTheta = 1;
 	if (cosTheta < -1) cosTheta = -1;
 
-	return acos(cosTheta);
+	return acosl(cosTheta);
 }
 
 // Compute the projection of v1 onto v2
@@ -884,7 +884,7 @@ Vector* vectorProjectOnto(Vector* v1, Vector* v2) {
 	if (v1->numRows != v2->numRows || v1->numCols != v2->numCols || v1->numCols != 1) return NULL;
 
 	MatrixElement dot = vectorDotProduct(v1, v2);
-	double normV2 = l2Norm(v2);
+	long double normV2 = l2Norm(v2);
 	if (normV2 == 0) return NULL;
 
 	MatrixElement scale = elemDiv(dot, elemFromReal(normV2 * normV2));
@@ -970,7 +970,7 @@ bool isUnitary(Matrix* matrix) {
         return false;
     }
 
-    double tol = 1e-12 * fmax(1.0, frobeniusNorm(matrix));
+    long double tol = 1e-12 * fmaxl(1.0, frobeniusNorm(matrix));
     bool unitary = matrixComp(prod, id, tol);
 
     freeMatrix(adj);
@@ -994,9 +994,9 @@ int rank(Matrix* matrix) {
     int row = 0;
     for (int col = 0; col < n && row < m; col++) {
         int pivot = -1;
-        double maxVal = 1e-12;
+        long double maxVal = 1e-12;
         for (int i = row; i < m; i++) {
-            double v = elemAbs(a[i * n + col]);
+            long double v = elemAbs(a[i * n + col]);
             if (v > maxVal) { maxVal = v; pivot = i; }
         }
         if (pivot == -1) continue;
@@ -1044,15 +1044,15 @@ MatrixElement trace(Matrix* matrix) {
 }
 
 // Return the Frobenius norm of a matrix (always real)
-double frobeniusNorm(Matrix* matrix) {
+long double frobeniusNorm(Matrix* matrix) {
     if (!matrix) return NAN;
 
-    double sum = 0.0;
+    long double sum = 0.0;
     for (int i = 0; i < matrix->numRows * matrix->numCols; i++) {
-        double m = elemAbs(matrix->data[i]);
+        long double m = elemAbs(matrix->data[i]);
         sum += m * m;
     }
-    return sqrt(sum);
+    return sqrtl(sum);
 }
 
 // Compute the determinant of a Matrix
@@ -1103,14 +1103,14 @@ Matrix* reduceRows(Matrix* matrix) {
     Matrix* R = copyMatrix(matrix);
     if (!R) return NULL;
 
-    const double tol = 1e-12;
+    const long double tol = 1e-12;
     int row = 0;
     for (int col = 0; col < n && row < m; col++) {
         // Partial pivot: largest |entry| in column col, rows [row, m)
         int pivot = -1;
-        double maxVal = tol;
+        long double maxVal = tol;
         for (int i = row; i < m; i++) {
-            double v = elemAbs(getEntry(R, i, col));
+            long double v = elemAbs(getEntry(R, i, col));
             if (v > maxVal) { maxVal = v; pivot = i; }
         }
         if (pivot < 0) continue;
@@ -1165,7 +1165,7 @@ Matrix* reduceColumns(Matrix* matrix) {
 // Return a basis of the column space of the matrix as a heap-allocated array of column
 // Vectors. Sets *count to the number of basis vectors (the rank). Caller frees each
 // Vector via freeVector and the array via free.
-Vector** columnSpace(Matrix* matrix, int* count) {
+Vector** columnSpace(Matrix* matrix, size_t* count) {
     if (!matrix || !count) return NULL;
     int m = matrix->numRows;
     int n = matrix->numCols;
@@ -1174,7 +1174,7 @@ Vector** columnSpace(Matrix* matrix, int* count) {
     Matrix* R = reduceRows(matrix);
     if (!R) return NULL;
 
-    const double tol = 1e-12;
+    const long double tol = 1e-12;
 
     // Identify pivot columns of R: row r's pivot is the leftmost column with a 1 in that row.
     int* pivotCols = malloc(n * sizeof(int));
@@ -1215,7 +1215,7 @@ Vector** columnSpace(Matrix* matrix, int* count) {
 // Return a basis of the row space of the matrix as column Vectors of length numCols.
 // Sets *count to the number of basis vectors (the rank). The vectors are the non-zero
 // rows of the RREF, transposed into column form. Caller frees each Vector and the array.
-Vector** rowSpace(Matrix* matrix, int* count) {
+Vector** rowSpace(Matrix* matrix, size_t* count) {
     if (!matrix || !count) return NULL;
     int m = matrix->numRows;
     int n = matrix->numCols;
@@ -1224,7 +1224,7 @@ Vector** rowSpace(Matrix* matrix, int* count) {
     Matrix* R = reduceRows(matrix);
     if (!R) return NULL;
 
-    const double tol = 1e-12;
+    const long double tol = 1e-12;
     int numPivots = 0;
     bool* nonzero = calloc(m, sizeof(bool));
     if (!nonzero) { freeMatrix(R); return NULL; }
@@ -1352,7 +1352,7 @@ MatrixElement* eigenvalues3x3(Matrix* matrix) {
     if (!eigs) return NULL;
 
     // Cardano in complex arithmetic:
-    // u^3 = -Q/2 + sqrt(Q^2/4 + P^3/27), v = -P/(3u) when u != 0.
+    // u^3 = -Q/2 + sqrtl(Q^2/4 + P^3/27), v = -P/(3u) when u != 0.
     // Roots of the depressed cubic are u+v, omega*u + omega^2*v, omega^2*u + omega*v.
     ComplexNumber two = {2.0, 0.0};
     ComplexNumber three = {3.0, 0.0};
@@ -1368,7 +1368,7 @@ MatrixElement* eigenvalues3x3(Matrix* matrix) {
 
     ComplexNumber u, v;
     if (complexAbs(u3) < 1e-15) {
-        // -Q/2 + sqrt(Q^2/4 + P^3/27) = 0 implies the root is cbrt(-Q).
+        // -Q/2 + sqrtl(Q^2/4 + P^3/27) = 0 implies the root is cbrtl(-Q).
         u = complexCbrt(complexNeg(Qc));
         v.real = 0.0; v.imag = 0.0;
     } else {
@@ -1381,8 +1381,8 @@ MatrixElement* eigenvalues3x3(Matrix* matrix) {
     }
 
     // omega = e^(2*pi*i/3), omega^2 = e^(-2*pi*i/3)
-    ComplexNumber omega = { -0.5,  sqrt(3.0) / 2.0 };
-    ComplexNumber omega2 = { -0.5, -sqrt(3.0) / 2.0 };
+    ComplexNumber omega = { -0.5,  sqrtl(3.0) / 2.0 };
+    ComplexNumber omega2 = { -0.5, -sqrtl(3.0) / 2.0 };
 
     ComplexNumber t1 = complexAdd(u, v);
     ComplexNumber t2 = complexAdd(complexMul(omega, u), complexMul(omega2, v));
@@ -1399,11 +1399,11 @@ MatrixElement* eigenvalues3x3(Matrix* matrix) {
                       !d.isComplex && !e.isComplex && !f.isComplex &&
                       !g.isComplex && !h.isComplex && !i.isComplex;
     if (inputsReal) {
-        double scale = fmax(fmax(complexAbs(lam1), complexAbs(lam2)), complexAbs(lam3));
-        double tol = 1e-9 * scale + 1e-12;
-        if (fabs(lam1.imag) < tol) lam1.imag = 0.0;
-        if (fabs(lam2.imag) < tol) lam2.imag = 0.0;
-        if (fabs(lam3.imag) < tol) lam3.imag = 0.0;
+        long double scale = fmaxl(fmaxl(complexAbs(lam1), complexAbs(lam2)), complexAbs(lam3));
+        long double tol = 1e-9 * scale + 1e-12;
+        if (fabsl(lam1.imag) < tol) lam1.imag = 0.0;
+        if (fabsl(lam2.imag) < tol) lam2.imag = 0.0;
+        if (fabsl(lam3.imag) < tol) lam3.imag = 0.0;
     }
 
     eigs[0] = elemFromComplex(lam1);
@@ -1516,7 +1516,7 @@ Matrix** eigenvectors3x3(Matrix* matrix) {
 
         // Find null space vector via cross products of row pairs
         MatrixElement v0, v1, v2;
-        double normSq;
+        long double normSq;
 
         v0 = elemSub(elemMul(r01, r12), elemMul(r02, r11));
         v1 = elemSub(elemMul(r02, r10), elemMul(r00, r12));
@@ -1566,15 +1566,15 @@ Matrix** eigenvectors3x3(Matrix* matrix) {
  * generic matrices.
  */
 
-static const double EIGEN_TOL = 1e-10;
-static const double EIGEN_REAL_SNAP = 1e-7;
+static const long double EIGEN_TOL = 1e-10;
+static const long double EIGEN_REAL_SNAP = 1e-7;
 
 // Complex Givens rotation that maps (x, y) -> (r, 0) for r >= 0 real.
 // Uses c = conj(x)/r, s = conj(y)/r so G = [[c, s], [-conj(s), conj(c)]].
 static void cGivens(ComplexNumber x, ComplexNumber y, ComplexNumber* c, ComplexNumber* s) {
-    double ax = complexAbs(x);
-    double ay = complexAbs(y);
-    double r = sqrt(ax*ax + ay*ay);
+    long double ax = complexAbs(x);
+    long double ay = complexAbs(y);
+    long double r = sqrtl(ax*ax + ay*ay);
     if (r < 1e-300) {
         c->real = 1.0; c->imag = 0.0;
         s->real = 0.0; s->imag = 0.0;
@@ -1643,7 +1643,7 @@ static void qrIterate(ComplexNumber* H, int n, ComplexNumber* eigs) {
             ComplexNumber sub = H[i*n + (i-1)];
             ComplexNumber d1 = H[i*n + i];
             ComplexNumber d2 = H[(i-1)*n + (i-1)];
-            double tol = EIGEN_TOL * (complexAbs(d1) + complexAbs(d2)) + 1e-300;
+            long double tol = EIGEN_TOL * (complexAbs(d1) + complexAbs(d2)) + 1e-300;
             if (complexAbs(sub) < tol) {
                 H[i*n + (i-1)] = (ComplexNumber){0.0, 0.0};
                 if (i == p - 1) {
@@ -1681,7 +1681,7 @@ static void qrIterate(ComplexNumber* H, int n, ComplexNumber* eigs) {
         // Exceptional shift: if stuck (e.g. trailing 2x2 has zero trace and det,
         // making Wilkinson shift = 0), perturb with the subdiagonal magnitude.
         if (sinceDeflate > 0 && sinceDeflate % 10 == 0) {
-            double bump = complexAbs(H[(p-1)*n + (p-2)]);
+            long double bump = complexAbs(H[(p-1)*n + (p-2)]);
             if (sinceDeflate % 20 == 0) {
                 mu.real += 1.5 * bump;
                 mu.imag += 0.7 * bump;
@@ -1745,20 +1745,20 @@ static int complexNullVector(ComplexNumber* M, int n, ComplexNumber* v) {
     if (!pivotCol) return 0;
     for (int i = 0; i < n; i++) pivotCol[i] = -1;
 
-    double scale = 0.0;
+    long double scale = 0.0;
     for (int i = 0; i < n * n; i++) {
-        double a = complexAbs(M[i]);
+        long double a = complexAbs(M[i]);
         if (a > scale) scale = a;
     }
-    double pivotTol = EIGEN_TOL * fmax(1.0, scale) + 1e-12;
+    long double pivotTol = EIGEN_TOL * fmaxl(1.0, scale) + 1e-12;
 
     int row = 0;
     for (int col = 0; col < n && row < n; col++) {
         // Partial pivot: largest |M[r, col]| for r in [row, n)
         int piv = -1;
-        double best = 0.0;
+        long double best = 0.0;
         for (int r = row; r < n; r++) {
-            double a = complexAbs(M[r*n + col]);
+            long double a = complexAbs(M[r*n + col]);
             if (a > best) { best = a; piv = r; }
         }
         if (piv < 0 || best < pivotTol) continue;
@@ -1806,12 +1806,12 @@ static int complexNullVector(ComplexNumber* M, int n, ComplexNumber* v) {
     free(pivotCol);
 
     // Normalize
-    double s = 0.0;
+    long double s = 0.0;
     for (int i = 0; i < n; i++) {
-        double a = complexAbs(v[i]);
+        long double a = complexAbs(v[i]);
         s += a * a;
     }
-    s = sqrt(s);
+    s = sqrtl(s);
     if (s < 1e-300) {
         v[0].real = 1.0; v[0].imag = 0.0;
         return 1;
@@ -1860,14 +1860,14 @@ MatrixElement* eigenvalues(Matrix* matrix) {
     // If the input was real, snap tiny imaginary residuals to 0
     bool inputReal = matrixIsReal(matrix);
     if (inputReal) {
-        double scale = 0.0;
+        long double scale = 0.0;
         for (int i = 0; i < n; i++) {
-            double a = complexAbs(eigs[i]);
+            long double a = complexAbs(eigs[i]);
             if (a > scale) scale = a;
         }
-        double tol = EIGEN_REAL_SNAP * scale + 1e-12;
+        long double tol = EIGEN_REAL_SNAP * scale + 1e-12;
         for (int i = 0; i < n; i++)
-            if (fabs(eigs[i].imag) < tol) eigs[i].imag = 0.0;
+            if (fabsl(eigs[i].imag) < tol) eigs[i].imag = 0.0;
     }
 
     for (int i = 0; i < n; i++) out[i] = elemFromComplex(eigs[i]);
@@ -1938,15 +1938,15 @@ Matrix** eigenvectors(Matrix* matrix) {
         }
 
         // Snap tiny imaginary parts to 0 for real inputs with real eigenvalue
-        if (inputReal && fabs(lam.imag) < 1e-12) {
-            double scale = 0.0;
+        if (inputReal && fabsl(lam.imag) < 1e-12) {
+            long double scale = 0.0;
             for (int i = 0; i < n; i++) {
-                double a = complexAbs(v[i]);
+                long double a = complexAbs(v[i]);
                 if (a > scale) scale = a;
             }
-            double tol = EIGEN_REAL_SNAP * scale + 1e-12;
+            long double tol = EIGEN_REAL_SNAP * scale + 1e-12;
             for (int i = 0; i < n; i++)
-                if (fabs(v[i].imag) < tol) v[i].imag = 0.0;
+                if (fabsl(v[i].imag) < tol) v[i].imag = 0.0;
         }
 
         for (int i = 0; i < n; i++)

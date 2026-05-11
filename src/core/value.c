@@ -31,9 +31,9 @@ static void printInlineVector(Vector* vector) {
         if (i) printf(", ");
         MatrixElement elem = getEntry((Matrix*)vector, i, 0);
         if (elem.isComplex) {
-            printf("(%g + %gi)", elem.value.complex.real, elem.value.complex.imag);
+            printf("(%Lg + %Lgi)", elem.value.complex.real, elem.value.complex.imag);
         } else {
-            printf("%g", elem.value.real);
+            printf("%Lg", elem.value.real);
         }
     }
     putchar(']');
@@ -391,8 +391,8 @@ static void printInlineRingHomomorphism(RingHomomorphism* homo) {
 
 /* ---------- Construct methods ---------- */
 
-static double zeroTiny(double x) {
-    return fabs(x) < 1e-15 ? 0.0 : x;
+static long double zeroTiny(long double x) {
+    return fabsl(x) < 1e-15 ? 0.0 : x;
 }
 
 static bool matrixIsFinite(Matrix* matrix) {
@@ -414,7 +414,7 @@ Value valNone(void)               { Value v = {0}; v.kind = VAL_NONE;     return
 Value valError(const char* msg)   { Value v = {0}; v.kind = VAL_ERROR;    v.as.str = dupstr(msg); return v; }
 Value valBool(bool b)             { Value v = {0}; v.kind = VAL_BOOL;     v.as.b = b;             return v; }
 Value valInt(long long n)         { Value v = {0}; v.kind = VAL_INT;      v.as.i = n;             return v; }
-Value valDecimal(double x)        { if (!isfinite(x)) return valError("numeric overflow or undefined decimal result"); Value v = {0}; v.kind = VAL_DECIMAL;  v.as.d = zeroTiny(x);   return v; }
+Value valDecimal(long double x)        { if (!isfinite(x)) return valError("numeric overflow or undefined decimal result"); Value v = {0}; v.kind = VAL_DECIMAL;  v.as.d = zeroTiny(x);   return v; }
 Value valFraction(Fraction f)     { Value v = {0}; v.kind = VAL_FRACTION; v.as.frac = f;          return v; }
 Value valComplex(ComplexNumber c) { if (!isfinite(c.real) || !isfinite(c.imag)) return valError("numeric overflow or undefined complex result"); Value v = {0}; v.kind = VAL_COMPLEX;  c.real = zeroTiny(c.real); c.imag = zeroTiny(c.imag); v.as.cplx = c; return v; }
 Value valString(const char* s)    { Value v = {0}; v.kind = VAL_STRING;   v.as.str = dupstr(s);   return v; }
@@ -599,9 +599,9 @@ void valPrint(Value v) {
         case VAL_ERROR:    printf("<error: %s>", v.as.str ? v.as.str : ""); break;
         case VAL_BOOL:     printf(v.as.b ? "true" : "false"); break;
         case VAL_INT:      printf("%lld", v.as.i); break;
-        case VAL_DECIMAL:  printf("%g", v.as.d); break;
+        case VAL_DECIMAL:  printf("%Lg", v.as.d); break;
         case VAL_FRACTION: printFraction(v.as.frac); break;
-        case VAL_COMPLEX:  printf("(%g + %gi)", v.as.cplx.real, v.as.cplx.imag); break;
+        case VAL_COMPLEX:  printf("(%Lg + %Lgi)", v.as.cplx.real, v.as.cplx.imag); break;
         case VAL_STRING:   printf("\"%s\"", v.as.str ? v.as.str : ""); break;
         case VAL_SYMBOL:   printf("%s", v.as.str ? v.as.str : ""); break;
         case VAL_LIST:
@@ -625,7 +625,7 @@ void valPrint(Value v) {
             CombSet* combset = (CombSet*)v.as.ptr;
             putchar('{');
             if (combset) {
-                for (int i = 0; i < combset->card; i++) {
+                for (size_t i = 0; i < combset->card; i++) {
                     if (i) printf(", ");
                     printf("%lld", combset->set[i]);
                 }
@@ -636,26 +636,26 @@ void valPrint(Value v) {
         case VAL_BODY: {
             Body* body = (Body*)v.as.ptr;
             if (!body) { printf("<body null>"); break; }
-            printf("<body mass=%g; pos=", body->mass);
+            printf("<body mass=%Lg; pos=", body->mass);
             printInlineVector(body->pos);
             printf("; velocity=");
             printInlineVector(body->velocity);
-            printf("; forces=%d>", body->nForces);
+            printf("; forces=%zu>", body->nForces);
             break;
         }
         case VAL_BODY_SYSTEM: {
             BodySystem* system = (BodySystem*)v.as.ptr;
             if (!system) { printf("<bodySystem null>"); break; }
-            printf("<bodySystem bodies=%d; sample=[", system->nBodies);
-            int limit = system->nBodies < 3 ? system->nBodies : 3;
-            for (int i = 0; i < limit; i++) {
+            printf("<bodySystem bodies=%zu; sample=[", system->nBodies);
+            size_t limit = system->nBodies < 3 ? system->nBodies : 3;
+            for (size_t i = 0; i < limit; i++) {
                 if (i) printf(", ");
                 Body* body = system->bodies ? system->bodies[i] : NULL;
                 if (!body) {
                     printf("null");
                     continue;
                 }
-                printf("{m=%g,pos=", body->mass);
+                printf("{m=%Lg,pos=", body->mass);
                 printInlineVector(body->pos);
                 printf("}");
             }
@@ -670,7 +670,7 @@ void valPrint(Value v) {
             printInlineVector(force->vector);
             printf("; tailPos=");
             printInlineVector(force->tailPos);
-            printf("; magnitude=%g>", force->vector ? l2Norm(force->vector) : 0.0);
+            printf("; magnitude=%Lg>", force->vector ? l2Norm(force->vector) : 0.0);
             break;
         }
         case VAL_GROUP:
@@ -738,13 +738,13 @@ bool valIsNumeric(Value v) {
     return v.kind == VAL_INT || v.kind == VAL_DECIMAL || v.kind == VAL_FRACTION;
 }
 
-// Collapse a numeric value to a double (0.0 on non-numeric)
-double valToDouble(Value v) {
+// Collapse a numeric value to a long double (0.0 on non-numeric)
+long double valToDouble(Value v) {
     switch (v.kind) {
-        case VAL_INT:      return (double)v.as.i;
+        case VAL_INT:      return (long double)v.as.i;
         case VAL_DECIMAL:  return v.as.d;
         case VAL_FRACTION:
-            return v.as.frac.denom ? (double)v.as.frac.num / (double)v.as.frac.denom : 0.0;
+            return v.as.frac.denom ? (long double)v.as.frac.num / (long double)v.as.frac.denom : 0.0;
         case VAL_BOOL:     return v.as.b ? 1.0 : 0.0;
         default:           return 0.0;
     }

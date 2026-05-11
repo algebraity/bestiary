@@ -70,7 +70,7 @@ typedef enum {
 struct NekoExpr {
     NekoExprKind kind;
     union {
-        double constant;
+        long double constant;
         char* var;
         struct {
             NekoExpr* lhs;
@@ -87,7 +87,7 @@ struct NekoExpr {
     } as;
 };
 
-typedef double (*NekoEvalFn)(double x, void* userdata);
+typedef long double (*NekoEvalFn)(long double x, void* userdata);
 
 typedef struct NekoFunc {
     NekoExpr* expr;
@@ -116,28 +116,28 @@ typedef struct NekoSolveResult {
 
 typedef struct NekoNumericResult {
     NekoStatus status;
-    double value;
+    long double value;
     int intervals;
 } NekoNumericResult;
 
 typedef struct NekoOptResult {
     NekoStatus status;
-    double x;
-    double value;
+    long double x;
+    long double value;
     int iterations;
 } NekoOptResult;
 
 typedef struct NekoOdeResult {
     NekoStatus status;
-    double x;
-    double value;
+    long double x;
+    long double value;
     int iterations;
 } NekoOdeResult;
 
 typedef struct NekoOdeSystemResult {
     NekoStatus status;
-    double x;
-    double* values;
+    long double x;
+    long double* values;
     int dim;
     int iterations;
 } NekoOdeSystemResult;
@@ -148,43 +148,43 @@ struct NekoOde {
         struct {
             NekoFunc* P;
             NekoFunc* Q;
-            double n;
-            double x0;
-            double y0;
+            long double n;
+            long double x0;
+            long double y0;
         } bernoulli;
         struct {
-            double a;
-            double b;
-            double x0;
-            double y0;
+            long double a;
+            long double b;
+            long double x0;
+            long double y0;
         } firstOrder;
         struct {
-            double a;
-            double b;
-            double c;
-            double d;
-            double x0;
-            double y0;
-            double dy0;
+            long double a;
+            long double b;
+            long double c;
+            long double d;
+            long double x0;
+            long double y0;
+            long double dy0;
         } secondOrder;
         struct {
             int order;
-            double a;
+            long double a;
             NekoExpr* rhs;
-            double x0;
-            double* initialValues;
+            long double x0;
+            long double* initialValues;
         } nthOrder;
         struct {
             int dim;
-            double* A;
-            double* y0;
-            double x0;
+            long double* A;
+            long double* y0;
+            long double x0;
         } linearSystem;
     } as;
 };
 
 /* ---------- Expression construction and manipulation ---------- */
-NekoExpr* nekoConst(double c);
+NekoExpr* nekoConst(long double c);
 NekoExpr* nekoVar(const char* name);
 NekoExpr* nekoUnary(NekoExprKind kind, NekoExpr* arg);
 NekoExpr* nekoBinary(NekoExprKind kind, NekoExpr* lhs, NekoExpr* rhs);
@@ -208,37 +208,37 @@ NekoExpr* nekoAbs(NekoExpr* arg);
 NekoExpr* nekoCloneExpr(const NekoExpr* expr);
 void nekoFreeExpr(NekoExpr* expr);
 void nekoPrintExpr(const NekoExpr* expr);
-double nekoEvalExpr(const NekoExpr* expr, const char* var, double x);
+long double nekoEvalExpr(const NekoExpr* expr, const char* var, long double x);
 NekoExpr* nekoSimplify(NekoExpr* expr);
 NekoDiffResult nekoDifferentiateExpr(const NekoExpr* expr, const char* var);
 NekoFunc* nekoFuncFromExpr(const NekoExpr* expr);
 NekoFunc* nekoFuncFromCallback(NekoEvalFn callback, void* userdata);
 void nekoFreeFunc(NekoFunc* func);
-double nekoEvalFunc(const NekoFunc* func, double x);
+long double nekoEvalFunc(const NekoFunc* func, long double x);
 
 /* ---------- Integration and applications ---------- */
 bool nekoCanIntegrateUSub(const NekoExpr* expr, const char* var);
 NekoIntegralResult nekoIntegrateUSubExpr(const NekoExpr* expr, const char* var);
 NekoIntegralResult nekoIntegrateExpr(const NekoExpr* expr, const char* var);
-NekoNumericResult nekoIntegrateNumeric(const NekoFunc* func, double a, double b, NekoIntegrateMethod method, int intervals, double tol);
-NekoNumericResult nekoAreaBetween(const NekoFunc* f, const NekoFunc* g, double a, double b, NekoIntegrateMethod method, int intervals, double tol);
-NekoOptResult nekoFindMinimum(const NekoFunc* func, double a, double b, double tol, int maxIter);
-NekoOptResult nekoFindMaximum(const NekoFunc* func, double a, double b, double tol, int maxIter);
-NekoOptResult nekoOptimize(const NekoFunc* objective, double a, double b, NekoOptGoal goal, const NekoConstraint* constraints, int nconstraints, int samples, double tol, int maxIter);
+NekoNumericResult nekoIntegrateNumeric(const NekoFunc* func, long double a, long double b, NekoIntegrateMethod method, int intervals, long double tol);
+NekoNumericResult nekoAreaBetween(const NekoFunc* f, const NekoFunc* g, long double a, long double b, NekoIntegrateMethod method, int intervals, long double tol);
+NekoOptResult nekoFindMinimum(const NekoFunc* func, long double a, long double b, long double tol, int maxIter);
+NekoOptResult nekoFindMaximum(const NekoFunc* func, long double a, long double b, long double tol, int maxIter);
+NekoOptResult nekoOptimize(const NekoFunc* objective, long double a, long double b, NekoOptGoal goal, const NekoConstraint* constraints, int nconstraints, int samples, long double tol, int maxIter);
 
 /* ---------- ODE solvers ---------- */
-NekoOde* nekoOdeBernoulli(const NekoFunc* P, const NekoFunc* Q, double n, double x0, double y0);
-NekoOde* nekoOdeFirstOrderLinearConst(double a, double b, double x0, double y0);
-NekoOde* nekoOdeSecondOrderConst(double a, double b, double c, double x0, double y0, double dy0);
-NekoOde* nekoOdeSecondOrderConstForced(double a, double b, double c, double d, double x0, double y0, double dy0);
-NekoOde* nekoOdeNthOrderIntegrable(int order, double a, const NekoExpr* rhs, double x0, const double* initialValues);
-NekoOde* nekoOdeLinearSystemConst(const double* A, const double* y0, int dim, double x0);
+NekoOde* nekoOdeBernoulli(const NekoFunc* P, const NekoFunc* Q, long double n, long double x0, long double y0);
+NekoOde* nekoOdeFirstOrderLinearConst(long double a, long double b, long double x0, long double y0);
+NekoOde* nekoOdeSecondOrderConst(long double a, long double b, long double c, long double x0, long double y0, long double dy0);
+NekoOde* nekoOdeSecondOrderConstForced(long double a, long double b, long double c, long double d, long double x0, long double y0, long double dy0);
+NekoOde* nekoOdeNthOrderIntegrable(int order, long double a, const NekoExpr* rhs, long double x0, const long double* initialValues);
+NekoOde* nekoOdeLinearSystemConst(const long double* A, const long double* y0, int dim, long double x0);
 void nekoFreeOde(NekoOde* ode);
 bool nekoMatchOdePattern(const NekoOde* ode, NekoOdeKind kind);
 NekoSolveResult nekoSolveOdeGeneral(const NekoOde* ode);
 NekoSolveResult nekoSolveOdeInitialValue(const NekoOde* ode);
-NekoOdeResult nekoEvalOde(const NekoOde* ode, double x, int steps);
-NekoOdeSystemResult nekoEvalOdeSystem(const NekoOde* ode, double x, int steps);
+NekoOdeResult nekoEvalOde(const NekoOde* ode, long double x, int steps);
+NekoOdeSystemResult nekoEvalOdeSystem(const NekoOde* ode, long double x, int steps);
 void nekoFreeOdeSystemResult(NekoOdeSystemResult result);
 
 

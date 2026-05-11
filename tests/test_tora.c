@@ -26,13 +26,13 @@ static int testsPassed = 0;
 
 #define SECTION(name) printf("\n=== %s ===\n", name)
 
-static double realOf(MatrixElement e) {
+static long double realOf(MatrixElement e) {
     return e.isComplex ? e.value.complex.real : e.value.real;
 }
 
-static bool approxReal(MatrixElement e, double expected, double tol) {
-    double actual = realOf(e);
-    return fabs(actual - expected) <= tol;
+static bool approxReal(MatrixElement e, long double expected, long double tol) {
+    long double actual = realOf(e);
+    return fabsl(actual - expected) <= tol;
 }
 
 /* ---------- ConjugacyClass tests ---------- */
@@ -178,7 +178,7 @@ void testRegularRepresentation() {
     bool identityOk = true;
     for (int i = 0; i < 3; i++)
         for (int j = 0; j < 3; j++) {
-            double expected = (i == j) ? 1.0 : 0.0;
+            long double expected = (i == j) ? 1.0 : 0.0;
             if (!approxReal(getEntry(I, i, j), expected, 1e-12)) identityOk = false;
         }
     CHECK(identityOk, "regular rep of identity is I");
@@ -216,7 +216,7 @@ void testPermutationRepresentation() {
     bool identityOk = true;
     for (int i = 0; i < rep->dim; i++)
         for (int j = 0; j < rep->dim; j++) {
-            double expected = (i == j) ? 1.0 : 0.0;
+            long double expected = (i == j) ? 1.0 : 0.0;
             if (!approxReal(getEntry(I, i, j), expected, 1e-12)) identityOk = false;
         }
     CHECK(identityOk, "S3: perm rep of identity is I");
@@ -239,7 +239,7 @@ void testStandardRepresentation() {
     bool identityOk = true;
     for (int i = 0; i < rep->dim; i++)
         for (int j = 0; j < rep->dim; j++) {
-            double expected = (i == j) ? 1.0 : 0.0;
+            long double expected = (i == j) ? 1.0 : 0.0;
             if (!approxReal(getEntry(I, i, j), expected, 1e-12)) identityOk = false;
         }
     CHECK(identityOk, "S3: standard rep of identity is I");
@@ -341,7 +341,7 @@ void testConstructAndFreeCharacterTable() {
 /* ---------- Tests for derived representation constructors ---------- */
 
 // Verify that a Representation is a homomorphism: rho(g_i * g_j) == rho(g_i) * rho(g_j)
-static bool checkHomomorphism(Representation* rep, double tol) {
+static bool checkHomomorphism(Representation* rep, long double tol) {
     if (!rep) return false;
     Group* G = rep->group;
     for (int i = 0; i < G->card; i++) {
@@ -358,7 +358,7 @@ static bool checkHomomorphism(Representation* rep, double tol) {
 }
 
 // Check rho(identity) == I_dim
-static bool checkIdentityImage(Representation* rep, double tol) {
+static bool checkIdentityImage(Representation* rep, long double tol) {
     Matrix* I = idMatrix(rep->dim);
     bool ok = matrixComp(rep->images[0], I, tol);
     freeMatrix(I);
@@ -387,7 +387,7 @@ void testGet1Dreps() {
     }
     CHECK(allOk, "Z4: all reps are 1D homomorphisms with rho(e)=1");
 
-    // For Z_4, the four characters chi_k(j) = exp(2πi * k * j / 4). The
+    // For Z_4, the four characters chi_k(j) = expl(2πi * k * j / 4). The
     // sum over a full orbit (k != 0) should be zero.
     bool orthogonal = true;
     for (int r = 0; r < count; r++) {
@@ -398,8 +398,8 @@ void testGet1Dreps() {
             sum = complexAdd(sum, c);
         }
         // Trivial char: sum = |G|. Nontrivial: sum = 0.
-        bool trivialish = fabs(sum.real - 4.0) < 1e-6 && fabs(sum.imag) < 1e-6;
-        bool zero = fabs(sum.real) < 1e-6 && fabs(sum.imag) < 1e-6;
+        bool trivialish = fabsl(sum.real - 4.0) < 1e-6 && fabsl(sum.imag) < 1e-6;
+        bool zero = fabsl(sum.real) < 1e-6 && fabsl(sum.imag) < 1e-6;
         if (!(trivialish || zero)) orthogonal = false;
     }
     CHECK(orthogonal, "Z4: column sums are |G| (trivial) or 0 (nontrivial)");
@@ -420,10 +420,10 @@ void testGet1Dreps() {
         for (int g = 0; g < S3->card; g++) {
             MatrixElement e = getEntry(reps[r]->images[g], 0, 0);
             ComplexNumber c = elemToComplex(e);
-            if (!(fabs(c.real - 1.0) < 1e-6 && fabs(c.imag) < 1e-6)) allOnes = false;
+            if (!(fabsl(c.real - 1.0) < 1e-6 && fabsl(c.imag) < 1e-6)) allOnes = false;
             // Sign: +-1 only
-            if (!((fabs(c.real - 1.0) < 1e-6 || fabs(c.real + 1.0) < 1e-6)
-                  && fabs(c.imag) < 1e-6)) isSign = false;
+            if (!((fabsl(c.real - 1.0) < 1e-6 || fabsl(c.real + 1.0) < 1e-6)
+                  && fabsl(c.imag) < 1e-6)) isSign = false;
         }
         if (allOnes) foundTrivial = true;
         else if (isSign) foundSign = true;
@@ -694,7 +694,7 @@ void testSignRepresentation() {
     for (int i = 0; i < 3; i++) perm[i] = i;
     bool valuesOk = true;
     for (int idx = 0; idx < S3->card; idx++) {
-        double expected = (permSign(perm, 3) == 0) ? 1.0 : -1.0;
+        long double expected = (permSign(perm, 3) == 0) ? 1.0 : -1.0;
         if (!approxReal(getEntry(sgn->images[idx], 0, 0), expected, 1e-12)) valuesOk = false;
         if (idx + 1 < S3->card) nextPermutation(perm, 3);
     }
@@ -722,7 +722,7 @@ void testSignRepresentation() {
     CHECK(checkHomomorphism(sgn, 1e-12), "S4: sign is a homomorphism");
     int plus = 0, minus = 0;
     for (int g = 0; g < S4->card; g++) {
-        double v = realOf(getEntry(sgn->images[g], 0, 0));
+        long double v = realOf(getEntry(sgn->images[g], 0, 0));
         if (v > 0) plus++; else minus++;
     }
     CHECK(plus == 12 && minus == 12, "S4: 12 even and 12 odd");
@@ -781,7 +781,7 @@ void testConjugateRepresentation() {
     Representation* nontrivial = NULL;
     for (int r = 0; r < count; r++) {
         ComplexNumber c = elemToComplex(getEntry(reps[r]->images[1], 0, 0));
-        if (fabs(c.imag) > 1e-6) { nontrivial = reps[r]; break; }
+        if (fabsl(c.imag) > 1e-6) { nontrivial = reps[r]; break; }
     }
     CHECK(nontrivial != NULL, "Z3: complex 1D rep located");
 
@@ -843,7 +843,7 @@ void testCharacterValue() {
     bool trivOk = true;
     for (int i = 0; i < n; i++) {
         ComplexNumber v = characterValue(triv, classes[i]);
-        if (!(fabs(v.real - 1.0) < 1e-9 && fabs(v.imag) < 1e-9)) trivOk = false;
+        if (!(fabsl(v.real - 1.0) < 1e-9 && fabsl(v.imag) < 1e-9)) trivOk = false;
     }
     CHECK(trivOk, "trivial chi(C) = 1 on every class");
 
@@ -858,16 +858,16 @@ void testCharacterValue() {
     CHECK(stdOk, "characterValue equals trace at class rep");
 
     // Sum over G of |chi(g)|^2 = |G| * <chi, chi>; for std it should equal 6 (irreducible)
-    double sumSq = 0.0;
+    long double sumSq = 0.0;
     for (int g = 0; g < S3->card; g++) {
         ComplexNumber t = elemToComplex(trace(std->images[g]));
         sumSq += t.real * t.real + t.imag * t.imag;
     }
-    CHECK(fabs(sumSq - (double) S3->card) < 1e-6, "sum |chi_std(g)|^2 = |G|");
+    CHECK(fabsl(sumSq - (long double) S3->card) < 1e-6, "sum |chi_std(g)|^2 = |G|");
 
     // NULL handling
     ComplexNumber v0 = characterValue(NULL, classes[0]);
-    CHECK(fabs(v0.real) < 1e-12 && fabs(v0.imag) < 1e-12, "NULL rep -> 0");
+    CHECK(fabsl(v0.real) < 1e-12 && fabsl(v0.imag) < 1e-12, "NULL rep -> 0");
 
     for (int i = 0; i < n; i++) freeConjugacyClass(classes[i]);
     free(classes);
@@ -893,7 +893,7 @@ void testCharacterOfRepresentation() {
     bool idOk = false;
     for (int i = 0; i < chi->numClasses; i++) {
         if (chi->classes[i]->rep->index == 0) {
-            idOk = fabs(chi->values[i].real - (double) std->dim) < 1e-9;
+            idOk = fabsl(chi->values[i].real - (long double) std->dim) < 1e-9;
             break;
         }
     }
@@ -908,7 +908,7 @@ void testCharacterInnerProduct() {
     SECTION("characterInnerProduct");
 
     ComplexNumber zero = characterInnerProduct(NULL, NULL);
-    CHECK(fabs(zero.real) < 1e-12 && fabs(zero.imag) < 1e-12, "NULL -> 0");
+    CHECK(fabsl(zero.real) < 1e-12 && fabsl(zero.imag) < 1e-12, "NULL -> 0");
 
     Group* S3 = constructSymmetricGroup(3);
 
@@ -922,29 +922,29 @@ void testCharacterInnerProduct() {
 
     // <triv, triv> = 1
     ComplexNumber tt = characterInnerProduct(chiT, chiT);
-    CHECK(fabs(tt.real - 1.0) < 1e-6 && fabs(tt.imag) < 1e-6, "<triv,triv> = 1");
+    CHECK(fabsl(tt.real - 1.0) < 1e-6 && fabsl(tt.imag) < 1e-6, "<triv,triv> = 1");
 
     // <std, std> = 1 (irreducible)
     ComplexNumber ss = characterInnerProduct(chiS, chiS);
-    CHECK(fabs(ss.real - 1.0) < 1e-6 && fabs(ss.imag) < 1e-6, "<std,std> = 1");
+    CHECK(fabsl(ss.real - 1.0) < 1e-6 && fabsl(ss.imag) < 1e-6, "<std,std> = 1");
 
     // <triv, sgn> = 0 (orthogonal irreps)
     ComplexNumber ts = characterInnerProduct(chiT, chiSgn);
-    CHECK(fabs(ts.real) < 1e-6 && fabs(ts.imag) < 1e-6, "<triv,sgn> = 0");
+    CHECK(fabsl(ts.real) < 1e-6 && fabsl(ts.imag) < 1e-6, "<triv,sgn> = 0");
 
     // <std, triv> = 0
     ComplexNumber st = characterInnerProduct(chiS, chiT);
-    CHECK(fabs(st.real) < 1e-6 && fabs(st.imag) < 1e-6, "<std,triv> = 0");
+    CHECK(fabsl(st.real) < 1e-6 && fabsl(st.imag) < 1e-6, "<std,triv> = 0");
 
     // <reg, triv> = 1 (regular rep contains trivial exactly once)
     Representation* reg = regularRepresentation(S3);
     Character* chiReg = characterOfRepresentation(reg);
     ComplexNumber rt = characterInnerProduct(chiReg, chiT);
-    CHECK(fabs(rt.real - 1.0) < 1e-6 && fabs(rt.imag) < 1e-6, "<reg,triv> = 1");
+    CHECK(fabsl(rt.real - 1.0) < 1e-6 && fabsl(rt.imag) < 1e-6, "<reg,triv> = 1");
 
     // <reg, std> = dim std = 2  (regular rep contains std with multiplicity dim std)
     ComplexNumber rs = characterInnerProduct(chiReg, chiS);
-    CHECK(fabs(rs.real - 2.0) < 1e-6 && fabs(rs.imag) < 1e-6, "<reg,std> = 2");
+    CHECK(fabsl(rs.real - 2.0) < 1e-6 && fabsl(rs.imag) < 1e-6, "<reg,std> = 2");
 
     freeCharFromRep(chiT);
     freeCharFromRep(chiS);
@@ -1000,7 +1000,7 @@ void testCharacterTable() {
     CHECK(T->numIrreps == 3, "Z3: 3 irreps found");
     int sumSq = 0;
     for (int k = 0; k < T->numIrreps; k++) {
-        int d = (int) round(T->values[k][0].real);
+        int d = (int) roundl(T->values[k][0].real);
         sumSq += d * d;
     }
     CHECK(sumSq == 3, "Z3: sum of d^2 = |G|");
@@ -1010,8 +1010,8 @@ void testCharacterTable() {
     for (int i = 0; i < T->numIrreps; i++) {
         for (int j = 0; j < T->numIrreps; j++) {
             ComplexNumber ip = characterInnerProduct(T->irreps[i], T->irreps[j]);
-            double expected = (i == j) ? 1.0 : 0.0;
-            if (!(fabs(ip.real - expected) < 1e-6 && fabs(ip.imag) < 1e-6)) orthOk = false;
+            long double expected = (i == j) ? 1.0 : 0.0;
+            if (!(fabsl(ip.real - expected) < 1e-6 && fabsl(ip.imag) < 1e-6)) orthOk = false;
         }
     }
     CHECK(orthOk, "Z3: irreps are orthonormal");
@@ -1032,7 +1032,7 @@ void testCharacterTable() {
     CHECK(T->numIrreps == 3, "S3: all 3 irreps found");
     sumSq = 0;
     for (int k = 0; k < T->numIrreps; k++) {
-        int d = (int) round(T->values[k][0].real);
+        int d = (int) roundl(T->values[k][0].real);
         sumSq += d * d;
     }
     CHECK(sumSq == 6, "S3: sum of d^2 = |G|");
@@ -1041,8 +1041,8 @@ void testCharacterTable() {
     for (int i = 0; i < T->numIrreps; i++) {
         for (int j = 0; j < T->numIrreps; j++) {
             ComplexNumber ip = characterInnerProduct(T->irreps[i], T->irreps[j]);
-            double expected = (i == j) ? 1.0 : 0.0;
-            if (!(fabs(ip.real - expected) < 1e-6 && fabs(ip.imag) < 1e-6)) orthOk = false;
+            long double expected = (i == j) ? 1.0 : 0.0;
+            if (!(fabsl(ip.real - expected) < 1e-6 && fabsl(ip.imag) < 1e-6)) orthOk = false;
         }
     }
     CHECK(orthOk, "S3: irreps are orthonormal");
@@ -1092,7 +1092,7 @@ void testDecomposeRepresentation() {
     int totalDim = 0;
     bool dimMatch = true;
     for (int i = 0; i < T->numIrreps; i++) {
-        int d = (int) round(T->values[i][0].real);
+        int d = (int) roundl(T->values[i][0].real);
         if (m[i] != d) dimMatch = false;
         totalDim += m[i] * d;
     }
@@ -1106,7 +1106,7 @@ void testDecomposeRepresentation() {
     Representation* sym = symmetricProduct(stdRep);
     m = decomposeRepresentation(sym, T);
     int totalSym = 0;
-    for (int i = 0; i < T->numIrreps; i++) totalSym += m[i] * (int) round(T->values[i][0].real);
+    for (int i = 0; i < T->numIrreps; i++) totalSym += m[i] * (int) roundl(T->values[i][0].real);
     CHECK(totalSym == sym->dim, "sum n_i * dim(V_i) = dim(Sym^2 std)");
     int twoCount = 0;
     for (int i = 0; i < T->numIrreps; i++) if (m[i] >= 1) twoCount++;
@@ -1134,7 +1134,7 @@ void testCharacterTableHardCases() {
     int sumSq = 0;
     int dimsHistogram[10] = {0};
     for (int k = 0; k < T->numIrreps; k++) {
-        int d = (int) round(T->values[k][0].real);
+        int d = (int) roundl(T->values[k][0].real);
         sumSq += d * d;
         if (d >= 0 && d < 10) dimsHistogram[d]++;
     }
@@ -1146,8 +1146,8 @@ void testCharacterTableHardCases() {
     for (int i = 0; i < T->numIrreps; i++) {
         for (int j = 0; j < T->numIrreps; j++) {
             ComplexNumber ip = characterInnerProduct(T->irreps[i], T->irreps[j]);
-            double expected = (i == j) ? 1.0 : 0.0;
-            if (!(fabs(ip.real - expected) < 1e-4 && fabs(ip.imag) < 1e-4)) orthOk = false;
+            long double expected = (i == j) ? 1.0 : 0.0;
+            if (!(fabsl(ip.real - expected) < 1e-4 && fabsl(ip.imag) < 1e-4)) orthOk = false;
         }
     }
     CHECK(orthOk, "S4: irreps orthonormal");
@@ -1160,7 +1160,7 @@ void testCharacterTableHardCases() {
     int* m = decomposeRepresentation(reg, T);
     bool regOk = true;
     for (int k = 0; k < T->numIrreps; k++) {
-        int d = (int) round(T->values[k][0].real);
+        int d = (int) roundl(T->values[k][0].real);
         if (m[k] != d) regOk = false;
     }
     CHECK(regOk, "S4: reg rep multiplicities = dims");
@@ -1181,7 +1181,7 @@ void testCharacterTableHardCases() {
     sumSq = 0;
     int oneCount = 0, twoCount = 0;
     for (int k = 0; k < T->numIrreps; k++) {
-        int d = (int) round(T->values[k][0].real);
+        int d = (int) roundl(T->values[k][0].real);
         sumSq += d * d;
         if (d == 1) oneCount++;
         if (d == 2) twoCount++;
@@ -1206,7 +1206,7 @@ void testCharacterTableHardCases() {
     CHECK(T->numIrreps == 8, "(Z2)^3: 8 irreps");
     sumSq = 0;
     for (int k = 0; k < T->numIrreps; k++) {
-        int d = (int) round(T->values[k][0].real);
+        int d = (int) roundl(T->values[k][0].real);
         sumSq += d * d;
     }
     CHECK(sumSq == 8, "(Z2)^3: sum d^2 = 8 (all 1D)");
@@ -1230,7 +1230,7 @@ void testAllIrreducibleCharacters() {
     CHECK(count == 4, "D5: 4 irreps");
     int sumSq = 0;
     for (int k = 0; k < count; k++) {
-        int d = (int) round(chars[k]->values[0].real);
+        int d = (int) roundl(chars[k]->values[0].real);
         sumSq += d * d;
     }
     CHECK(sumSq == 10, "D5: sum d^2 = |D_5| = 10");
@@ -1240,8 +1240,8 @@ void testAllIrreducibleCharacters() {
     for (int i = 0; i < count; i++) {
         for (int j = 0; j < count; j++) {
             ComplexNumber ip = characterInnerProduct(chars[i], chars[j]);
-            double expected = (i == j) ? 1.0 : 0.0;
-            if (!(fabs(ip.real - expected) < 1e-4 && fabs(ip.imag) < 1e-4)) ok = false;
+            long double expected = (i == j) ? 1.0 : 0.0;
+            if (!(fabsl(ip.real - expected) < 1e-4 && fabsl(ip.imag) < 1e-4)) ok = false;
         }
     }
     CHECK(ok, "D5: orthonormal");

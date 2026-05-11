@@ -190,8 +190,8 @@ static int parseNegIntLit(const char* s, long long* out) {
     return 1;
 }
 
-// Parse a decimal literal text via strtod
-static double parseDecLit(const char* s) { return strtod(s, NULL); }
+// Parse a decimal literal text via strtold
+static long double parseDecLit(const char* s) { return strtold(s, NULL); }
 
 /* ---------- Forward declarations ---------- */
 
@@ -333,14 +333,14 @@ static AstNode* parsePrimary(P* p) {
     }
 }
 
-// Parse '| expr |' and lower it to \l2Norm{expr}
+// Parse '| expr |' and lower it to the runtime bar dispatcher.
 static AstNode* parsePipeGroup(P* p) {
     Token* pipe = peek(p);
     if (!match(p, TOK_PIPE)) { parseError(p, "expected '|'"); return NULL; }
     NodeBuf args; nbInit(&args);
     nbPush(&args, parseExpr(p));
     if (!match(p, TOK_PIPE)) { parseError(p, "expected closing '|' "); }
-    return astCall("l2Norm", args.data, args.len, pipe->line, pipe->col);
+    return astCall("__bars__", args.data, args.len, pipe->line, pipe->col);
 }
 
 // Parse '{ expr }'; returns the inner expression (the braces are grouping)

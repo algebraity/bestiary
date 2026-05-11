@@ -101,7 +101,6 @@ char* flattenReprInner(const char* s);
 char* flattenRepr(const char* repr);
 
 /* ---------- Permutation helpers ---------- */
-int factorial(int n);
 int permToIndex(int* perm, int n);
 int permSign(int* perm, int n);
 bool nextPermutation(int* perm, int n);

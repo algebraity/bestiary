@@ -2,12 +2,13 @@
 #define PONI_H
 
 #include<stdbool.h>
+#include<stddef.h>
 #include "hebi.h"
 #include "sokko.h"
 
-#define A_GRAVITY 9.80665
-#define A_BIG_G 6.67430e-11
-#define MAX_FORCES 20
+#define A_GRAVITY 9.80665L
+#define A_BIG_G 6.67430e-11L
+#define MAX_FORCES ((size_t)20)
 
 /* --------- Definitions of structs ---------- */
 
@@ -18,39 +19,39 @@ typedef struct Force {
 } Force;
 
 typedef struct Body {
-    double mass;
+    long double mass;
     Vector* pos;
     Vector* velocity;
     Force** forces;
-    int nForces;
+    size_t nForces;
 } Body;
 
 typedef struct BodySystem {
     Body** bodies;
-    int nBodies;
+    size_t nBodies;
 } BodySystem;
 
 typedef struct ProjectileInfo {
-    double range;
-    double peakHeight;
-    double timeOfFlight;
+    long double range;
+    long double peakHeight;
+    long double timeOfFlight;
 } ProjectileInfo;
 
 
 /* ---------- Kinematics primitives ---------- */
-double* displacement(Vector* p1, Vector* p2);
-double* averageVelocity(Vector* p1, Vector* p2, double time);
-double* averageAcceleration(Vector* p1, Vector* p2, Vector* initVel, double time);
-Vector* velocityAtTime(Vector* initVel, Vector* acceleration, double time);
-Vector* positionAtTime(Vector* initPos, Vector* initVel, Vector* acceleration, double time);
+long double* displacement(Vector* p1, Vector* p2);
+long double* averageVelocity(Vector* p1, Vector* p2, long double time);
+long double* averageAcceleration(Vector* p1, Vector* p2, Vector* initVel, long double time);
+Vector* velocityAtTime(Vector* initVel, Vector* acceleration, long double time);
+Vector* positionAtTime(Vector* initPos, Vector* initVel, Vector* acceleration, long double time);
 Vector* speedAtPosition(Vector* initPos, Vector* initVel, Vector* acceleration, Vector* pos);
 Vector* velocityAtPosition(Vector* initPos, Vector* initVel, Vector* acceleration, Vector* pos);
-ProjectileInfo* getProjectileInfo(double initVel, double angle, double initHeight);
-double centripetalAcceleration(double vel, double radius);
-double angularVelocity(double vel, double radius);
+ProjectileInfo* getProjectileInfo(long double initVel, long double angle, long double initHeight);
+long double centripetalAcceleration(long double vel, long double radius);
+long double angularVelocity(long double vel, long double radius);
 
 /* ---------- Dynamics ----------- */
-Body* constructBody(double mass, Vector* pos, Vector* velocity);
+Body* constructBody(long double mass, Vector* pos, Vector* velocity);
 Force* constructForce(char* name, Vector* vector, Vector* tailPos);
 void addForce(Body* body, Force* F);
 void removeForce(Body* body, Force* F);
@@ -58,43 +59,43 @@ Vector* netForce(Body* body);
 Vector* accelerationFromForce(Body* body);
 Force* gravityForce(Body* body);
 Force* normalForce(Body* body, Vector* surfaceNormal);
-Force* frictionForce(Force* normal, double mu, Vector* direction);
-Force* springForce(Body* body, Vector* anchor, double k, double restLength);
-Force* dragForce(Body* body, double coeff);
+Force* frictionForce(Force* normal, long double mu, Vector* direction);
+Force* springForce(Body* body, Vector* anchor, long double k, long double restLength);
+Force* dragForce(Body* body, long double coeff);
 Force* gravitationalForce(Body* body, Body* other);
-Body* stepBody(Body* body, double timeStep);
-BodySystem* constructBodySystem(Body** bodies, int nBodies);
-BodySystem* stepBodySystem(BodySystem* system, double timeStep);
-BodySystem* simulateBodySystem(BodySystem* system, double timeStep, int steps);
+Body* stepBody(Body* body, long double timeStep);
+BodySystem* constructBodySystem(Body** bodies, size_t nBodies);
+BodySystem* stepBodySystem(BodySystem* system, long double timeStep);
+BodySystem* simulateBodySystem(BodySystem* system, long double timeStep, int steps);
 
 /* ---------- Conservation quantities ----------- */
-double momentumMagnitude(Body* body);
+long double momentumMagnitude(Body* body);
 Vector* momentumVector(Body* body);
-double kineticEnergy(Body* body);
-double gravPotentialEnergy(Body* body, double height);
-double springPotentialEnergy(double k, double x);
+long double kineticEnergy(Body* body);
+long double gravPotentialEnergy(Body* body, long double height);
+long double springPotentialEnergy(long double k, long double x);
 Vector* totalMomentum(BodySystem* system);
-double totalEnergy(BodySystem* system);
-double work(Force* F, Vector* disp);
-double power(Force* F, Vector* vel);
-double impulseMagnitude(Force* F, double time);
-Vector* impulseVector(Force* F, double time);
+long double totalEnergy(BodySystem* system);
+long double work(Force* F, Vector* disp);
+long double power(Force* F, Vector* vel);
+long double impulseMagnitude(Force* F, long double time);
+Vector* impulseVector(Force* F, long double time);
 
 /* ---------- Collisions ---------- */
-Vector* centerOfMass(Body** bodies, int nBodies);
-Vector* centerOfMassVelocity(Body** bodies, int nBodies);
+Vector* centerOfMass(Body** bodies, size_t nBodies);
+Vector* centerOfMassVelocity(Body** bodies, size_t nBodies);
 void elasticCollision1D(Body* b1, Body* b2);
 void inelasticCollision1D(Body* b1, Body* b2);
 
 /* ---------- Rotational dynamics ---------- */
-double momentOfInertiaPoint(double m, double r);
-double momentOfInertiaRod(double m, double L);
-double momentOfInertiaDisk(double m, double R);
-double parallelAxisTheorem(double I_cm, double m, double d);
+long double momentOfInertiaPoint(long double m, long double r);
+long double momentOfInertiaRod(long double m, long double L);
+long double momentOfInertiaDisk(long double m, long double R);
+long double parallelAxisTheorem(long double I_cm, long double m, long double d);
 Vector* torque(Force* F, Vector* pivot);
 Vector* angularMomentum(Body* body, Vector* pivot);
-double rotationalKineticEnergy(double I, double omega);
-double angularAccelerationFromTorque(double netTorque, double I);
+long double rotationalKineticEnergy(long double I, long double omega);
+long double angularAccelerationFromTorque(long double netTorque, long double I);
 
 
 #endif

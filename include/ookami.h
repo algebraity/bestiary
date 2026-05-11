@@ -2,13 +2,14 @@
 #define OOKAMI_H
 
 #include<stdbool.h>
+#include<stddef.h>
 #include "hebi.h"
 
 /* ---------- Definition of structs ---------- */
 
 typedef struct CombSet {
     long long *set;
-    int card;
+    size_t card;
 } CombSet;
 
 /* ---------- Helper methods ---------- */
@@ -17,12 +18,12 @@ int comp(const void* a, const void* b);
 
 /* ---------- Main CombSet methods ---------- */
 
-void normalizeSet(long long* set, int* card);
+void normalizeSet(long long* set, size_t* card);
 void printSet(CombSet* combset);
-CombSet* constructCombset(long long* baseSet, int card);
+CombSet* constructCombset(long long* baseSet, size_t card);
 CombSet* constructRangeSet(long long start, long long end, long long step);
-CombSet* constructArithmeticProgressionSet(long long first, long long diff, int terms);
-CombSet* constructGeometricProgressionSet(long long first, long long ratio, int terms);
+CombSet* constructArithmeticProgressionSet(long long first, long long diff, size_t terms);
+CombSet* constructGeometricProgressionSet(long long first, long long ratio, size_t terms);
 void freeCombset(CombSet* combset);
 CombSet* copyCombset(CombSet* combset);
 bool compCombset(CombSet* A, CombSet* B);
@@ -63,9 +64,9 @@ CombSet* dilateSet(CombSet* combset, long long n);
 
 /* ---------- Extra properties ---------- */
 
-int adsCard(CombSet* combset);
-int ddsCard(CombSet* combset);
-int mdsCard(CombSet* combset);
+size_t adsCard(CombSet* combset);
+size_t ddsCard(CombSet* combset);
+size_t mdsCard(CombSet* combset);
 bool isArithmeticProgression(CombSet* combset);
 bool isGeometricProgression(CombSet* combset);
 

@@ -50,23 +50,38 @@ static int checkedNegLongLong(long long value, long long* out) {
     return 1;
 }
 
-static int checkedCardProduct(int a, int b, int* out) {
-    if (a < 0 || b < 0 || !out) return 0;
-    if (a != 0 && b > INT_MAX / a) return 0;
+static int checkedSizeProduct(size_t a, size_t b, size_t* out) {
+    if (!out) return 0;
+    if (a != 0 && b > (size_t)-1 / a) return 0;
     *out = a * b;
     return 1;
 }
 
+static int sizeToLongLong(size_t value, long long* out) {
+    if (value > (size_t)LLONG_MAX || !out) return 0;
+    *out = (long long)value;
+    return 1;
+}
+
+static int checkedTupleCount(size_t n, int k, size_t* total) {
+    if (!total || k < 0) return 0;
+    *total = 1;
+    for (int i = 0; i < k; i++) {
+        if (!checkedSizeProduct(*total, n, total)) return 0;
+    }
+    return 1;
+}
+
 // Sort and deduplicate the set
-void normalizeSet(long long* set, int *card) {
+void normalizeSet(long long* set, size_t *card) {
     if (*card < 1) return;
 
     // Sort the set
     qsort(set, *card, sizeof(long long), comp);
     
     // Deduplicate the set
-    int j = 0;
-    for (int i = 1; i < *card; i++) {
+    size_t j = 0;
+    for (size_t i = 1; i < *card; i++) {
 	if (set[i] != set[j]) set[++j] = set[i];
     }
 
@@ -76,18 +91,22 @@ void normalizeSet(long long* set, int *card) {
 // Print the elements of combset
 void printSet(CombSet* combset) {
     printf("[");
-    for (int i = 0; i < combset->card-1; i++) printf("%lld, ", combset->set[i]);
-    printf("%lld]\n", combset->set[combset->card-1]);
+    if (!combset || combset->card == 0) {
+        printf("]\n");
+        return;
+    }
+    for (size_t i = 0; i + 1 < combset->card; i++) printf("%lld, ", combset->set[i]);
+    printf("%lld]\n", combset->set[combset->card - 1]);
 }
 
 // Construct a CombSet from a base set, given the cardinality of the set
-CombSet* constructCombset(long long* baseSet, int card) {
+CombSet* constructCombset(long long* baseSet, size_t card) {
     if (card < 1) return NULL;
 
     // Define a new CombSet and set the cardinality
     CombSet* combset = malloc(sizeof(CombSet));
     if (!combset) return NULL;
-    combset->set = malloc((size_t)card * sizeof(long long));
+    combset->set = malloc(card * sizeof(long long));
     if (!combset->set) {
         free(combset);
         return NULL;
@@ -95,7 +114,7 @@ CombSet* constructCombset(long long* baseSet, int card) {
     combset->card = card;
 
     // Define and normalize the base set
-    for (int i = 0; i < combset->card; i++) combset->set[i] = baseSet[i];
+    for (size_t i = 0; i < combset->card; i++) combset->set[i] = baseSet[i];
     normalizeSet(combset->set, &(combset->card));
     
     // Return the resulting CombSet
@@ -109,31 +128,32 @@ CombSet* constructRangeSet(long long start, long long end, long long step) {
 
     long long distance;
     if (!checkedSubLongLong(end, start, &distance)) return NULL;
-    long long count = distance / step + 1;
-    if (count < 1 || count > INT_MAX) return NULL;
+    long long rawCount = distance / step + 1;
+    if (rawCount < 1) return NULL;
+    size_t count = (size_t)rawCount;
 
-    long long* elems = malloc((size_t)count * sizeof(long long));
+    long long* elems = malloc(count * sizeof(long long));
     if (!elems) return NULL;
-    for (long long i = 0; i < count; i++) {
+    for (size_t i = 0; i < count; i++) {
         long long offset;
-        if (!checkedMulLongLong(i, step, &offset) || !checkedAddLongLong(start, offset, &elems[i])) {
+        if (!checkedMulLongLong((long long)i, step, &offset) || !checkedAddLongLong(start, offset, &elems[i])) {
             free(elems);
             return NULL;
         }
     }
 
-    CombSet* result = constructCombset(elems, (int)count);
+    CombSet* result = constructCombset(elems, count);
     free(elems);
     return result;
 }
 
 // Construct the arithmetic progression {first + i*diff : 0 <= i < terms}
-CombSet* constructArithmeticProgressionSet(long long first, long long diff, int terms) {
+CombSet* constructArithmeticProgressionSet(long long first, long long diff, size_t terms) {
     if (terms < 1) return NULL;
 
-    long long* elems = malloc((size_t)terms * sizeof(long long));
+    long long* elems = malloc(terms * sizeof(long long));
     if (!elems) return NULL;
-    for (int i = 0; i < terms; i++) {
+    for (size_t i = 0; i < terms; i++) {
         long long offset;
         if (!checkedMulLongLong((long long)i, diff, &offset)
                 || !checkedAddLongLong(first, offset, &elems[i])) {
@@ -148,14 +168,14 @@ CombSet* constructArithmeticProgressionSet(long long first, long long diff, int 
 }
 
 // Construct the geometric progression {first * ratio^i : 0 <= i < terms}
-CombSet* constructGeometricProgressionSet(long long first, long long ratio, int terms) {
+CombSet* constructGeometricProgressionSet(long long first, long long ratio, size_t terms) {
     if (terms < 1) return NULL;
 
-    long long* elems = malloc((size_t)terms * sizeof(long long));
+    long long* elems = malloc(terms * sizeof(long long));
     if (!elems) return NULL;
 
     long long current = first;
-    for (int i = 0; i < terms; i++) {
+    for (size_t i = 0; i < terms; i++) {
         elems[i] = current;
         if (i + 1 < terms && !checkedMulLongLong(current, ratio, &current)) {
             free(elems);
@@ -176,9 +196,9 @@ void freeCombset(CombSet* combset) {
 
 // Make a copy of a CombSet
 CombSet* copyCombset(CombSet* combset) {
-    long long* newSet = malloc((size_t)combset->card * sizeof(long long));
+    long long* newSet = malloc(combset->card * sizeof(long long));
     if (!newSet) return NULL;
-    for (int i = 0; i < combset->card; i++) newSet[i] = combset->set[i];
+    for (size_t i = 0; i < combset->card; i++) newSet[i] = combset->set[i];
     CombSet* result = constructCombset(newSet, combset->card);
     free(newSet);
     return result;
@@ -187,7 +207,7 @@ CombSet* copyCombset(CombSet* combset) {
 // Compare two CombSets for equality
 bool compCombset(CombSet* A, CombSet* B) {
     if (!(A->card == B->card)) return false;
-    for (int i = 0; i < A->card; i++) if (!(A->set[i] == B->set[i])) return false;
+    for (size_t i = 0; i < A->card; i++) if (!(A->set[i] == B->set[i])) return false;
     return true;
 }
 
@@ -195,8 +215,8 @@ bool compCombset(CombSet* A, CombSet* B) {
 bool isSubset(CombSet* A, CombSet* B) {
     if (B->card < A->card) return false;
     
-    int a = 0;
-    int b = 0;
+    size_t a = 0;
+    size_t b = 0;
     while (b < B->card) {
 	if (A->set[a] == B->set[b]) {
 	    a++;
@@ -215,13 +235,13 @@ bool isSubset(CombSet* A, CombSet* B) {
 
 // Given CombSets A and B, return A+B
 CombSet* addSets(CombSet* A, CombSet* B) {
-    int n;
-    if (!checkedCardProduct(A->card, B->card, &n)) return NULL;
-    long long *buf = malloc((size_t)n * sizeof(long long));
+    size_t n;
+    if (!checkedSizeProduct(A->card, B->card, &n)) return NULL;
+    long long *buf = malloc(n * sizeof(long long));
     if (!buf) return NULL;
-    int k = 0;
-    for (int i = 0; i < A->card; i++) {
-	for (int j = 0; j < B->card; j++) {
+    size_t k = 0;
+    for (size_t i = 0; i < A->card; i++) {
+	for (size_t j = 0; j < B->card; j++) {
 	    if (!checkedAddLongLong(A->set[i], B->set[j], &buf[k++])) {
             free(buf);
             return NULL;
@@ -236,13 +256,13 @@ CombSet* addSets(CombSet* A, CombSet* B) {
 
 // Given CombSets A and B, return A-B
 CombSet* subtractSets(CombSet* A, CombSet* B) {
-    int n;
-    if (!checkedCardProduct(A->card, B->card, &n)) return NULL;
-    long long *buf = malloc((size_t)n * sizeof(long long));
+    size_t n;
+    if (!checkedSizeProduct(A->card, B->card, &n)) return NULL;
+    long long *buf = malloc(n * sizeof(long long));
     if (!buf) return NULL;
-    int k = 0;
-    for (int i = 0; i < A->card; i++) {
-	for (int j = 0; j < B->card; j++) {
+    size_t k = 0;
+    for (size_t i = 0; i < A->card; i++) {
+	for (size_t j = 0; j < B->card; j++) {
 	    if (!checkedSubLongLong(A->set[i], B->set[j], &buf[k])) {
             free(buf);
             return NULL;
@@ -258,13 +278,13 @@ CombSet* subtractSets(CombSet* A, CombSet* B) {
 
 // Given CombSets A and B, return A*B
 CombSet* multiplySets(CombSet* A, CombSet* B) {
-    int n;
-    if (!checkedCardProduct(A->card, B->card, &n)) return NULL;
-    long long *buf = malloc((size_t)n * sizeof(long long));
+    size_t n;
+    if (!checkedSizeProduct(A->card, B->card, &n)) return NULL;
+    long long *buf = malloc(n * sizeof(long long));
     if (!buf) return NULL;
-    int k = 0;
-    for (int i = 0; i < A->card; i++) {
-	for (int j = 0; j < B->card; j++) {
+    size_t k = 0;
+    for (size_t i = 0; i < A->card; i++) {
+	for (size_t j = 0; j < B->card; j++) {
 	    if (!checkedMulLongLong(A->set[i], B->set[j], &buf[k])) {
             free(buf);
             return NULL;
@@ -301,8 +321,8 @@ CombSet* kads(CombSet* combset, int k) {
     return toReturn;
 }
 
-static int subsetSumsCollect(CombSet* combset, int index, int chosen, int subsetSize,
-                              long long currentSum, long long* sums, int* count) {
+static int subsetSumsCollect(CombSet* combset, size_t index, int chosen, int subsetSize,
+                              long long currentSum, long long* sums, size_t* count) {
     if (index == combset->card) {
         if (subsetSize < 0 || chosen == subsetSize) {
             sums[*count] = currentSum;
@@ -319,14 +339,15 @@ static int subsetSumsCollect(CombSet* combset, int index, int chosen, int subset
 
 CombSet* subsetSums(CombSet* combset, int subsetSize) {
     if (!combset) return NULL;
-    if (subsetSize > combset->card || subsetSize < -1) return NULL;
-    if (combset->card >= (int)(8 * sizeof(size_t))) return NULL;
+    if (subsetSize < -1) return NULL;
+    if (subsetSize >= 0 && (size_t)subsetSize > combset->card) return NULL;
+    if (combset->card >= 8 * sizeof(size_t)) return NULL;
 
     size_t maxCount = (size_t)1 << combset->card;
     long long* sums = malloc(maxCount * sizeof(long long));
     if (!sums) return NULL;
 
-    int count = 0;
+    size_t count = 0;
     if (!subsetSumsCollect(combset, 0, 0, subsetSize, 0, sums, &count)) {
         free(sums);
         return NULL;
@@ -380,12 +401,12 @@ CombSet* kmds(CombSet* combset, int k) {
 
 // Return the intersection of who CombSets
 CombSet* setIntersection(CombSet* A, CombSet* B) {
-    int maxSize = A->card * (A->card <= B->card) + B->card * (A->card > B->card);
+    size_t maxSize = A->card < B->card ? A->card : B->card;
     long long* newSet = malloc(maxSize * sizeof(long long));
 
-    int a = 0;
-    int b = 0;
-    int c = 0;
+    size_t a = 0;
+    size_t b = 0;
+    size_t c = 0;
     while (a < A->card && b < B->card) {
 	if (A->set[a] < B->set[b]) a++;
 	else if (A->set[a] > B->set[b]) b++;
@@ -396,7 +417,10 @@ CombSet* setIntersection(CombSet* A, CombSet* B) {
 	}
     }
 	
-    if (c == 0) return NULL;
+    if (c == 0) {
+        free(newSet);
+        return NULL;
+    }
     CombSet* C = constructCombset(newSet, c);
     free(newSet);
     return C;
@@ -404,12 +428,13 @@ CombSet* setIntersection(CombSet* A, CombSet* B) {
 
 // Return the union of two CombSets
 CombSet* setUnion(CombSet* A, CombSet* B) {
-    int maxSize = A->card + B->card;
+    if (A->card > (size_t)-1 - B->card) return NULL;
+    size_t maxSize = A->card + B->card;
     long long* newSet = malloc(maxSize * sizeof(long long));
 
-    int a = 0;
-    int b = 0;
-    int c = 0;
+    size_t a = 0;
+    size_t b = 0;
+    size_t c = 0;
     while (a < A->card && b < B->card) {
 	if (A->set[a] < B->set[b]) {
 	    newSet[c] = A->set[a];
@@ -430,7 +455,10 @@ CombSet* setUnion(CombSet* A, CombSet* B) {
     while (a < A->card) newSet[c++] = A->set[a++];
     while (b < B->card) newSet[c++] = B->set[b++];
 
-    if (c == 0) return NULL;
+    if (c == 0) {
+        free(newSet);
+        return NULL;
+    }
     CombSet* C = constructCombset(newSet, c);
     free(newSet);
     return C;
@@ -455,14 +483,22 @@ Fraction getDensity(CombSet* combset) {
     long long diameter;
     long long denom;
     if (!getDiameterChecked(combset, &diameter) || !checkedAddLongLong(diameter, 1, &denom)) return (Fraction){0, 0};
-    return constructFraction(combset->card, denom);
+    long long card;
+    if (!sizeToLongLong(combset->card, &card)) return (Fraction){0, 0};
+    return constructFraction(card, denom);
 }
 
 // Compute the doubling contstant of the CombSet: |A + A|/|A|
 Fraction doublingConstant(CombSet* combset) {
     CombSet* combsetads = ads(combset);
     if (!combsetads) return (Fraction){0, 0};
-    Fraction frac = constructFraction(combsetads->card, combset->card);
+    long long numerator;
+    long long denominator;
+    if (!sizeToLongLong(combsetads->card, &numerator) || !sizeToLongLong(combset->card, &denominator)) {
+        freeCombset(combsetads);
+        return (Fraction){0, 0};
+    }
+    Fraction frac = constructFraction(numerator, denominator);
     freeCombset(combsetads);
     return frac;
 }
@@ -471,10 +507,10 @@ Fraction doublingConstant(CombSet* combset) {
 
 // Add an element to the CombSet
 void addElement(CombSet* combset, long long n) {
-    if (combset->card == INT_MAX) return;
-    long long* newSet = malloc((size_t)(combset->card + 1) * sizeof(long long));
+    if (combset->card == (size_t)-1) return;
+    long long* newSet = malloc((combset->card + 1) * sizeof(long long));
     if (!newSet) return;
-    for (int i = 0; i < combset->card; i++) newSet[i] = combset->set[i];
+    for (size_t i = 0; i < combset->card; i++) newSet[i] = combset->set[i];
     newSet[combset->card] = n;
     
     free(combset->set);
@@ -485,9 +521,9 @@ void addElement(CombSet* combset, long long n) {
 
 // Remove an element from the CombSet
 void removeElement(CombSet* combset, long long n) {
-    for (int i = 0; i < combset->card; i++) {
+    for (size_t i = 0; i < combset->card; i++) {
 	if (combset->set[i] == n) {
-	    for (int j = i; j < combset->card-1; j++) combset->set[j] = combset->set[j+1];
+	    for (size_t j = i; j + 1 < combset->card; j++) combset->set[j] = combset->set[j + 1];
 	    combset->card--;
 	    return;
 	}
@@ -496,9 +532,9 @@ void removeElement(CombSet* combset, long long n) {
 
 // Negate every element of the CombSet and normalize the result
 CombSet* negateSet(CombSet* combset) {
-    long long *buf = malloc((size_t)combset->card * sizeof(long long));
+    long long *buf = malloc(combset->card * sizeof(long long));
     if (!buf) return NULL;
-    for (int i = 0; i < combset->card; i++) {
+    for (size_t i = 0; i < combset->card; i++) {
         if (!checkedNegLongLong(combset->set[i], &buf[i])) {
             free(buf);
             return NULL;
@@ -511,9 +547,9 @@ CombSet* negateSet(CombSet* combset) {
 
 // Translate the CombSet by an integer n
 CombSet* translateSet(CombSet* combset, long long n) {
-    long long *buf = malloc((size_t)combset->card * sizeof(long long));
+    long long *buf = malloc(combset->card * sizeof(long long));
     if (!buf) return NULL;
-    for (int i = 0; i < combset->card; i++) {
+    for (size_t i = 0; i < combset->card; i++) {
         if (!checkedAddLongLong(combset->set[i], n, &buf[i])) {
             free(buf);
             return NULL;
@@ -526,9 +562,9 @@ CombSet* translateSet(CombSet* combset, long long n) {
 
 // Dilate the CombSet by an integer n
 CombSet* dilateSet(CombSet* combset, long long n) {
-    long long *buf = malloc((size_t)combset->card * sizeof(long long));
+    long long *buf = malloc(combset->card * sizeof(long long));
     if (!buf) return NULL;
-    for (int i = 0; i < combset->card; i++) {
+    for (size_t i = 0; i < combset->card; i++) {
         if (!checkedMulLongLong(combset->set[i], n, &buf[i])) {
             free(buf);
             return NULL;
@@ -542,28 +578,28 @@ CombSet* dilateSet(CombSet* combset, long long n) {
 /* ---------- Extra properties ---------- */
 
 // Return |A+A|
-int adsCard(CombSet* combset) {
+size_t adsCard(CombSet* combset) {
     CombSet* combsetads = ads(combset);
-    if (!combsetads) return -1;
-    int adscard = combsetads->card;
+    if (!combsetads) return 0;
+    size_t adscard = combsetads->card;
     freeCombset(combsetads);
     return adscard;
 }
 
 // Return |A-A|
-int ddsCard(CombSet* combset) {
+size_t ddsCard(CombSet* combset) {
     CombSet* combsetdds = dds(combset);
-    if (!combsetdds) return -1;
-    int ddscard = combsetdds->card;
+    if (!combsetdds) return 0;
+    size_t ddscard = combsetdds->card;
     freeCombset(combsetdds);
     return ddscard;
 }
 
 // Return |A*A|
-int mdsCard(CombSet* combset) {
+size_t mdsCard(CombSet* combset) {
     CombSet* combsetmds = mds(combset);
-    if (!combsetmds) return -1;
-    int mdscard = combsetmds->card;
+    if (!combsetmds) return 0;
+    size_t mdscard = combsetmds->card;
     freeCombset(combsetmds);
     return mdscard;
 }
@@ -574,7 +610,7 @@ bool isArithmeticProgression(CombSet* combset) {
 
     long long d;
     if (!checkedSubLongLong(combset->set[1], combset->set[0], &d)) return false;
-    for (int i = 0; i < combset->card-1; i++) {
+    for (size_t i = 0; i + 1 < combset->card; i++) {
         long long step;
         if (!checkedSubLongLong(combset->set[i + 1], combset->set[i], &step) || step != d) return false;
     }
@@ -585,11 +621,11 @@ bool isArithmeticProgression(CombSet* combset) {
 // Determine if a CombSet is a geometric progression
 bool isGeometricProgression(CombSet* combset) {
     if (combset->card == 1) return true;
-    for (int i = 0; i < combset->card; i++) if (combset->set[i] == 0) return false;
+    for (size_t i = 0; i < combset->card; i++) if (combset->set[i] == 0) return false;
 
     long long a0 = combset->set[0];
     long long a1 = combset->set[1];
-    for (int i = 1; i < combset->card-1; i++) {
+    for (size_t i = 1; i + 1 < combset->card; i++) {
         long long lhs, rhs;
         if (!checkedMulLongLong(combset->set[i + 1], a0, &lhs)
                 || !checkedMulLongLong(a1, combset->set[i], &rhs)
@@ -601,7 +637,7 @@ bool isGeometricProgression(CombSet* combset) {
 
 /* ---------- Distance measures ---------- */
 
-// Compute the Ruzsa distance between two CombSets: |A - B|/sqrt(|A| * |B|)
+// Compute the Ruzsa distance between two CombSets: |A - B|/sqrtl(|A| * |B|)
 long double ruzsaDistance(CombSet* A, CombSet* B) {
     if (A->card == 0 || B->card == 0) return 0;
     CombSet* diffset = subtractSets(A, B);
@@ -611,7 +647,7 @@ long double ruzsaDistance(CombSet* A, CombSet* B) {
     return result;
 }
 
-// Compute the Ruzsa distance between two CombSets: |A + B|/sqrt(|A| * |B|)
+// Compute the Ruzsa distance between two CombSets: |A + B|/sqrtl(|A| * |B|)
 long double ruzsaDistancePositive(CombSet* A, CombSet* B) {
     if (A->card == 0 || B->card == 0) return 0;
     CombSet* sumset = addSets(A, B);
@@ -623,21 +659,32 @@ long double ruzsaDistancePositive(CombSet* A, CombSet* B) {
 
 /* ---------- Representation functions ---------- */
 
-// Compute the k-fold additive representation function of an int for a CombSet
+// Compute the k-fold additive representation function of an integer for a CombSet
 long long kRepAdd(CombSet* combset, long long x, int k) {
     if (!combset || k <= 0) return 0;
-    int n = combset->card;
-    long long total = 1;
-    for (int i = 0; i < k; i++) total *= n;
+    size_t n = combset->card;
+    size_t total = 1;
+    if (!checkedTupleCount(n, k, &total)) return 0;
 
-    int* index = calloc((size_t)k, sizeof(int));
+    size_t* index = calloc((size_t)k, sizeof(size_t));
     if (!index) return 0;
     long long count = 0;
 
-    for (long long t = 0; t < total; t++) {
+    for (size_t t = 0; t < total; t++) {
 	long long s = 0;
-	for (int i = 0; i < k; i++) s += combset->set[index[i]];
-	if (s == x) count++;
+	for (int i = 0; i < k; i++) {
+            if (!checkedAddLongLong(s, combset->set[index[i]], &s)) {
+                free(index);
+                return 0;
+            }
+        }
+	if (s == x) {
+            if (count == LLONG_MAX) {
+                free(index);
+                return 0;
+            }
+            count++;
+        }
 	for (int i = 0; i < k; i++) {
 	    if (++index[i] < n) break;
 	    index[i] = 0;
@@ -648,21 +695,32 @@ long long kRepAdd(CombSet* combset, long long x, int k) {
     return count;
 }
 
-// Compute the k-fold difference representation function of an int for a CombSet
+// Compute the k-fold difference representation function of an integer for a CombSet
 long long kRepDiff(CombSet* combset, long long x, int k) {
     if (!combset || k <= 0) return 0;
-    int n = combset->card;
-    long long total = 1;
-    for (int i = 0; i < k; i++) total *= n;
+    size_t n = combset->card;
+    size_t total = 1;
+    if (!checkedTupleCount(n, k, &total)) return 0;
 
-    int* index = calloc((size_t)k, sizeof(int));
+    size_t* index = calloc((size_t)k, sizeof(size_t));
     if (!index) return 0;
     long long count = 0;
 
-    for (long long t = 0; t < total; t++) {
+    for (size_t t = 0; t < total; t++) {
 	long long s = combset->set[index[0]];
-	for (int i = 1; i < k; i++) s -= combset->set[index[i]];
-	if (s == x) count++;
+	for (int i = 1; i < k; i++) {
+            if (!checkedSubLongLong(s, combset->set[index[i]], &s)) {
+                free(index);
+                return 0;
+            }
+        }
+	if (s == x) {
+            if (count == LLONG_MAX) {
+                free(index);
+                return 0;
+            }
+            count++;
+        }
 	for (int i = 0; i < k; i++) {
 	    if (++index[i] < n) break;
 	    index[i] = 0;
@@ -673,21 +731,32 @@ long long kRepDiff(CombSet* combset, long long x, int k) {
     return count;
 }
 
-// Compute the k-fold multiplicative representation function of an int for a CombSet
+// Compute the k-fold multiplicative representation function of an integer for a CombSet
 long long kRepMult(CombSet* combset, long long x, int k) {
     if (!combset || k <= 0) return 0;
-    int n = combset->card;
-    long long total = 1;
-    for (int i = 0; i < k; i++) total *= n;
+    size_t n = combset->card;
+    size_t total = 1;
+    if (!checkedTupleCount(n, k, &total)) return 0;
 
-    int* index = calloc((size_t)k, sizeof(int));
+    size_t* index = calloc((size_t)k, sizeof(size_t));
     if (!index) return 0;
     long long count = 0;
 
-    for (long long t = 0; t < total; t++) {
+    for (size_t t = 0; t < total; t++) {
 	long long s = 1;
-	for (int i = 0; i < k; i++) s *= combset->set[index[i]];
-	if (s == x) count++;
+	for (int i = 0; i < k; i++) {
+            if (!checkedMulLongLong(s, combset->set[index[i]], &s)) {
+                free(index);
+                return 0;
+            }
+        }
+	if (s == x) {
+            if (count == LLONG_MAX) {
+                free(index);
+                return 0;
+            }
+            count++;
+        }
 	for (int i = 0; i < k; i++) {
 	    if (++index[i] < n) break;
 	    index[i] = 0;
@@ -698,17 +767,17 @@ long long kRepMult(CombSet* combset, long long x, int k) {
     return count;
 }
 
-// Compute the additive representation function of an int for a CombSet
+// Compute the additive representation function of an integer for a CombSet
 long long repAdd(CombSet* combset, long long x) {
     return kRepAdd(combset, x, 2);
 }
 
-// Compute the difference representation function of an int for a CombSet
+// Compute the difference representation function of an integer for a CombSet
 long long repDiff(CombSet* combset, long long x) {
     return kRepDiff(combset, x, 2);
 }
 
-// Compute the multiplicative representation function of an int for a CombSet
+// Compute the multiplicative representation function of an integer for a CombSet
 long long repMult(CombSet* combset, long long x) {
     return kRepMult(combset, x, 2);
 }
@@ -718,12 +787,12 @@ long long repMult(CombSet* combset, long long x) {
 // Compute the k-fold additive energy of a CombSet
 long long kEnergyAdd(CombSet* A, int k) {
     if (!A || k <= 0) return 0;
-    int n = A->card;
-    long long total = 1;
-    for (int i = 0; i < k; i++) total *= n;
+    size_t n = A->card;
+    size_t total = 1;
+    if (!checkedTupleCount(n, k, &total)) return 0;
     
     long long* sums = malloc(total * sizeof(long long));
-    int* index = calloc((size_t)k, sizeof(int));
+    size_t* index = calloc((size_t)k, sizeof(size_t));
     if (!sums || !index) {
         free(sums);
         free(index);
@@ -731,9 +800,15 @@ long long kEnergyAdd(CombSet* A, int k) {
     }
     
     // Enumerate all k-tuples, record their sums
-    for (long long t = 0; t < total; t++) {
+    for (size_t t = 0; t < total; t++) {
         long long s = 0;
-        for (int i = 0; i < k; i++) s += A->set[index[i]];
+        for (int i = 0; i < k; i++) {
+            if (!checkedAddLongLong(s, A->set[index[i]], &s)) {
+                free(sums);
+                free(index);
+                return 0;
+            }
+        }
         sums[t] = s;
         for (int i = 0; i < k; i++) {
             if (++index[i] < n) break;
@@ -744,12 +819,19 @@ long long kEnergyAdd(CombSet* A, int k) {
     // Sort, then sum squares of run lengths
     qsort(sums, total, sizeof(long long), comp);
     long long energy = 0;
-    long long i = 0;
+    size_t i = 0;
     while (i < total) {
-        long long j = i;
+        size_t j = i;
         while (j < total && sums[j] == sums[i]) j++;
-        long long count = j - i;
-        energy += count * count;
+        long long count;
+        long long square;
+        if (!sizeToLongLong(j - i, &count)
+                || !checkedMulLongLong(count, count, &square)
+                || !checkedAddLongLong(energy, square, &energy)) {
+            free(sums);
+            free(index);
+            return 0;
+        }
         i = j;
     }
     
@@ -761,12 +843,12 @@ long long kEnergyAdd(CombSet* A, int k) {
 // Compute the k-fold difference energy of a CombSet
 long long kEnergyDiff(CombSet* A, int k) {
     if (!A || k <= 0) return 0;
-    int n = A->card;
-    long long total = 1;
-    for (int i = 0; i < k; i++) total *= n;
+    size_t n = A->card;
+    size_t total = 1;
+    if (!checkedTupleCount(n, k, &total)) return 0;
     
     long long* diffs = malloc(total * sizeof(long long));
-    int* index = calloc((size_t)k, sizeof(int));
+    size_t* index = calloc((size_t)k, sizeof(size_t));
     if (!diffs || !index) {
         free(diffs);
         free(index);
@@ -774,9 +856,15 @@ long long kEnergyDiff(CombSet* A, int k) {
     }
     
     // Enumerate all k-tuples, record their differences
-    for (long long t = 0; t < total; t++) {
+    for (size_t t = 0; t < total; t++) {
         long long s = A->set[index[0]];
-        for (int i = 1; i < k; i++) s -= A->set[index[i]];
+        for (int i = 1; i < k; i++) {
+            if (!checkedSubLongLong(s, A->set[index[i]], &s)) {
+                free(diffs);
+                free(index);
+                return 0;
+            }
+        }
         diffs[t] = s;
         for (int i = 0; i < k; i++) {
             if (++index[i] < n) break;
@@ -787,12 +875,19 @@ long long kEnergyDiff(CombSet* A, int k) {
     // Sort, then sum squares of run lengths
     qsort(diffs, total, sizeof(long long), comp);
     long long energy = 0;
-    long long i = 0;
+    size_t i = 0;
     while (i < total) {
-        long long j = i;
+        size_t j = i;
         while (j < total && diffs[j] == diffs[i]) j++;
-        long long count = j - i;
-        energy += count * count;
+        long long count;
+        long long square;
+        if (!sizeToLongLong(j - i, &count)
+                || !checkedMulLongLong(count, count, &square)
+                || !checkedAddLongLong(energy, square, &energy)) {
+            free(diffs);
+            free(index);
+            return 0;
+        }
         i = j;
     }
     
@@ -804,12 +899,12 @@ long long kEnergyDiff(CombSet* A, int k) {
 // Compute the k-fold multiplicative energy of a CombSet
 long long kEnergyMult(CombSet* A, int k) {
     if (!A || k <= 0) return 0;
-    int n = A->card;
-    long long total = 1;
-    for (int i = 0; i < k; i++) total *= n;
+    size_t n = A->card;
+    size_t total = 1;
+    if (!checkedTupleCount(n, k, &total)) return 0;
     
     long long* prods = malloc(total * sizeof(long long));
-    int* index = calloc((size_t)k, sizeof(int));
+    size_t* index = calloc((size_t)k, sizeof(size_t));
     if (!prods || !index) {
         free(prods);
         free(index);
@@ -817,9 +912,15 @@ long long kEnergyMult(CombSet* A, int k) {
     }
     
     // Enumerate all k-tuples, record their products
-    for (long long t = 0; t < total; t++) {
+    for (size_t t = 0; t < total; t++) {
         long long s = 1;
-        for (int i = 0; i < k; i++) s *= A->set[index[i]];
+        for (int i = 0; i < k; i++) {
+            if (!checkedMulLongLong(s, A->set[index[i]], &s)) {
+                free(prods);
+                free(index);
+                return 0;
+            }
+        }
         prods[t] = s;
         for (int i = 0; i < k; i++) {
             if (++index[i] < n) break;
@@ -830,12 +931,19 @@ long long kEnergyMult(CombSet* A, int k) {
     // Sort, then sum squares of run lengths
     qsort(prods, total, sizeof(long long), comp);
     long long energy = 0;
-    long long i = 0;
+    size_t i = 0;
     while (i < total) {
-        long long j = i;
+        size_t j = i;
         while (j < total && prods[j] == prods[i]) j++;
-        long long count = j - i;
-        energy += count * count;
+        long long count;
+        long long square;
+        if (!sizeToLongLong(j - i, &count)
+                || !checkedMulLongLong(count, count, &square)
+                || !checkedAddLongLong(energy, square, &energy)) {
+            free(prods);
+            free(index);
+            return 0;
+        }
         i = j;
     }
     

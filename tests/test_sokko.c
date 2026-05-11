@@ -29,33 +29,33 @@ static int testsPassed = 0;
 #define SECTION(name) printf("\n=== %s ===\n", name)
 
 // Approximate equality for doubles
-static bool approx(double a, double b, double tol) {
+static bool approx(long double a, long double b, long double tol) {
     if (isnan(a) && isnan(b)) return true;
-    return fabs(a - b) <= tol;
+    return fabsl(a - b) <= tol;
 }
 
 // Approximate equality between a MatrixElement and an expected (re, im) pair
-static bool approxElem(MatrixElement e, double re, double im, double tol) {
-    double actualRe = e.isComplex ? e.value.complex.real : e.value.real;
-    double actualIm = e.isComplex ? e.value.complex.imag : 0.0;
+static bool approxElem(MatrixElement e, long double re, long double im, long double tol) {
+    long double actualRe = e.isComplex ? e.value.complex.real : e.value.real;
+    long double actualIm = e.isComplex ? e.value.complex.imag : 0.0;
     if (isnan(actualRe) && isnan(re)) return true;
-    return fabs(actualRe - re) <= tol && fabs(actualIm - im) <= tol;
+    return fabsl(actualRe - re) <= tol && fabsl(actualIm - im) <= tol;
 }
 
 // Approximate equality between a MatrixElement and an expected real value
-static bool approxReal(MatrixElement e, double expected, double tol) {
+static bool approxReal(MatrixElement e, long double expected, long double tol) {
     return approxElem(e, expected, 0.0, tol);
 }
 
 // Shorthands for building MatrixElements in tests
-static MatrixElement R(double x) { return elemFromReal(x); }
-static MatrixElement C(double re, double im) {
+static MatrixElement R(long double x) { return elemFromReal(x); }
+static MatrixElement C(long double re, long double im) {
     ComplexNumber c = {re, im};
     return elemFromComplex(c);
 }
 
-// Build a matrix from a plain double array for readability
-static Matrix* makeRealMatrix(int rows, int cols, const double* data) {
+// Build a matrix from a plain long double array for readability
+static Matrix* makeRealMatrix(int rows, int cols, const long double* data) {
     int n = rows * cols;
     MatrixElement* buf = malloc(n * sizeof(MatrixElement));
     for (int i = 0; i < n; i++) buf[i] = R(data[i]);
@@ -64,7 +64,7 @@ static Matrix* makeRealMatrix(int rows, int cols, const double* data) {
     return m;
 }
 
-static Vector* makeRealVector(int dim, const double* data) {
+static Vector* makeRealVector(int dim, const long double* data) {
     return makeRealMatrix(dim, 1, data);
 }
 
@@ -72,14 +72,14 @@ static Vector* makeRealVector(int dim, const double* data) {
 
 void testComp() {
     SECTION("comp");
-    double a = 1.0, b = 2.0, c = 1.0;
+    long long a = 1, b = 2, c = 1;
     CHECK(comp(&a, &b) < 0, "comp a < b");
     CHECK(comp(&b, &a) > 0, "comp b > a");
     CHECK(comp(&a, &c) == 0, "comp a == c");
 
-    double arr[] = {3.0, 1.0, 4.0, 1.0, 5.0, 9.0, 2.0, 6.0};
-    qsort(arr, 8, sizeof(double), comp);
-    CHECK(arr[0] == 1.0 && arr[7] == 9.0, "qsort with comp");
+    long long arr[] = {3, 1, 4, 1, 5, 9, 2, 6};
+    qsort(arr, 8, sizeof(long long), comp);
+    CHECK(arr[0] == 1 && arr[7] == 9, "qsort with comp");
 }
 
 void testIsSquare() {
@@ -202,51 +202,51 @@ void testComplexArith() {
     CHECK(approx(complexArg((ComplexNumber){0, 1}), M_PI/2, 1e-12), "arg(i) = pi/2");
     CHECK(approx(complexArg((ComplexNumber){-1, 0}), M_PI, 1e-12), "arg(-1) = pi");
 
-    // sqrt(-1) = i (thanks to real fast path)
+    // sqrtl(-1) = i (thanks to real fast path)
     ComplexNumber sqrtNeg1 = complexSqrt((ComplexNumber){-1, 0});
-    CHECK(sqrtNeg1.real == 0.0 && approx(sqrtNeg1.imag, 1.0, 1e-12), "sqrt(-1) = i exactly");
+    CHECK(sqrtNeg1.real == 0.0 && approx(sqrtNeg1.imag, 1.0, 1e-12), "sqrtl(-1) = i exactly");
 
-    // sqrt(4) = 2 (real fast path, no imag noise)
+    // sqrtl(4) = 2 (real fast path, no imag noise)
     ComplexNumber sqrt4 = complexSqrt((ComplexNumber){4, 0});
-    CHECK(sqrt4.real == 2.0 && sqrt4.imag == 0.0, "sqrt(4) = 2 exactly");
+    CHECK(sqrt4.real == 2.0 && sqrt4.imag == 0.0, "sqrtl(4) = 2 exactly");
 
-    // sqrt(-4) = 2i
+    // sqrtl(-4) = 2i
     ComplexNumber sqrtNeg4 = complexSqrt((ComplexNumber){-4, 0});
-    CHECK(sqrtNeg4.real == 0.0 && approx(sqrtNeg4.imag, 2.0, 1e-12), "sqrt(-4) = 2i");
+    CHECK(sqrtNeg4.real == 0.0 && approx(sqrtNeg4.imag, 2.0, 1e-12), "sqrtl(-4) = 2i");
 
-    // sqrt(3 + 4i) = 2 + i (check 2+i squared = 4 + 4i - 1 = 3 + 4i)
+    // sqrtl(3 + 4i) = 2 + i (check 2+i squared = 4 + 4i - 1 = 3 + 4i)
     ComplexNumber sqrtComplex = complexSqrt((ComplexNumber){3, 4});
-    CHECK(approx(sqrtComplex.real, 2.0, 1e-12) && approx(sqrtComplex.imag, 1.0, 1e-12), "sqrt(3+4i) = 2+i");
+    CHECK(approx(sqrtComplex.real, 2.0, 1e-12) && approx(sqrtComplex.imag, 1.0, 1e-12), "sqrtl(3+4i) = 2+i");
 
-    // cbrt(8) = 2 (real fast path)
+    // cbrtl(8) = 2 (real fast path)
     ComplexNumber cbrt8 = complexCbrt((ComplexNumber){8, 0});
-    CHECK(cbrt8.real == 2.0 && cbrt8.imag == 0.0, "cbrt(8) = 2 exactly");
+    CHECK(cbrt8.real == 2.0 && cbrt8.imag == 0.0, "cbrtl(8) = 2 exactly");
 
-    // cbrt(-8) = -2 (real fast path)
+    // cbrtl(-8) = -2 (real fast path)
     ComplexNumber cbrtNeg8 = complexCbrt((ComplexNumber){-8, 0});
-    CHECK(cbrtNeg8.real == -2.0 && cbrtNeg8.imag == 0.0, "cbrt(-8) = -2 exactly");
+    CHECK(cbrtNeg8.real == -2.0 && cbrtNeg8.imag == 0.0, "cbrtl(-8) = -2 exactly");
 
-    // cbrt(i) should have abs 1 and arg pi/6
+    // cbrtl(i) should have abs 1 and arg pi/6
     ComplexNumber cbrtI = complexCbrt((ComplexNumber){0, 1});
-    CHECK(approx(complexAbs(cbrtI), 1.0, 1e-12), "|cbrt(i)| = 1");
-    // cbrt(i) = cos(pi/6) + i sin(pi/6) = sqrt(3)/2 + i/2
-    CHECK(approx(cbrtI.real, sqrt(3)/2, 1e-12), "Re(cbrt(i)) = sqrt(3)/2");
-    CHECK(approx(cbrtI.imag, 0.5, 1e-12), "Im(cbrt(i)) = 1/2");
+    CHECK(approx(complexAbs(cbrtI), 1.0, 1e-12), "|cbrtl(i)| = 1");
+    // cbrtl(i) = cosl(pi/6) + i sinl(pi/6) = sqrtl(3)/2 + i/2
+    CHECK(approx(cbrtI.real, sqrtl(3)/2, 1e-12), "Re(cbrtl(i)) = sqrtl(3)/2");
+    CHECK(approx(cbrtI.imag, 0.5, 1e-12), "Im(cbrtl(i)) = 1/2");
 
     ComplexNumber expIpi = complexExp((ComplexNumber){0, M_PI});
-    CHECK(approx(expIpi.real, -1.0, 1e-12) && approx(expIpi.imag, 0.0, 1e-12), "exp(i*pi) = -1");
+    CHECK(approx(expIpi.real, -1.0, 1e-12) && approx(expIpi.imag, 0.0, 1e-12), "expl(i*pi) = -1");
 
     ComplexNumber logNeg1 = complexLog((ComplexNumber){-1, 0});
-    CHECK(approx(logNeg1.real, 0.0, 1e-12) && approx(logNeg1.imag, M_PI, 1e-12), "log(-1) = i*pi");
+    CHECK(approx(logNeg1.real, 0.0, 1e-12) && approx(logNeg1.imag, M_PI, 1e-12), "logl(-1) = i*pi");
 
     ComplexNumber sinI = complexSin((ComplexNumber){0, 1});
-    CHECK(approx(sinI.real, 0.0, 1e-12) && approx(sinI.imag, sinh(1.0), 1e-12), "sin(i) = i sinh(1)");
+    CHECK(approx(sinI.real, 0.0, 1e-12) && approx(sinI.imag, sinh(1.0), 1e-12), "sinl(i) = i sinh(1)");
 
     ComplexNumber cosI = complexCos((ComplexNumber){0, 1});
-    CHECK(approx(cosI.real, cosh(1.0), 1e-12) && approx(cosI.imag, 0.0, 1e-12), "cos(i) = cosh(1)");
+    CHECK(approx(cosI.real, cosh(1.0), 1e-12) && approx(cosI.imag, 0.0, 1e-12), "cosl(i) = cosh(1)");
 
     ComplexNumber tanI = complexTan((ComplexNumber){0, 1});
-    CHECK(approx(tanI.real, 0.0, 1e-12) && approx(tanI.imag, tanh(1.0), 1e-12), "tan(i) = i tanh(1)");
+    CHECK(approx(tanI.real, 0.0, 1e-12) && approx(tanI.imag, tanh(1.0), 1e-12), "tanl(i) = i tanh(1)");
 
     CHECK(complexEq((ComplexNumber){1, 2}, (ComplexNumber){1 + 1e-15, 2}, 1e-12), "complexEq within tol");
     CHECK(!complexEq((ComplexNumber){1, 2}, (ComplexNumber){1, 3}, 1e-12), "complexEq beyond tol");
@@ -364,7 +364,7 @@ void testLuDecompose() {
     freeMatrix(id);
 
     // Decomp of a non-trivial matrix
-    double md[] = {2, 1, 1,  4, 3, 3,  8, 7, 9};
+    long double md[] = {2, 1, 1,  4, 3, 3,  8, 7, 9};
     Matrix* m = makeRealMatrix(3, 3, md);
     LU* lu2 = luDecompose(m);
     CHECK(lu2 != NULL, "3x3 decomposes");
@@ -388,7 +388,7 @@ void testLuDet() {
     freeLU(lu);
     freeMatrix(id);
 
-    double md[] = {3, 8, 4, 6};
+    long double md[] = {3, 8, 4, 6};
     Matrix* m = makeRealMatrix(2, 2, md);
     LU* lu2 = luDecompose(m);
     CHECK(approxReal(luDet(lu2), -14.0, 1e-10), "det 2x2");
@@ -406,7 +406,7 @@ void testLuDet() {
 
 void testCacheLU() {
     SECTION("cacheLU");
-    double md[] = {1, 2, 3, 4};
+    long double md[] = {1, 2, 3, 4};
     Matrix* m = makeRealMatrix(2, 2, md);
     cacheLU(m);
     CHECK(m->cachedLU != NULL, "cache populated");
@@ -487,7 +487,7 @@ void testConstructMatrixFromArray() {
 
 void testPrintMatrix() {
     SECTION("printMatrix");
-    double md[] = {1, 2, 3, 4};
+    long double md[] = {1, 2, 3, 4};
     Matrix* m = makeRealMatrix(2, 2, md);
     printf("  Visual check (should see 2x2 with 1,2,3,4):\n");
     printMatrix(m);
@@ -566,7 +566,7 @@ void testIdMatrix() {
     CHECK(id->numRows == 4 && id->numCols == 4, "dimensions");
     for (int i = 0; i < 4; i++) {
 	for (int j = 0; j < 4; j++) {
-	    double exp = (i == j) ? 1.0 : 0.0;
+	    long double exp = (i == j) ? 1.0 : 0.0;
 	    if (!approxReal(getEntry(id, i, j), exp, 0)) { CHECK(false, "id values"); freeMatrix(id); return; }
 	}
     }
@@ -595,8 +595,8 @@ void testSimpleDotProduct() {
 
 void testDotProduct() {
     SECTION("dotProduct");
-    double va[] = {1, 2, 3};
-    double wa[] = {4, 5, 6};
+    long double va[] = {1, 2, 3};
+    long double wa[] = {4, 5, 6};
     Matrix* v = makeRealVector(3, va);
     Matrix* w = makeRealVector(3, wa);
     CHECK(approxReal(dotProduct(v, w), 32.0, 0), "column dot product");
@@ -614,7 +614,7 @@ void testDotProduct() {
 
 void testMultByConstant() {
     SECTION("multByConstant");
-    double a[] = {1, 2, 3, 4};
+    long double a[] = {1, 2, 3, 4};
     Matrix* m = makeRealMatrix(2, 2, a);
     Matrix* r = multByConstant(m, R(2.5));
     CHECK(approxReal(getEntry(r, 0, 0), 2.5, 1e-12), "(0,0) scaled");
@@ -648,8 +648,8 @@ void testAddMatrices() {
     CHECK(addMatrices(a, b) == NULL, "dim mismatch");
     freeMatrix(b);
 
-    double ad[] = {1, 2, 3, 4};
-    double bd[] = {5, 6, 7, 8};
+    long double ad[] = {1, 2, 3, 4};
+    long double bd[] = {5, 6, 7, 8};
     Matrix* A = makeRealMatrix(2, 2, ad);
     Matrix* B = makeRealMatrix(2, 2, bd);
     Matrix* S = addMatrices(A, B);
@@ -674,8 +674,8 @@ void testSubtractMatrices() {
     SECTION("subtractMatrices");
     CHECK(subtractMatrices(NULL, NULL) == NULL, "NULL inputs");
 
-    double ad[] = {5, 6, 7, 8};
-    double bd[] = {1, 2, 3, 4};
+    long double ad[] = {5, 6, 7, 8};
+    long double bd[] = {1, 2, 3, 4};
     Matrix* A = makeRealMatrix(2, 2, ad);
     Matrix* B = makeRealMatrix(2, 2, bd);
     Matrix* D = subtractMatrices(A, B);
@@ -704,15 +704,15 @@ void testMultiplyMatrices() {
     freeMatrix(b);
 
     // Multiply by identity
-    double ad[] = {1, 2, 3, 4};
+    long double ad[] = {1, 2, 3, 4};
     Matrix* A = makeRealMatrix(2, 2, ad);
     Matrix* I = idMatrix(2);
     Matrix* AI = multiplyMatrices(A, I);
     CHECK(matrixComp(A, AI, 1e-10), "A * I = A");
 
     // Concrete product
-    double xd[] = {1, 2, 3, 4, 5, 6};  // 2x3
-    double yd[] = {7, 8, 9, 10, 11, 12};  // 3x2
+    long double xd[] = {1, 2, 3, 4, 5, 6};  // 2x3
+    long double yd[] = {7, 8, 9, 10, 11, 12};  // 3x2
     Matrix* X = makeRealMatrix(2, 3, xd);
     Matrix* Y = makeRealMatrix(3, 2, yd);
     Matrix* P = multiplyMatrices(X, Y);
@@ -744,8 +744,8 @@ void testTensorMatrices() {
     SECTION("tensorMatrices");
     CHECK(tensorMatrices(NULL, NULL) == NULL, "NULL inputs");
 
-    double ad[] = {1, 2, 3, 4};  // 2x2
-    double bd[] = {0, 5, 6, 7};  // 2x2
+    long double ad[] = {1, 2, 3, 4};  // 2x2
+    long double bd[] = {0, 5, 6, 7};  // 2x2
     Matrix* A = makeRealMatrix(2, 2, ad);
     Matrix* B = makeRealMatrix(2, 2, bd);
     Matrix* T = tensorMatrices(A, B);
@@ -772,7 +772,7 @@ void testTensorMatrices() {
 
 void testTranspose() {
     SECTION("transpose");
-    double arr[] = {1, 2, 3, 4, 5, 6};
+    long double arr[] = {1, 2, 3, 4, 5, 6};
     Matrix* m = makeRealMatrix(2, 3, arr);
     Matrix* t = transpose(m);
     CHECK(t->numRows == 3 && t->numCols == 2, "transpose dims");
@@ -794,7 +794,7 @@ void testAdjoint() {
     CHECK(adjoint(NULL) == NULL, "NULL returns NULL");
 
     // Real matrices: adjoint equals transpose
-    double rd[] = {1, 2, 3, 4, 5, 6};
+    long double rd[] = {1, 2, 3, 4, 5, 6};
     Matrix* Rm = makeRealMatrix(2, 3, rd);
     Matrix* Rt = transpose(Rm);
     Matrix* Ra = adjoint(Rm);
@@ -819,11 +819,11 @@ void testLuSolve() {
     CHECK(luSolve(NULL, NULL) == NULL, "NULL inputs");
 
     // Solve Ax = b for known A, b
-    double ad[] = {4, 3, 6, 3};
+    long double ad[] = {4, 3, 6, 3};
     Matrix* A = makeRealMatrix(2, 2, ad);
     LU* lu = luDecompose(A);
 
-    double bd[] = {10, 12};
+    long double bd[] = {10, 12};
     Matrix* b = makeRealVector(2, bd);
     Matrix* x = luSolve(lu, b);
     // Verify Ax = b
@@ -855,7 +855,7 @@ void testLuInverse() {
     freeLU(lu);
 
     // A * inv(A) = I for non-trivial A
-    double ad[] = {4, 3, 6, 3};
+    long double ad[] = {4, 3, 6, 3};
     Matrix* A = makeRealMatrix(2, 2, ad);
     LU* lu2 = luDecompose(A);
     Matrix* invA = luInverse(lu2);
@@ -866,7 +866,7 @@ void testLuInverse() {
     freeLU(lu2);
 
     // 4x4 case
-    double bd[] = {
+    long double bd[] = {
 	2, 1, 0, 0,
 	1, 2, 1, 0,
 	0, 1, 2, 1,
@@ -893,19 +893,19 @@ void testDeterminant() {
     freeMatrix(nsq);
 
     // 1x1 fast path
-    double a1[] = {7.5};
+    long double a1[] = {7.5};
     Matrix* m1 = makeRealMatrix(1, 1, a1);
     CHECK(approxReal(determinant(m1), 7.5, 0), "1x1 det");
     freeMatrix(m1);
 
     // 2x2 fast path
-    double a2[] = {3, 8, 4, 6};
+    long double a2[] = {3, 8, 4, 6};
     Matrix* m2 = makeRealMatrix(2, 2, a2);
     CHECK(approxReal(determinant(m2), -14.0, 1e-10), "2x2 det");
     freeMatrix(m2);
 
     // 3x3 via LU
-    double a3[] = {6, 1, 1, 4, -2, 5, 2, 8, 7};
+    long double a3[] = {6, 1, 1, 4, -2, 5, 2, 8, 7};
     Matrix* m3 = makeRealMatrix(3, 3, a3);
     CHECK(approxReal(determinant(m3), -306.0, 1e-9), "3x3 det");
     freeMatrix(m3);
@@ -926,9 +926,9 @@ void testSolveLinEq() {
     SECTION("solveLinEq");
     CHECK(solveLinEq(NULL, NULL) == NULL, "NULL inputs");
 
-    double ad[] = {3, 2, 1, 2};
+    long double ad[] = {3, 2, 1, 2};
     Matrix* A = makeRealMatrix(2, 2, ad);
-    double bd[] = {5, 5};
+    long double bd[] = {5, 5};
     Matrix* b = makeRealVector(2, bd);
     Matrix* x = solveLinEq(A, b);
     CHECK(x != NULL, "solve returned");
@@ -966,13 +966,13 @@ void testInvertMatrix() {
     freeMatrix(nsq);
 
     // Singular
-    double sd[] = {1, 2, 2, 4};
+    long double sd[] = {1, 2, 2, 4};
     Matrix* sing = makeRealMatrix(2, 2, sd);
     CHECK(invertMatrix(sing) == NULL, "singular NULL");
     freeMatrix(sing);
 
     // Real inversion
-    double ad[] = {4, 7, 2, 6};
+    long double ad[] = {4, 7, 2, 6};
     Matrix* A = makeRealMatrix(2, 2, ad);
     Matrix* invA = invertMatrix(A);
     CHECK(invA != NULL, "inverse computed");
@@ -982,7 +982,7 @@ void testInvertMatrix() {
     freeMatrix(A); freeMatrix(invA); freeMatrix(prod); freeMatrix(I);
 
     // Larger case — use inverse to solve a linear system, cross-check
-    double bd[] = {
+    long double bd[] = {
 	1, 2, 3,
 	0, 1, 4,
 	5, 6, 0
@@ -1012,9 +1012,9 @@ void testApplyMatrix() {
     freeMatrix(A);
 
     // Identity application
-    double id2d[] = {1, 0, 0, 1};
+    long double id2d[] = {1, 0, 0, 1};
     Matrix* I2 = makeRealMatrix(2, 2, id2d);
-    double vd[] = {3, 4};
+    long double vd[] = {3, 4};
     Matrix* v = makeRealVector(2, vd);
     Matrix* r = applyMatrix(I2, v);
     CHECK(r != NULL, "apply succeeds");
@@ -1024,18 +1024,18 @@ void testApplyMatrix() {
     freeMatrix(v);
 
     // Diagonal 2x2
-    double ad[] = {2, 0, 0, 3};
+    long double ad[] = {2, 0, 0, 3};
     Matrix* D = makeRealMatrix(2, 2, ad);
-    double v2d[] = {1, 2};
+    long double v2d[] = {1, 2};
     Matrix* v2 = makeRealVector(2, v2d);
     Matrix* r2 = applyMatrix(D, v2);
     CHECK(approxReal(getEntry(r2, 0, 0), 2.0, 1e-10) && approxReal(getEntry(r2, 1, 0), 6.0, 1e-10), "diag * v correct");
     freeMatrix(D); freeMatrix(v2); freeMatrix(r2);
 
     // Non-square A: 2x3
-    double nsad[] = {1, 2, 3, 4, 5, 6};
+    long double nsad[] = {1, 2, 3, 4, 5, 6};
     Matrix* nsA = makeRealMatrix(2, 3, nsad);
-    double v3d[] = {1, 0, 1};
+    long double v3d[] = {1, 0, 1};
     Matrix* v3 = makeRealVector(3, v3d);
     Matrix* r3 = applyMatrix(nsA, v3);
     CHECK(r3 != NULL && r3->numRows == 2 && r3->numCols == 1, "non-square result shape");
@@ -1061,7 +1061,7 @@ void testMatrixPow() {
     CHECK(matrixPow(nsq, 2) == NULL, "non-square returns NULL");
     freeMatrix(nsq);
 
-    double ad[] = {1, 2, 3, 4};
+    long double ad[] = {1, 2, 3, 4};
     Matrix* A = makeRealMatrix(2, 2, ad);
 
     // A^0 = I
@@ -1106,13 +1106,13 @@ void testIsSymmetric() {
     freeMatrix(nsq);
 
     // Symmetric
-    double sd[] = {1, 2, 3, 2, 5, 6, 3, 6, 9};
+    long double sd[] = {1, 2, 3, 2, 5, 6, 3, 6, 9};
     Matrix* S = makeRealMatrix(3, 3, sd);
     CHECK(isSymmetric(S) == true, "symmetric 3x3");
     freeMatrix(S);
 
     // Non-symmetric
-    double nd[] = {1, 2, 3, 4};
+    long double nd[] = {1, 2, 3, 4};
     Matrix* N = makeRealMatrix(2, 2, nd);
     CHECK(isSymmetric(N) == false, "non-symmetric 2x2");
     freeMatrix(N);
@@ -1141,7 +1141,7 @@ void testIsAntisymmetric() {
     freeMatrix(nsq);
 
     // Antisymmetric [[0,1],[-1,0]]
-    double ad[] = {0, 1, -1, 0};
+    long double ad[] = {0, 1, -1, 0};
     Matrix* A = makeRealMatrix(2, 2, ad);
     CHECK(isAntisymmetric(A) == true, "[[0,1],[-1,0]] antisymmetric");
     freeMatrix(A);
@@ -1157,7 +1157,7 @@ void testIsAntisymmetric() {
     freeMatrix(id);
 
     // 3x3 antisymmetric
-    double a3d[] = {0, 2, -3, -2, 0, 1, 3, -1, 0};
+    long double a3d[] = {0, 2, -3, -2, 0, 1, 3, -1, 0};
     Matrix* A3 = makeRealMatrix(3, 3, a3d);
     CHECK(isAntisymmetric(A3) == true, "3x3 antisymmetric");
     freeMatrix(A3);
@@ -1176,21 +1176,21 @@ void testIsOrthogonal() {
     freeMatrix(id);
 
     // 90-degree rotation
-    double c = 0.0, s = 1.0;
-    double rotd[] = {c, -s, s, c};
+    long double c = 0.0, s = 1.0;
+    long double rotd[] = {c, -s, s, c};
     Matrix* R_ = makeRealMatrix(2, 2, rotd);
     CHECK(isOrthogonal(R_) == true, "90 deg rotation is orthogonal");
     freeMatrix(R_);
 
     // 45-degree rotation
-    double c45 = sqrt(2.0) / 2.0;
-    double rot45d[] = {c45, -c45, c45, c45};
+    long double c45 = sqrtl(2.0) / 2.0;
+    long double rot45d[] = {c45, -c45, c45, c45};
     Matrix* R45 = makeRealMatrix(2, 2, rot45d);
     CHECK(isOrthogonal(R45) == true, "45 deg rotation is orthogonal");
     freeMatrix(R45);
 
     // Non-orthogonal
-    double nd[] = {2, 0, 0, 1};
+    long double nd[] = {2, 0, 0, 1};
     Matrix* N = makeRealMatrix(2, 2, nd);
     CHECK(isOrthogonal(N) == false, "scaling matrix not orthogonal");
     freeMatrix(N);
@@ -1209,8 +1209,8 @@ void testIsUnitary() {
     freeMatrix(id);
 
     // Real orthogonal matrices are unitary
-    double c45 = sqrt(2.0) / 2.0;
-    double rot45d[] = {c45, -c45, c45, c45};
+    long double c45 = sqrtl(2.0) / 2.0;
+    long double rot45d[] = {c45, -c45, c45, c45};
     Matrix* R45 = makeRealMatrix(2, 2, rot45d);
     CHECK(isUnitary(R45) == true, "real rotation is unitary");
     freeMatrix(R45);
@@ -1241,25 +1241,25 @@ void testRank() {
     freeMatrix(zero);
 
     // Rank-deficient square: [[1,2],[2,4]] has rank 1
-    double rd[] = {1, 2, 2, 4};
+    long double rd[] = {1, 2, 2, 4};
     Matrix* Rm = makeRealMatrix(2, 2, rd);
     CHECK(rank(Rm) == 1, "rank-deficient 2x2 = 1");
     freeMatrix(Rm);
 
     // Square with one zero row: rank 2
-    double r3d[] = {1, 0, 0, 0, 1, 0, 0, 0, 0};
+    long double r3d[] = {1, 0, 0, 0, 1, 0, 0, 0, 0};
     Matrix* R3 = makeRealMatrix(3, 3, r3d);
     CHECK(rank(R3) == 2, "3x3 rank 2");
     freeMatrix(R3);
 
     // Non-square full rank: 2x3
-    double nsd[] = {1, 0, 0, 0, 1, 0};
+    long double nsd[] = {1, 0, 0, 0, 1, 0};
     Matrix* NS = makeRealMatrix(2, 3, nsd);
     CHECK(rank(NS) == 2, "2x3 full row rank = 2");
     freeMatrix(NS);
 
     // Non-square rank-deficient: 3x2 rank 1
-    double rnd[] = {1, 2, 2, 4, 3, 6};
+    long double rnd[] = {1, 2, 2, 4, 3, 6};
     Matrix* RN = makeRealMatrix(3, 2, rnd);
     CHECK(rank(RN) == 1, "3x2 rank 1");
     freeMatrix(RN);
@@ -1280,13 +1280,13 @@ void testNullity() {
     freeMatrix(id3);
 
     // [[1,2],[2,4]]: rank 1, nullity = 2 - 1 = 1
-    double rd[] = {1, 2, 2, 4};
+    long double rd[] = {1, 2, 2, 4};
     Matrix* Rm = makeRealMatrix(2, 2, rd);
     CHECK(nullity(Rm) == 1, "nullity of rank-1 2x2 = 1");
     freeMatrix(Rm);
 
     // 2x3 full row rank: nullity = 3 - 2 = 1
-    double nsd[] = {1, 0, 0, 0, 1, 0};
+    long double nsd[] = {1, 0, 0, 0, 1, 0};
     Matrix* NS = makeRealMatrix(2, 3, nsd);
     CHECK(nullity(NS) == 1, "2x3 nullity = 1");
     freeMatrix(NS);
@@ -1308,19 +1308,19 @@ void testTrace() {
     CHECK(approxReal(trace(id4), 4.0, 1e-10), "trace(I_4) = 4");
     freeMatrix(id4);
 
-    double ad[] = {1, 2, 3, 4};
+    long double ad[] = {1, 2, 3, 4};
     Matrix* A = makeRealMatrix(2, 2, ad);
     CHECK(approxReal(trace(A), 5.0, 1e-10), "trace([[1,2],[3,4]]) = 5");
     freeMatrix(A);
 
     // Float entries: verify no integer truncation
-    double fd[] = {1.5, 0, 0, 2.5};
+    long double fd[] = {1.5, 0, 0, 2.5};
     Matrix* F = makeRealMatrix(2, 2, fd);
     CHECK(approxReal(trace(F), 4.0, 1e-10), "trace with float diagonal = 4.0");
     freeMatrix(F);
 
     // Trace equals sum of eigenvalues (2x2 check)
-    double ed[] = {3, 1, 0, 5};
+    long double ed[] = {3, 1, 0, 5};
     Matrix* E = makeRealMatrix(2, 2, ed);
     MatrixElement* eigs = eigenvalues2x2(E);
     MatrixElement eigsum = elemAdd(eigs[0], eigs[1]);
@@ -1344,17 +1344,17 @@ void testFrobeniusNorm() {
     freeMatrix(zero);
 
     Matrix* id3 = idMatrix(3);
-    CHECK(approx(frobeniusNorm(id3), sqrt(3.0), 1e-10), "||I_3||_F = sqrt(3)");
+    CHECK(approx(frobeniusNorm(id3), sqrtl(3.0), 1e-10), "||I_3||_F = sqrtl(3)");
     freeMatrix(id3);
 
-    // [[1,2],[3,4]]: sqrt(1+4+9+16) = sqrt(30)
-    double ad[] = {1, 2, 3, 4};
+    // [[1,2],[3,4]]: sqrtl(1+4+9+16) = sqrtl(30)
+    long double ad[] = {1, 2, 3, 4};
     Matrix* A = makeRealMatrix(2, 2, ad);
-    CHECK(approx(frobeniusNorm(A), sqrt(30.0), 1e-10), "||[[1,2],[3,4]]||_F = sqrt(30)");
+    CHECK(approx(frobeniusNorm(A), sqrtl(30.0), 1e-10), "||[[1,2],[3,4]]||_F = sqrtl(30)");
     freeMatrix(A);
 
     // Non-square works: 1x3 [3,4,0] → norm = 5
-    double vd[] = {3, 4, 0};
+    long double vd[] = {3, 4, 0};
     Matrix* V = makeRealMatrix(1, 3, vd);
     CHECK(approx(frobeniusNorm(V), 5.0, 1e-10), "1x3 [3,4,0] norm = 5");
     freeMatrix(V);
@@ -1382,7 +1382,7 @@ void testEigenvalues2x2() {
     freeMatrix(id); free(eig_id);
 
     // Diagonal [[3,0],[0,2]]: eigs = {3, 2}
-    double dd[] = {3, 0, 0, 2};
+    long double dd[] = {3, 0, 0, 2};
     Matrix* D = makeRealMatrix(2, 2, dd);
     MatrixElement* eig_d = eigenvalues2x2(D);
     CHECK(approxReal(eig_d[0], 3.0, 1e-10) &&
@@ -1390,7 +1390,7 @@ void testEigenvalues2x2() {
     free(eig_d);
 
     // [[5,2],[2,5]]: eigs = {7, 3}; verify via trace/det
-    double sd[] = {5, 2, 2, 5};
+    long double sd[] = {5, 2, 2, 5};
     Matrix* S = makeRealMatrix(2, 2, sd);
     MatrixElement* eig_s = eigenvalues2x2(S);
     MatrixElement esum = elemAdd(eig_s[0], eig_s[1]);
@@ -1401,7 +1401,7 @@ void testEigenvalues2x2() {
     freeMatrix(D);
 
     // Complex eigenvalues: [[0,-1],[1,0]] (rotation 90 deg)  →  eigs = ±i
-    double cd[] = {0, -1, 1, 0};
+    long double cd[] = {0, -1, 1, 0};
     Matrix* Cr = makeRealMatrix(2, 2, cd);
     MatrixElement* eig_c = eigenvalues2x2(Cr);
     CHECK(eig_c[0].isComplex && eig_c[1].isComplex, "eigs are complex");
@@ -1417,7 +1417,7 @@ void testEigenvalues2x2() {
     freeMatrix(Cr); free(eig_c);
 
     // Verify each eigenvalue (real or complex) satisfies det(A - lambda*I) = 0
-    double vd[] = {4, 1, 2, 3};
+    long double vd[] = {4, 1, 2, 3};
     Matrix* V = makeRealMatrix(2, 2, vd);
     MatrixElement* eig_v = eigenvalues2x2(V);
     for (int k = 0; k < 2; k++) {
@@ -1458,7 +1458,7 @@ void testEigenvalues3x3() {
     freeMatrix(id); free(eig_id);
 
     // Triple root: 2*I_3, all eigs = 2
-    double tid[] = {2,0,0, 0,2,0, 0,0,2};
+    long double tid[] = {2,0,0, 0,2,0, 0,0,2};
     Matrix* T = makeRealMatrix(3, 3, tid);
     MatrixElement* eig_t = eigenvalues3x3(T);
     CHECK(approxReal(eig_t[0], 2.0, 1e-9) &&
@@ -1467,7 +1467,7 @@ void testEigenvalues3x3() {
     freeMatrix(T); free(eig_t);
 
     // Diagonal [[1,0,0],[0,2,0],[0,0,3]]
-    double dd[] = {1,0,0, 0,2,0, 0,0,3};
+    long double dd[] = {1,0,0, 0,2,0, 0,0,3};
     Matrix* D = makeRealMatrix(3, 3, dd);
     MatrixElement* eig_d = eigenvalues3x3(D);
     MatrixElement esum = elemAdd(elemAdd(eig_d[0], eig_d[1]), eig_d[2]);
@@ -1489,7 +1489,7 @@ void testEigenvalues3x3() {
     freeMatrix(D); free(eig_d);
 
     // One real + two complex: [[1,-1,0],[1,1,0],[0,0,2]] — real root = 2, complex = 1±i
-    double cd[] = {1,-1,0, 1,1,0, 0,0,2};
+    long double cd[] = {1,-1,0, 1,1,0, 0,0,2};
     Matrix* Cr = makeRealMatrix(3, 3, cd);
     MatrixElement* eig_c = eigenvalues3x3(Cr);
     // One eigenvalue must be 2
@@ -1541,7 +1541,7 @@ void testEigenvectors2x2() {
     free(eigs_id); freeEvects(ev_id, 2); freeMatrix(id);
 
     // Diagonal [[3,0],[0,2]]: distinct eigenvalues, axis-aligned eigenvectors
-    double dd[] = {3, 0, 0, 2};
+    long double dd[] = {3, 0, 0, 2};
     Matrix* D = makeRealMatrix(2, 2, dd);
     MatrixElement* eigs_d = eigenvalues2x2(D);
     Matrix** ev_d = eigenvectors2x2(D);
@@ -1552,7 +1552,7 @@ void testEigenvectors2x2() {
     free(eigs_d); freeEvects(ev_d, 2); freeMatrix(D);
 
     // Symmetric [[5,2],[2,5]]: eigenvalues 7 and 3, evects along [1,1] and [1,-1]
-    double sd[] = {5, 2, 2, 5};
+    long double sd[] = {5, 2, 2, 5};
     Matrix* S = makeRealMatrix(2, 2, sd);
     MatrixElement* eigs_s = eigenvalues2x2(S);
     Matrix** ev_s = eigenvectors2x2(S);
@@ -1562,7 +1562,7 @@ void testEigenvectors2x2() {
     free(eigs_s); freeEvects(ev_s, 2); freeMatrix(S);
 
     // Upper triangular [[3,1],[0,2]]
-    double td[] = {3, 1, 0, 2};
+    long double td[] = {3, 1, 0, 2};
     Matrix* T = makeRealMatrix(2, 2, td);
     MatrixElement* eigs_t = eigenvalues2x2(T);
     Matrix** ev_t = eigenvectors2x2(T);
@@ -1571,7 +1571,7 @@ void testEigenvectors2x2() {
     free(eigs_t); freeEvects(ev_t, 2); freeMatrix(T);
 
     // Complex eigenvalues: eigenvectors are also complex
-    double cd[] = {0, -1, 1, 0};
+    long double cd[] = {0, -1, 1, 0};
     Matrix* Cr = makeRealMatrix(2, 2, cd);
     MatrixElement* eigs_c = eigenvalues2x2(Cr);
     Matrix** ev_c = eigenvectors2x2(Cr);
@@ -1604,7 +1604,7 @@ void testEigenvectors3x3() {
     free(eigs_id); freeEvects(ev_id, 3); freeMatrix(id);
 
     // Diagonal [[1,0,0],[0,2,0],[0,0,3]]: axis-aligned eigenvectors
-    double dd[] = {1,0,0, 0,2,0, 0,0,3};
+    long double dd[] = {1,0,0, 0,2,0, 0,0,3};
     Matrix* D = makeRealMatrix(3, 3, dd);
     MatrixElement* eigs_d = eigenvalues3x3(D);
     Matrix** ev_d = eigenvectors3x3(D);
@@ -1616,7 +1616,7 @@ void testEigenvectors3x3() {
     free(eigs_d); freeEvects(ev_d, 3); freeMatrix(D);
 
     // Symmetric [[4,1,0],[1,4,1],[0,1,4]]: three real eigenvalues
-    double sym[] = {4,1,0, 1,4,1, 0,1,4};
+    long double sym[] = {4,1,0, 1,4,1, 0,1,4};
     Matrix* Sym = makeRealMatrix(3, 3, sym);
     MatrixElement* eigs_sym = eigenvalues3x3(Sym);
     Matrix** ev_sym = eigenvectors3x3(Sym);
@@ -1627,7 +1627,7 @@ void testEigenvectors3x3() {
     free(eigs_sym); freeEvects(ev_sym, 3); freeMatrix(Sym);
 
     // Upper triangular [[2,1,3],[0,4,2],[0,0,6]]: eigenvalues on diagonal
-    double tri[] = {2,1,3, 0,4,2, 0,0,6};
+    long double tri[] = {2,1,3, 0,4,2, 0,0,6};
     Matrix* Tri = makeRealMatrix(3, 3, tri);
     MatrixElement* eigs_tri = eigenvalues3x3(Tri);
     Matrix** ev_tri = eigenvectors3x3(Tri);
@@ -1638,7 +1638,7 @@ void testEigenvectors3x3() {
     free(eigs_tri); freeEvects(ev_tri, 3); freeMatrix(Tri);
 
     // One real + two complex: real eigenvector valid, complex eigenvectors also populated
-    double cd[] = {1,-1,0, 1,1,0, 0,0,2};
+    long double cd[] = {1,-1,0, 1,1,0, 0,0,2};
     Matrix* Cr = makeRealMatrix(3, 3, cd);
     MatrixElement* eigs_c = eigenvalues3x3(Cr);
     Matrix** ev_c = eigenvectors3x3(Cr);
@@ -1903,9 +1903,9 @@ void testL2Norm() {
     CHECK(approx(l2Norm(v), 5.0, 1e-10), "||[3,4]|| = 5");
     freeVector(v);
 
-    // 3D: sqrt(1 + 4 + 9) = sqrt(14)
+    // 3D: sqrtl(1 + 4 + 9) = sqrtl(14)
     Vector* v3 = constructVector3(R(1.0), R(2.0), R(3.0));
-    CHECK(approx(l2Norm(v3), sqrt(14.0), 1e-10), "||[1,2,3]|| = sqrt(14)");
+    CHECK(approx(l2Norm(v3), sqrtl(14.0), 1e-10), "||[1,2,3]|| = sqrtl(14)");
     freeVector(v3);
 
     // Non-integer components
@@ -1924,9 +1924,9 @@ void testL2Norm() {
     CHECK(approx(l2Norm(vc), 5.0, 1e-10), "||[3+4i, 0]|| = 5 (uses |v_i|^2)");
     freeVector(vc);
 
-    // v = [i, i] → |v|^2 = 1+1 = 2 → ||v|| = sqrt(2)
+    // v = [i, i] → |v|^2 = 1+1 = 2 → ||v|| = sqrtl(2)
     Vector* vii = constructVector2(C(0, 1), C(0, 1));
-    CHECK(approx(l2Norm(vii), sqrt(2.0), 1e-10), "||[i, i]|| = sqrt(2)");
+    CHECK(approx(l2Norm(vii), sqrtl(2.0), 1e-10), "||[i, i]|| = sqrtl(2)");
     freeVector(vii);
 }
 
@@ -2227,7 +2227,7 @@ void testReduceRows() {
     CHECK(reduceRows(NULL) == NULL, "reduceRows(NULL) is NULL");
 
     // 2x3, full row rank: pivots in cols 0 and 1, last col is the dependent column
-    double d1[] = { 1, 2, 3,
+    long double d1[] = { 1, 2, 3,
                     2, 5, 7 };
     Matrix* A = makeRealMatrix(2, 3, d1);
     Matrix* R = reduceRows(A);
@@ -2241,7 +2241,7 @@ void testReduceRows() {
     freeMatrix(A); freeMatrix(R);
 
     // 3x3 rank-deficient: third row is row1 + row2 -> RREF has bottom row of zeros
-    double d2[] = { 1, 2, 3,
+    long double d2[] = { 1, 2, 3,
                     4, 5, 6,
                     5, 7, 9 };
     A = makeRealMatrix(3, 3, d2);
@@ -2260,7 +2260,7 @@ void testReduceRows() {
     freeMatrix(I); freeMatrix(R);
 
     // RREF is idempotent
-    double d3[] = { 0, 1, 2,
+    long double d3[] = { 0, 1, 2,
                     1, 0, 3,
                     2, 4, 6 };
     A = makeRealMatrix(3, 3, d3);
@@ -2276,7 +2276,7 @@ void testReduceColumns() {
     CHECK(reduceColumns(NULL) == NULL, "reduceColumns(NULL) is NULL");
 
     // reduceColumns(A) == transpose(reduceRows(transpose(A)))
-    double d[] = { 1, 2, 3,
+    long double d[] = { 1, 2, 3,
                    4, 5, 6,
                    7, 8, 10 };
     Matrix* A = makeRealMatrix(3, 3, d);
@@ -2294,7 +2294,7 @@ void testReduceColumns() {
     freeMatrix(I); freeMatrix(CI);
 
     // Rank preservation: rank(A) == rank(reduceColumns(A))
-    double d2[] = { 1, 2, 3,
+    long double d2[] = { 1, 2, 3,
                     2, 4, 6 };
     A = makeRealMatrix(2, 3, d2);
     C = reduceColumns(A);
@@ -2306,11 +2306,11 @@ void testReduceColumns() {
 void testColumnSpace() {
     printf("\n[testColumnSpace]\n");
 
-    int count = -1;
+    size_t count = 0;
     CHECK(columnSpace(NULL, &count) == NULL, "NULL matrix");
 
     // 3x3 with rank 2: columns c0, c1 are independent; c2 = c0 + c1
-    double d[] = { 1, 0, 1,
+    long double d[] = { 1, 0, 1,
                    2, 1, 3,
                    3, 2, 5 };
     Matrix* A = makeRealMatrix(3, 3, d);
@@ -2321,7 +2321,7 @@ void testColumnSpace() {
 
     // Shape: each basis vector has shape (m, 1)
     bool shapeOk = true;
-    for (int k = 0; k < count; k++) {
+    for (size_t k = 0; k < count; k++) {
         if (basis[k]->numRows != A->numRows) shapeOk = false;
         if (basis[k]->numCols != 1) shapeOk = false;
     }
@@ -2329,11 +2329,11 @@ void testColumnSpace() {
 
     // Each basis vector should equal one of the original columns of A
     bool fromOriginal = true;
-    for (int k = 0; k < count; k++) {
+    for (size_t k = 0; k < count; k++) {
         bool matched = false;
-        for (int c = 0; c < A->numCols && !matched; c++) {
+        for (size_t c = 0; c < A->numCols && !matched; c++) {
             bool eq = true;
-            for (int i = 0; i < A->numRows; i++) {
+            for (size_t i = 0; i < A->numRows; i++) {
                 MatrixElement b = getEntry(basis[k], i, 0);
                 MatrixElement a = getEntry(A, i, c);
                 if (!elemEq(a, b, 1e-12)) { eq = false; break; }
@@ -2355,7 +2355,7 @@ void testColumnSpace() {
     CHECK(depMatches, "basis[0] + basis[1] = column 2 of A");
     freeVector(sum);
 
-    for (int k = 0; k < count; k++) freeVector(basis[k]);
+    for (size_t k = 0; k < count; k++) freeVector(basis[k]);
     free(basis);
     freeMatrix(A);
 
@@ -2366,12 +2366,12 @@ void testColumnSpace() {
     bool isStdBasis = true;
     for (int k = 0; k < 3; k++) {
         for (int i = 0; i < 3; i++) {
-            double expected = (i == k) ? 1.0 : 0.0;
+            long double expected = (i == k) ? 1.0 : 0.0;
             if (!approxReal(getEntry(basis[k], i, 0), expected, 1e-12)) isStdBasis = false;
         }
     }
     CHECK(isStdBasis, "I_3 column space basis = standard basis");
-    for (int k = 0; k < count; k++) freeVector(basis[k]);
+    for (size_t k = 0; k < count; k++) freeVector(basis[k]);
     free(basis);
     freeMatrix(I);
 
@@ -2385,11 +2385,11 @@ void testColumnSpace() {
 void testRowSpace() {
     printf("\n[testRowSpace]\n");
 
-    int count = -1;
+    size_t count = 0;
     CHECK(rowSpace(NULL, &count) == NULL, "NULL matrix");
 
     // 3x3 with rank 2: row 2 = row 0 + row 1
-    double d[] = { 1, 2, 3,
+    long double d[] = { 1, 2, 3,
                    0, 1, 4,
                    1, 3, 7 };
     Matrix* A = makeRealMatrix(3, 3, d);
@@ -2400,13 +2400,13 @@ void testRowSpace() {
 
     // Each basis vector has length n (= numCols of A)
     bool shapeOk = true;
-    for (int k = 0; k < count; k++) {
+    for (size_t k = 0; k < count; k++) {
         if (basis[k]->numRows != A->numCols) shapeOk = false;
         if (basis[k]->numCols != 1) shapeOk = false;
     }
     CHECK(shapeOk, "row-space basis vectors have shape (n, 1)");
 
-    for (int k = 0; k < count; k++) freeVector(basis[k]);
+    for (size_t k = 0; k < count; k++) freeVector(basis[k]);
     free(basis);
     freeMatrix(A);
 
@@ -2414,21 +2414,21 @@ void testRowSpace() {
     Matrix* I = idMatrix(4);
     basis = rowSpace(I, &count);
     CHECK(count == 4, "I_4 has 4 row-space basis vectors");
-    for (int k = 0; k < count; k++) freeVector(basis[k]);
+    for (size_t k = 0; k < count; k++) freeVector(basis[k]);
     free(basis);
     freeMatrix(I);
 
     // dim(row space) == dim(col space)
-    double d2[] = { 1, 2, 3, 4,
+    long double d2[] = { 1, 2, 3, 4,
                     2, 4, 6, 8,
                     1, 1, 1, 1 };
     A = makeRealMatrix(3, 4, d2);
-    int cR = -1, cC = -1;
+    size_t cR = 0, cC = 0;
     Vector** rs = rowSpace(A, &cR);
     Vector** cs = columnSpace(A, &cC);
     CHECK(cR == cC, "dim row space = dim col space");
-    for (int k = 0; k < cR; k++) freeVector(rs[k]);
-    for (int k = 0; k < cC; k++) freeVector(cs[k]);
+    for (size_t k = 0; k < cR; k++) freeVector(rs[k]);
+    for (size_t k = 0; k < cC; k++) freeVector(cs[k]);
     free(rs); free(cs);
     freeMatrix(A);
 }

@@ -35,7 +35,7 @@ typedef enum {
     VAL_ERROR,
     VAL_BOOL,
     VAL_INT,             // long long
-    VAL_DECIMAL,         // double
+    VAL_DECIMAL,         // long double
     VAL_FRACTION,        // Fraction (by value)
     VAL_COMPLEX,         // ComplexNumber (by value)
     VAL_STRING,          // owned char*
@@ -80,7 +80,7 @@ struct Value {
     union {
         bool          b;
         long long     i;
-        double        d;
+        long double        d;
         Fraction      frac;
         ComplexNumber cplx;
         char*         str;       // VAL_STRING, VAL_SYMBOL, VAL_ERROR: owned
@@ -95,7 +95,7 @@ Value valNone(void);
 Value valError(const char* msg);
 Value valBool(bool b);
 Value valInt(long long n);
-Value valDecimal(double x);
+Value valDecimal(long double x);
 Value valFraction(Fraction f);
 Value valComplex(ComplexNumber c);
 Value valString(const char* s);
@@ -122,6 +122,6 @@ void        valPrint(Value v);
 /* ---------- Numeric promotion helpers ---------- */
 
 bool   valIsNumeric(Value v);
-double valToDouble(Value v);
+long double valToDouble(Value v);
 
 #endif

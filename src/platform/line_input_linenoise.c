@@ -60,6 +60,7 @@ static void addCommandCompletions(const char* line, linenoiseCompletions* lc) {
     char* candidate = NULL;
 
     for (const CommandEntry* c = commandRegistry(); c; c = c->next) {
+        if (strncmp(c->name, "__", 2) == 0) continue;
         if (strncmp(c->name, line + prefix_start, prefix_len) != 0) continue;
 
         size_t command_len = strlen(c->name);

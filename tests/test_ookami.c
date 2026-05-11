@@ -10,7 +10,7 @@ static void section(const char* title) {
     printf("\n===== %s =====\n", title);
 }
 
-static void expectSetEquals(const char* name, CombSet* set, const long long* expected, int count) {
+static void expectSetEquals(const char* name, CombSet* set, const long long* expected, size_t count) {
     CombSet* target = count > 0 ? constructCombset((long long*)expected, count) : NULL;
     int ok = 0;
 
@@ -147,9 +147,9 @@ int main(void) {
 
     /* ---------- Extra properties ---------- */
     section("Extra properties");
-    printf("|A+A| = %d\n", adsCard(A));
-    printf("|A-A| = %d\n", ddsCard(A));
-    printf("|A*A| = %d\n", mdsCard(A));
+    printf("|A+A| = %zu\n", adsCard(A));
+    printf("|A-A| = %zu\n", ddsCard(A));
+    printf("|A*A| = %zu\n", mdsCard(A));
     printf("isArithmeticProgression(A)  = %d\n", isArithmeticProgression(A));
     printf("isArithmeticProgression(AP) = %d\n", isArithmeticProgression(AP));
     printf("isArithmeticProgression(GP) = %d\n", isArithmeticProgression(GP));

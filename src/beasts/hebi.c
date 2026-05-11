@@ -209,7 +209,7 @@ ComplexNumber complexMul(ComplexNumber a, ComplexNumber b) {
 // Divide two ComplexNumbers
 ComplexNumber complexDiv(ComplexNumber a, ComplexNumber b) {
     ComplexNumber c;
-    double denom = b.real * b.real + b.imag * b.imag;
+    long double denom = b.real * b.real + b.imag * b.imag;
     c.real = (a.real * b.real + a.imag * b.imag) / denom;
     c.imag = (a.imag * b.real - a.real * b.imag) / denom;
     return c;
@@ -232,64 +232,64 @@ ComplexNumber complexConj(ComplexNumber a) {
 }
 
 // Return the modulus |a|
-double complexAbs(ComplexNumber a) {
-    return sqrt(a.real * a.real + a.imag * a.imag);
+long double complexAbs(ComplexNumber a) {
+    return sqrtl(a.real * a.real + a.imag * a.imag);
 }
 
 // Return the argument arg(a) in (-pi, pi]
-double complexArg(ComplexNumber a) {
-    return atan2(a.imag, a.real);
+long double complexArg(ComplexNumber a) {
+    return atan2l(a.imag, a.real);
 }
 
-static double complex toC99Complex(ComplexNumber a) {
+static long double complex toC99Complex(ComplexNumber a) {
     return a.real + a.imag * I;
 }
 
-static ComplexNumber fromC99Complex(double complex z) {
+static ComplexNumber fromC99Complex(long double complex z) {
     ComplexNumber a;
-    a.real = creal(z);
-    a.imag = cimag(z);
+    a.real = creall(z);
+    a.imag = cimagl(z);
     return a;
 }
 
 // Return the complex exponential of a
 ComplexNumber complexExp(ComplexNumber a) {
-    return fromC99Complex(cexp(toC99Complex(a)));
+    return fromC99Complex(cexpl(toC99Complex(a)));
 }
 
 // Return the principal complex logarithm of a
 ComplexNumber complexLog(ComplexNumber a) {
-    return fromC99Complex(clog(toC99Complex(a)));
+    return fromC99Complex(clogl(toC99Complex(a)));
 }
 
 // Return the complex sine of a
 ComplexNumber complexSin(ComplexNumber a) {
-    return fromC99Complex(csin(toC99Complex(a)));
+    return fromC99Complex(csinl(toC99Complex(a)));
 }
 
 // Return the complex cosine of a
 ComplexNumber complexCos(ComplexNumber a) {
-    return fromC99Complex(ccos(toC99Complex(a)));
+    return fromC99Complex(ccosl(toC99Complex(a)));
 }
 
 // Return the complex tangent of a
 ComplexNumber complexTan(ComplexNumber a) {
-    return fromC99Complex(ctan(toC99Complex(a)));
+    return fromC99Complex(ctanl(toC99Complex(a)));
 }
 
 // Return the principal complex inverse sine of a
 ComplexNumber complexAsin(ComplexNumber a) {
-    return fromC99Complex(casin(toC99Complex(a)));
+    return fromC99Complex(casinl(toC99Complex(a)));
 }
 
 // Return the principal complex inverse cosine of a
 ComplexNumber complexAcos(ComplexNumber a) {
-    return fromC99Complex(cacos(toC99Complex(a)));
+    return fromC99Complex(cacosl(toC99Complex(a)));
 }
 
 // Return the principal complex inverse tangent of a
 ComplexNumber complexAtan(ComplexNumber a) {
-    return fromC99Complex(catan(toC99Complex(a)));
+    return fromC99Complex(catanl(toC99Complex(a)));
 }
 
 // Return the principal square root of a ComplexNumber
@@ -297,15 +297,15 @@ ComplexNumber complexSqrt(ComplexNumber a) {
     ComplexNumber c;
     // Real fast path: sqrt is either real or pure imaginary, no trig noise
     if (a.imag == 0.0) {
-        if (a.real >= 0.0) { c.real = sqrt(a.real); c.imag = 0.0; }
-        else { c.real = 0.0; c.imag = sqrt(-a.real); }
+        if (a.real >= 0.0) { c.real = sqrtl(a.real); c.imag = 0.0; }
+        else { c.real = 0.0; c.imag = sqrtl(-a.real); }
         return c;
     }
-    double r = complexAbs(a);
-    double theta = complexArg(a);
-    double sr = sqrt(r);
-    c.real = sr * cos(theta / 2.0);
-    c.imag = sr * sin(theta / 2.0);
+    long double r = complexAbs(a);
+    long double theta = complexArg(a);
+    long double sr = sqrtl(r);
+    c.real = sr * cosl(theta / 2.0);
+    c.imag = sr * sinl(theta / 2.0);
     return c;
 }
 
@@ -314,21 +314,21 @@ ComplexNumber complexCbrt(ComplexNumber a) {
     ComplexNumber c;
     // Real fast path: cbrt of a real is real
     if (a.imag == 0.0) {
-        c.real = cbrt(a.real);
+        c.real = cbrtl(a.real);
         c.imag = 0.0;
         return c;
     }
-    double r = complexAbs(a);
-    double theta = complexArg(a);
-    double cr = cbrt(r);
-    c.real = cr * cos(theta / 3.0);
-    c.imag = cr * sin(theta / 3.0);
+    long double r = complexAbs(a);
+    long double theta = complexArg(a);
+    long double cr = cbrtl(r);
+    c.real = cr * cosl(theta / 3.0);
+    c.imag = cr * sinl(theta / 3.0);
     return c;
 }
 
 // Tell if two ComplexNumbers are equal up to some tolerance
-bool complexEq(ComplexNumber a, ComplexNumber b, double tol) {
-    return fabs(a.real - b.real) <= tol && fabs(a.imag - b.imag) <= tol;
+bool complexEq(ComplexNumber a, ComplexNumber b, long double tol) {
+    return fabsl(a.real - b.real) <= tol && fabsl(a.imag - b.imag) <= tol;
 }
 
 /* ---------- Transcendental constants ---------- */

@@ -6,12 +6,12 @@
 #include "poni.h"
 #include "sokko.h"
 
-/* PONI assumes every value is a real double. Sokko's MatrixElement is a
-   tagged union over double/ComplexNumber, so we funnel everything through
+/* PONI assumes every value is a real long double. Sokko's MatrixElement is a
+   tagged union over long double/ComplexNumber, so we funnel everything through
    these two helpers: re() pulls the real component out of a MatrixElement,
-   and R() lifts a double into one. */
-static inline double re(MatrixElement e) { return e.value.real; }
-static inline MatrixElement R(double x) { return elemFromReal(x); }
+   and R() lifts a long double into one. */
+static inline long double re(MatrixElement e) { return e.value.real; }
+static inline MatrixElement R(long double x) { return elemFromReal(x); }
 
 static bool vectorIsFinite(Vector* vector) {
     if (!vector) return false;
@@ -38,11 +38,11 @@ static char* poniDupstr(const char* s) {
 /* ---------- Kinematics primitives ---------- */
 
 // Computes the displacement between two points
-double* displacement(Vector* p1, Vector* p2) {
+long double* displacement(Vector* p1, Vector* p2) {
     if (!p1 || !p2) return NULL;
     if (p1->numRows != p2->numRows) return NULL;
 
-    double* disp = (double*)malloc(p1->numRows * sizeof(double));
+    long double* disp = (long double*)malloc(p1->numRows * sizeof(long double));
     if (!disp) return NULL;
     for (int i = 0; i < p1->numRows; i++) {
 	    disp[i] = re(getEntry(p2, i, 0)) - re(getEntry(p1, i, 0));
@@ -51,11 +51,11 @@ double* displacement(Vector* p1, Vector* p2) {
 }
 
 // Computes the average velocity between two points given a time interval
-double* averageVelocity(Vector* p1, Vector* p2, double time) {
+long double* averageVelocity(Vector* p1, Vector* p2, long double time) {
     if (!p1 || !p2 || time <= 0) return NULL;
     if (p1->numRows != p2->numRows) return NULL;
 
-    double* velocity = (double*)malloc(p1->numRows * sizeof(double));
+    long double* velocity = (long double*)malloc(p1->numRows * sizeof(long double));
     if (!velocity) return NULL;
     for (int i = 0; i < p1->numRows; i++) {
 	    velocity[i] = (re(getEntry(p2, i, 0)) - re(getEntry(p1, i, 0))) / time;
@@ -64,11 +64,11 @@ double* averageVelocity(Vector* p1, Vector* p2, double time) {
 }
 
 // Computes the average acceleration between two points given a time interval
-double* averageAcceleration(Vector* p1, Vector* p2, Vector* initVel, double time) {
+long double* averageAcceleration(Vector* p1, Vector* p2, Vector* initVel, long double time) {
     if (!p1 || !p2 || !initVel || time <= 0) return NULL;
     if (p1->numRows != p2->numRows || p1->numRows != initVel->numRows) return NULL;
 
-    double* acceleration = (double*)malloc(p1->numRows * sizeof(double));
+    long double* acceleration = (long double*)malloc(p1->numRows * sizeof(long double));
     if (!acceleration) return NULL;
 
     for (int i = 0; i < p1->numRows; i++) {
@@ -79,7 +79,7 @@ double* averageAcceleration(Vector* p1, Vector* p2, Vector* initVel, double time
 }
 
 // Returns the velocity at time t given acceleration a and initial velocity initVel
-Vector* velocityAtTime(Vector* initVel, Vector* acceleration, double time) {
+Vector* velocityAtTime(Vector* initVel, Vector* acceleration, long double time) {
     if (!initVel || !acceleration || time < 0) return NULL;
     if (initVel->numRows != acceleration->numRows) return NULL;
 
@@ -94,7 +94,7 @@ Vector* velocityAtTime(Vector* initVel, Vector* acceleration, double time) {
 }
 
 // Returns the position at time t given acceleration a, initial velocity initVel, and initial position initPos
-Vector* positionAtTime(Vector* initPos, Vector* initVel, Vector* acceleration, double time) {
+Vector* positionAtTime(Vector* initPos, Vector* initVel, Vector* acceleration, long double time) {
     if (!initPos || !initVel || !acceleration || time < 0) return NULL;
     if (initPos->numRows != initVel->numRows || initPos->numRows != acceleration->numRows) return NULL;
 
@@ -102,7 +102,7 @@ Vector* positionAtTime(Vector* initPos, Vector* initVel, Vector* acceleration, d
     if (!position) return NULL;
 
     for (int i = 0; i < initPos->numRows; i++) {
-	    double pos = re(getEntry(initPos, i, 0)) + re(getEntry(initVel, i, 0)) * time + 0.5 * re(getEntry(acceleration, i, 0)) * time * time;
+	    long double pos = re(getEntry(initPos, i, 0)) + re(getEntry(initVel, i, 0)) * time + 0.5 * re(getEntry(acceleration, i, 0)) * time * time;
 	    setEntry(position, i, 0, R(pos));
     }
 
@@ -118,10 +118,10 @@ Vector* speedAtPosition(Vector* initPos, Vector* initVel, Vector* acceleration, 
     if (!speed) return NULL;
 
     for (int i = 0; i < initPos->numRows; i++) {
-	    double deltaPos = re(getEntry(pos, i, 0)) - re(getEntry(initPos, i, 0));
-	    double iv = re(getEntry(initVel, i, 0));
-	    double a = re(getEntry(acceleration, i, 0));
-	    double vel = sqrt(iv * iv + 2 * a * deltaPos);
+	    long double deltaPos = re(getEntry(pos, i, 0)) - re(getEntry(initPos, i, 0));
+	    long double iv = re(getEntry(initVel, i, 0));
+	    long double a = re(getEntry(acceleration, i, 0));
+	    long double vel = sqrtl(iv * iv + 2 * a * deltaPos);
 	    setEntry(speed, i, 0, R(vel));
     }
 
@@ -137,23 +137,23 @@ Vector* velocityAtPosition(Vector* initPos, Vector* initVel, Vector* acceleratio
     if (!velocity) return NULL;
 
     for (int i = 0; i < initPos->numRows; i++) {
-	    double deltaPos = re(getEntry(pos, i, 0)) - re(getEntry(initPos, i, 0));
-	    double iv = re(getEntry(initVel, i, 0));
-        double a = re(getEntry(acceleration, i, 0));
+	    long double deltaPos = re(getEntry(pos, i, 0)) - re(getEntry(initPos, i, 0));
+	    long double iv = re(getEntry(initVel, i, 0));
+        long double a = re(getEntry(acceleration, i, 0));
         if (a == 0) {
             setEntry(velocity, i, 0, R(iv));
             continue;
         }
 
-        double disc = iv * iv + 2*a*deltaPos;
+        long double disc = iv * iv + 2*a*deltaPos;
         if (disc < 0) {
             freeVector(velocity);
             return NULL;
         }
-        double sq = sqrt(disc);
-        double t1 = (-iv + sq) / a;
-        double t2 = (-iv - sq) / a;
-        double t = (t1 >= 0 && (t2 < 0 || t1 < t2)) ? t1 : t2;
+        long double sq = sqrtl(disc);
+        long double t1 = (-iv + sq) / a;
+        long double t2 = (-iv - sq) / a;
+        long double t = (t1 >= 0 && (t2 < 0 || t1 < t2)) ? t1 : t2;
         if (t < 0) {
             freeVector(velocity);
             return NULL;
@@ -166,14 +166,14 @@ Vector* velocityAtPosition(Vector* initPos, Vector* initVel, Vector* acceleratio
 }
 
 // Returns the range, peak heightm and flight time of a projectile given initial velocity initVel, launch angle angle, from initial height initHeight
-ProjectileInfo* getProjectileInfo(double initVel, double angle, double initHeight) {
+ProjectileInfo* getProjectileInfo(long double initVel, long double angle, long double initHeight) {
     if (initVel < 0 || angle < 0 || angle > 90) return NULL;
 
-    const double degreesToRadians = 0.017453292519943295;
-    double radAngle = angle * degreesToRadians;
-    double timeOfFlight = (initVel * sin(radAngle) + sqrt(initVel * sin(radAngle) * initVel * sin(radAngle) + 2 * A_GRAVITY * initHeight)) / A_GRAVITY;
-    double range = initVel * cos(radAngle) * timeOfFlight;
-    double peakHeight = initHeight + (initVel * sin(radAngle)) * (initVel * sin(radAngle)) / (2 * A_GRAVITY);
+    const long double degreesToRadians = 0.017453292519943295;
+    long double radAngle = angle * degreesToRadians;
+    long double timeOfFlight = (initVel * sinl(radAngle) + sqrtl(initVel * sinl(radAngle) * initVel * sinl(radAngle) + 2 * A_GRAVITY * initHeight)) / A_GRAVITY;
+    long double range = initVel * cosl(radAngle) * timeOfFlight;
+    long double peakHeight = initHeight + (initVel * sinl(radAngle)) * (initVel * sinl(radAngle)) / (2 * A_GRAVITY);
 
     ProjectileInfo* results = malloc(sizeof(ProjectileInfo));
     if (!results) return NULL;
@@ -185,13 +185,13 @@ ProjectileInfo* getProjectileInfo(double initVel, double angle, double initHeigh
 }
 
 // Returns the centripetal acceleration given velocity vel and radius of curvature radius
-double centripetalAcceleration(double vel, double radius) {
+long double centripetalAcceleration(long double vel, long double radius) {
     if (vel < 0 || radius <= 0) return NAN;
     return (vel * vel) / radius;
 }
 
 // Returns the angular velocity given linear velocity vel and radius of curvature radius
-double angularVelocity(double vel, double radius) {
+long double angularVelocity(long double vel, long double radius) {
     if (vel < 0 || radius <= 0) return NAN;
     return vel / radius;
 }
@@ -199,7 +199,7 @@ double angularVelocity(double vel, double radius) {
 /* ---------- Dynamics ---------- */
 
 // Construct a Body with a given mass, position, and initial velocity
-Body* constructBody(double mass, Vector* pos, Vector* initVel) {
+Body* constructBody(long double mass, Vector* pos, Vector* initVel) {
     if (mass <= 0 || !isfinite(mass) || !vectorIsFinite(pos) || !vectorIsFinite(initVel)) return NULL;
     Body* body = (Body*)malloc(sizeof(Body));
     if (!body) return NULL;
@@ -248,9 +248,9 @@ void addForce(Body* body, Force* F) {
 void removeForce(Body* body, Force* F) {
     if (!body || !F) return;
 
-    for (int i = 0; i < body->nForces; i++) {
+    for (size_t i = 0; i < body->nForces; i++) {
 	if (body->forces[i] == F) {
-	    for (int j = i; j < body->nForces - 1; j++) {
+	    for (size_t j = i; j + 1 < body->nForces; j++) {
 		body->forces[j] = body->forces[j + 1];
 	    }
 	    body->nForces--;
@@ -273,7 +273,7 @@ Vector* netForce(Body* body) {
 
     Vector* net = constructVector(body->pos->numRows);
     if (!net) return NULL;
-    for (int i = 0; i < body->nForces; i++) {
+    for (size_t i = 0; i < body->nForces; i++) {
         Vector* tmp = addVectors(net, body->forces[i]->vector);
         if (!tmp) {
             free(net);
@@ -330,7 +330,7 @@ Force* normalForce(Body* body, Vector* surfaceNormal) {
     }
     setEntry(weight, 1, 0, R(-body->mass * A_GRAVITY));
 
-    double proj = re(vectorDotProduct(weight, nHat));
+    long double proj = re(vectorDotProduct(weight, nHat));
     freeVector(weight);
 
     Vector* forceVec = scaleVector(nHat, R(-proj));
@@ -347,7 +347,7 @@ Force* normalForce(Body* body, Vector* surfaceNormal) {
 }
 
 // Construct the force of friction (kinetic or static)
-Force* frictionForce(Force* normal, double mu, Vector* direction) {
+Force* frictionForce(Force* normal, long double mu, Vector* direction) {
     if (!normal || !direction || mu < 0) return NULL;
 
     Vector* neg = negativeVector(direction);
@@ -356,7 +356,7 @@ Force* frictionForce(Force* normal, double mu, Vector* direction) {
     freeVector(neg);
     if (!unitDir) return NULL;
 
-    double mag = mu * l2Norm(normal->vector);
+    long double mag = mu * l2Norm(normal->vector);
     Vector* vec = scaleVector(unitDir, R(mag));
     freeVector(unitDir);
     if (!vec) return NULL;
@@ -370,7 +370,7 @@ Force* frictionForce(Force* normal, double mu, Vector* direction) {
     return constructForce("friction", vec, tail);
 }
 
-Force* springForce(Body* body, Vector* anchor, double k, double restLength) {
+Force* springForce(Body* body, Vector* anchor, long double k, long double restLength) {
     if (!body || !anchor || !body->pos) return NULL;
     if (k < 0 || restLength < 0) return NULL;
     if (body->pos->numRows != anchor->numRows) return NULL;
@@ -378,7 +378,7 @@ Force* springForce(Body* body, Vector* anchor, double k, double restLength) {
     Vector* displacement = subtractVectors(body->pos, anchor);
     if (!displacement) return NULL;
 
-    double distance = l2Norm(displacement);
+    long double distance = l2Norm(displacement);
     Vector* forceVec = constructVector(body->pos->numRows);
     if (!forceVec) {
         freeVector(displacement);
@@ -386,9 +386,9 @@ Force* springForce(Body* body, Vector* anchor, double k, double restLength) {
     }
 
     if (distance > 0) {
-        double magnitude = -k * (distance - restLength);
+        long double magnitude = -k * (distance - restLength);
         for (int i = 0; i < forceVec->numRows; i++) {
-            double component = re(getEntry(displacement, i, 0)) / distance;
+            long double component = re(getEntry(displacement, i, 0)) / distance;
             setEntry(forceVec, i, 0, R(magnitude * component));
         }
     } else {
@@ -406,7 +406,7 @@ Force* springForce(Body* body, Vector* anchor, double k, double restLength) {
     return constructForce(poniDupstr("spring"), forceVec, tail);
 }
 
-Force* dragForce(Body* body, double coeff) {
+Force* dragForce(Body* body, long double coeff) {
     if (!body || !body->velocity || !body->pos || coeff < 0) return NULL;
 
     Vector* forceVec = constructVector(body->velocity->numRows);
@@ -430,13 +430,13 @@ Force* gravitationalForce(Body* body, Body* other) {
 
     Vector* displacement = subtractVectors(other->pos, body->pos);
     if (!displacement) return NULL;
-    double distance = l2Norm(displacement);
+    long double distance = l2Norm(displacement);
     if (distance == 0) {
         freeVector(displacement);
         return NULL;
     }
 
-    double magnitude = A_BIG_G * body->mass * other->mass / (distance * distance * distance);
+    long double magnitude = A_BIG_G * body->mass * other->mass / (distance * distance * distance);
     Vector* forceVec = constructVector(displacement->numRows);
     if (!forceVec) {
         freeVector(displacement);
@@ -457,7 +457,7 @@ Force* gravitationalForce(Body* body, Body* other) {
     return constructForce(poniDupstr("gravitation"), forceVec, tail);
 }
 
-Body* stepBody(Body* body, double timeStep) {
+Body* stepBody(Body* body, long double timeStep) {
     if (!body || !vectorIsFinite(body->pos) || !vectorIsFinite(body->velocity) || timeStep < 0 || !isfinite(timeStep)) return NULL;
 
     Vector* acceleration = accelerationFromForce(body);
@@ -468,11 +468,11 @@ Body* stepBody(Body* body, double timeStep) {
     }
 
     for (int i = 0; i < body->pos->numRows; i++) {
-        double pos = re(getEntry(body->pos, i, 0));
-        double vel = re(getEntry(body->velocity, i, 0));
-        double accel = re(getEntry(acceleration, i, 0));
-        double nextPos = pos + vel * timeStep + 0.5 * accel * timeStep * timeStep;
-        double nextVel = vel + accel * timeStep;
+        long double pos = re(getEntry(body->pos, i, 0));
+        long double vel = re(getEntry(body->velocity, i, 0));
+        long double accel = re(getEntry(acceleration, i, 0));
+        long double nextPos = pos + vel * timeStep + 0.5 * accel * timeStep * timeStep;
+        long double nextVel = vel + accel * timeStep;
         if (!isfinite(nextPos) || !isfinite(nextVel)) {
             freeVector(acceleration);
             return NULL;
@@ -485,19 +485,19 @@ Body* stepBody(Body* body, double timeStep) {
     return body;
 }
 
-BodySystem* constructBodySystem(Body** bodies, int nBodies) {
+BodySystem* constructBodySystem(Body** bodies, size_t nBodies) {
     if (!bodies || nBodies < 1) return NULL;
 
     BodySystem* system = malloc(sizeof(BodySystem));
     if (!system) return NULL;
-    system->bodies = malloc((size_t)nBodies * sizeof(Body*));
+    system->bodies = malloc(nBodies * sizeof(Body*));
     if (!system->bodies) {
         free(system);
         return NULL;
     }
 
     system->nBodies = nBodies;
-    for (int i = 0; i < nBodies; i++) {
+    for (size_t i = 0; i < nBodies; i++) {
         if (!bodies[i]) {
             free(system->bodies);
             free(system);
@@ -509,15 +509,15 @@ BodySystem* constructBodySystem(Body** bodies, int nBodies) {
     return system;
 }
 
-BodySystem* stepBodySystem(BodySystem* system, double timeStep) {
+BodySystem* stepBodySystem(BodySystem* system, long double timeStep) {
     if (!system || timeStep < 0) return NULL;
-    for (int i = 0; i < system->nBodies; i++) {
+    for (size_t i = 0; i < system->nBodies; i++) {
         if (!stepBody(system->bodies[i], timeStep)) return NULL;
     }
     return system;
 }
 
-BodySystem* simulateBodySystem(BodySystem* system, double timeStep, int steps) {
+BodySystem* simulateBodySystem(BodySystem* system, long double timeStep, int steps) {
     if (!system || timeStep < 0 || steps < 0) return NULL;
     for (int i = 0; i < steps; i++) {
         if (!stepBodySystem(system, timeStep)) return NULL;
@@ -528,7 +528,7 @@ BodySystem* simulateBodySystem(BodySystem* system, double timeStep, int steps) {
 /* ---------- Conservation quantities ---------- */
 
 // Compute the magnitude of the momentum of a body
-double momentumMagnitude(Body* body) {
+long double momentumMagnitude(Body* body) {
     if (!body) return NAN;
 
     return body->mass * l2Norm(body->velocity);
@@ -539,7 +539,7 @@ Vector* momentumVector(Body* body) {
     if (!body) return NULL;
 
     int dim = body->velocity->numRows;
-    double mass = body->mass;
+    long double mass = body->mass;
     Vector* mom = constructVector(dim);
     for (int i = 0; i < dim; i++) {
         setEntry(mom, i, 0, R(mass * re(getEntry(body->velocity, i, 0))));
@@ -549,15 +549,15 @@ Vector* momentumVector(Body* body) {
 }
 
 // Compute the kinetic energy of a body
-double kineticEnergy(Body* body) {
+long double kineticEnergy(Body* body) {
     if (!body) return NAN;
 
-    double velMag = l2Norm(body->velocity);
+    long double velMag = l2Norm(body->velocity);
     return 0.5 * body->mass * velMag * velMag;
 }
 
 // Compute the gravitational potential energy of a body at a certain height
-double gravPotentialEnergy(Body* body, double height) {
+long double gravPotentialEnergy(Body* body, long double height) {
     if (!body) return NAN;
     if (height == 0) return 0;
 
@@ -565,7 +565,7 @@ double gravPotentialEnergy(Body* body, double height) {
 }
 
 // Compute the potential energy of a body in a spring with spring constant k and compression x
-double springPotentialEnergy(double k, double x) {
+long double springPotentialEnergy(long double k, long double x) {
     if (k < 0 || x < 0) return NAN;
     return 0.5 * k * x * x;
 }
@@ -578,15 +578,15 @@ Vector* totalMomentum(BodySystem* system) {
     if (!total) return NULL;
     for (int j = 0; j < dim; j++) setEntry(total, j, 0, R(0));
 
-    for (int i = 0; i < system->nBodies; i++) {
+    for (size_t i = 0; i < system->nBodies; i++) {
         Body* body = system->bodies[i];
         if (!body || !body->velocity || body->velocity->numRows != dim) {
             freeVector(total);
             return NULL;
         }
         for (int j = 0; j < dim; j++) {
-            double prev = re(getEntry(total, j, 0));
-            double add = body->mass * re(getEntry(body->velocity, j, 0));
+            long double prev = re(getEntry(total, j, 0));
+            long double add = body->mass * re(getEntry(body->velocity, j, 0));
             setEntry(total, j, 0, R(prev + add));
         }
     }
@@ -594,11 +594,11 @@ Vector* totalMomentum(BodySystem* system) {
     return total;
 }
 
-double totalEnergy(BodySystem* system) {
+long double totalEnergy(BodySystem* system) {
     if (!system || !system->bodies) return NAN;
 
-    double total = 0;
-    for (int i = 0; i < system->nBodies; i++) {
+    long double total = 0;
+    for (size_t i = 0; i < system->nBodies; i++) {
         Body* body = system->bodies[i];
         if (!body) return NAN;
         total += kineticEnergy(body);
@@ -611,7 +611,7 @@ double totalEnergy(BodySystem* system) {
 }
 
 // Compute the work done on an object by a force over a distance
-double work(Force* F, Vector* disp) {
+long double work(Force* F, Vector* disp) {
     if (!F || !disp) return NAN;
     if (F->vector->numRows != disp->numRows) return NAN;
 
@@ -619,7 +619,7 @@ double work(Force* F, Vector* disp) {
 }
 
 // Compute the power delivered by a force F at velocity v
-double power(Force* F, Vector* velocity) {
+long double power(Force* F, Vector* velocity) {
     if (!F || !velocity) return NAN;
     if (F->vector->numRows != velocity->numRows) return NAN;
 
@@ -627,13 +627,13 @@ double power(Force* F, Vector* velocity) {
 }
 
 // Compute the magnitude of the impulse delivered by a force F over a time interval time
-double impulseMagnitude(Force* F, double time) {
+long double impulseMagnitude(Force* F, long double time) {
     if (!F || time < 0) return NAN;
     return l2Norm(F->vector) * time;
 }
 
 // Compute the impulse vector of a body
-Vector* impulseVector(Force* F, double time) {
+Vector* impulseVector(Force* F, long double time) {
     if (!F) return NULL;
 
     int dim = F->vector->numRows;
@@ -648,31 +648,31 @@ Vector* impulseVector(Force* F, double time) {
 /* ---------- Collisions ---------- */
 
 // Find the center of mass of a system of bodies
-Vector* centerOfMass(Body** bodies, int nBodies) {
-    if (!bodies || nBodies <= 0) return NULL;
+Vector* centerOfMass(Body** bodies, size_t nBodies) {
+    if (!bodies || nBodies == 0) return NULL;
     if (!bodies[0] || !bodies[0]->pos) return NULL;
 
     int dim = bodies[0]->pos->numRows;
     Vector* com = constructVector(dim);
     if (!com) return NULL;
     for (int j = 0; j < dim; j++) setEntry(com, j, 0, R(0));
-    double totalMass = 0;
+    long double totalMass = 0;
 
-    for (int i = 0; i < nBodies; i++) {
+    for (size_t i = 0; i < nBodies; i++) {
         if (!bodies[i] || bodies[i]->pos->numRows != dim) {
             freeVector(com);
             return NULL;
         }
-        double mass = bodies[i]->mass;
+        long double mass = bodies[i]->mass;
         totalMass += mass;
         for (int j = 0; j < dim; j++) {
-            double prev = re(getEntry(com, j, 0));
+            long double prev = re(getEntry(com, j, 0));
             setEntry(com, j, 0, R(prev + mass * re(getEntry(bodies[i]->pos, j, 0))));
         }
     }
 
     for (int j = 0; j < dim; j++) {
-        double prev = re(getEntry(com, j, 0));
+        long double prev = re(getEntry(com, j, 0));
         setEntry(com, j, 0, R(prev / totalMass));
     }
 
@@ -680,31 +680,31 @@ Vector* centerOfMass(Body** bodies, int nBodies) {
 }
 
 // Find the velocity of the center of mass of a system of bodies by taking the mass-weighted average of their velocities
-Vector* centerOfMassVelocity(Body** bodies, int nBodies) {
-    if (!bodies || nBodies <= 0) return NULL;
+Vector* centerOfMassVelocity(Body** bodies, size_t nBodies) {
+    if (!bodies || nBodies == 0) return NULL;
     if (!bodies[0] || !bodies[0]->velocity) return NULL;
 
     int dim = bodies[0]->velocity->numRows;
     Vector* comVel = constructVector(dim);
     if (!comVel) return NULL;
     for (int j = 0; j < dim; j++) setEntry(comVel, j, 0, R(0));
-    double totalMass = 0;
+    long double totalMass = 0;
 
-    for (int i = 0; i < nBodies; i++) {
+    for (size_t i = 0; i < nBodies; i++) {
         if (!bodies[i] || bodies[i]->velocity->numRows != dim) {
             freeVector(comVel);
             return NULL;
         }
-        double mass = bodies[i]->mass;
+        long double mass = bodies[i]->mass;
         totalMass += mass;
         for (int j = 0; j < dim; j++) {
-            double prev = re(getEntry(comVel, j, 0));
+            long double prev = re(getEntry(comVel, j, 0));
             setEntry(comVel, j, 0, R(prev + mass * re(getEntry(bodies[i]->velocity, j, 0))));
         }
     }
 
     for (int j = 0; j < dim; j++) {
-        double prev = re(getEntry(comVel, j, 0));
+        long double prev = re(getEntry(comVel, j, 0));
         setEntry(comVel, j, 0, R(prev / totalMass));
     }
 
@@ -715,13 +715,13 @@ Vector* centerOfMassVelocity(Body** bodies, int nBodies) {
 void elasticCollision1D(Body* b1, Body* b2) {
     if (!b1 || !b2) return;
 
-    double m1 = b1->mass;
-    double m2 = b2->mass;
-    double v1 = re(getEntry(b1->velocity, 0, 0));
-    double v2 = re(getEntry(b2->velocity, 0, 0));
+    long double m1 = b1->mass;
+    long double m2 = b2->mass;
+    long double v1 = re(getEntry(b1->velocity, 0, 0));
+    long double v2 = re(getEntry(b2->velocity, 0, 0));
 
-    double newV1 = (v1 * (m1 - m2) + 2 * m2 * v2) / (m1 + m2);
-    double newV2 = (v2 * (m2 - m1) + 2 * m1 * v1) / (m1 + m2);
+    long double newV1 = (v1 * (m1 - m2) + 2 * m2 * v2) / (m1 + m2);
+    long double newV2 = (v2 * (m2 - m1) + 2 * m1 * v1) / (m1 + m2);
 
     setEntry(b1->velocity, 0, 0, R(newV1));
     setEntry(b2->velocity, 0, 0, R(newV2));
@@ -731,12 +731,12 @@ void elasticCollision1D(Body* b1, Body* b2) {
 void inelasticCollision1D(Body* b1, Body* b2) {
     if (!b1 || !b2) return;
 
-    double m1 = b1->mass;
-    double m2 = b2->mass;
-    double v1 = re(getEntry(b1->velocity, 0, 0));
-    double v2 = re(getEntry(b2->velocity, 0, 0));
+    long double m1 = b1->mass;
+    long double m2 = b2->mass;
+    long double v1 = re(getEntry(b1->velocity, 0, 0));
+    long double v2 = re(getEntry(b2->velocity, 0, 0));
 
-    double newV = (m1 * v1 + m2 * v2) / (m1 + m2);
+    long double newV = (m1 * v1 + m2 * v2) / (m1 + m2);
 
     setEntry(b1->velocity, 0, 0, R(newV));
     setEntry(b2->velocity, 0, 0, R(newV));
@@ -745,25 +745,25 @@ void inelasticCollision1D(Body* b1, Body* b2) {
 /* ---------- Rotational dynamics ---------- */
 
 // Get the moment of inertia of a point mass at distance r from the axis
-double momentOfInertiaPoint(double m, double r) {
+long double momentOfInertiaPoint(long double m, long double r) {
     if (m < 0 || r < 0) return NAN;
     return m * r * r;
 }
 
 // Get the moment of inertia of a rod of length L about its center of mass
-double momentOfInertiaRod(double m, double L) {
+long double momentOfInertiaRod(long double m, long double L) {
     if (m < 0 || L < 0) return NAN;
     return (1.0 / 12.0) * m * L * L;
 }
 
 // Get the moment of inertia of a uniform disk of radius R about its central axis
-double momentOfInertiaDisk(double m, double R) {
+long double momentOfInertiaDisk(long double m, long double R) {
     if (m < 0 || R < 0) return NAN;
     return 0.5 * m * R * R;
 }
 
 // Apply the parallel axis theorem to find the moment of inertia
-double parallelAxisTheorem(double I_cm, double m, double d) {
+long double parallelAxisTheorem(long double I_cm, long double m, long double d) {
     if (I_cm < 0 || m < 0) return NAN;
     return I_cm + m * d * d;
 }
@@ -781,10 +781,10 @@ Vector* torque(Force* F, Vector* pivot) {
     if (!r) return NULL;
 
     if (dim == 2) {
-        double rx = re(getEntry(r, 0, 0));
-        double ry = re(getEntry(r, 1, 0));
-        double fx = re(getEntry(F->vector, 0, 0));
-        double fy = re(getEntry(F->vector, 1, 0));
+        long double rx = re(getEntry(r, 0, 0));
+        long double ry = re(getEntry(r, 1, 0));
+        long double fx = re(getEntry(F->vector, 0, 0));
+        long double fy = re(getEntry(F->vector, 1, 0));
         freeVector(r);
         Vector* t = constructVector(1);
         if (!t) return NULL;
@@ -816,10 +816,10 @@ Vector* angularMomentum(Body* body, Vector* pivot) {
     }
 
     if (dim == 2) {
-        double rx = re(getEntry(r, 0, 0));
-        double ry = re(getEntry(r, 1, 0));
-        double px = re(getEntry(p, 0, 0));
-        double py = re(getEntry(p, 1, 0));
+        long double rx = re(getEntry(r, 0, 0));
+        long double ry = re(getEntry(r, 1, 0));
+        long double px = re(getEntry(p, 0, 0));
+        long double py = re(getEntry(p, 1, 0));
         freeVector(r);
         freeVector(p);
         Vector* L = constructVector(1);
@@ -835,13 +835,13 @@ Vector* angularMomentum(Body* body, Vector* pivot) {
 }
 
 // Get the rotational kinetic energy given the moment of inertia and angular velocity
-double rotationalKineticEnergy(double I, double omega) {
+long double rotationalKineticEnergy(long double I, long double omega) {
     if (I < 0) return NAN;
     return 0.5 * I * omega * omega;
 }
 
 // Get the angular acceleration about a fixed axis given the net torque and moment of inertia
-double angularAccelerationFromTorque(double netTorque, double I) {
+long double angularAccelerationFromTorque(long double netTorque, long double I) {
     if (I <= 0) return NAN;
     return netTorque / I;
 }

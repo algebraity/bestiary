@@ -26,16 +26,16 @@ static int testsPassed = 0;
 #define SECTION(name) printf("\n=== %s ===\n", name)
 
 // Approximate equality for doubles
-static bool approx(double a, double b, double tol) {
+static bool approx(long double a, long double b, long double tol) {
     if (isnan(a) && isnan(b)) return true;
-    return fabs(a - b) <= tol;
+    return fabsl(a - b) <= tol;
 }
 
 /* PONI is real-only. These helpers bridge to Sokko's MatrixElement API:
-   R() lifts a double into a real MatrixElement; re() pulls the real part
+   R() lifts a long double into a real MatrixElement; re() pulls the real part
    back out. Using them keeps the tests readable. */
-static inline double re(MatrixElement e) { return e.value.real; }
-static inline MatrixElement R(double x) { return elemFromReal(x); }
+static inline long double re(MatrixElement e) { return e.value.real; }
+static inline MatrixElement R(long double x) { return elemFromReal(x); }
 
 /* ---------- Helper tests ---------- */
 
@@ -65,21 +65,21 @@ void testDisplacement() {
     // Origin to (3, 4, 5)
     Vector* origin = constructVector3(R(0), R(0), R(0));
     Vector* p = constructVector3(R(3), R(4), R(5));
-    double* d = displacement(origin, p);
+    long double* d = displacement(origin, p);
     CHECK(d != NULL, "allocated");
     CHECK(approx(d[0], 3.0, 1e-10) && approx(d[1], 4.0, 1e-10) && approx(d[2], 5.0, 1e-10),
           "values correct");
     free(d);
 
     // Self-displacement = 0
-    double* z = displacement(p, p);
+    long double* z = displacement(p, p);
     CHECK(approx(z[0], 0.0, 1e-10) && approx(z[1], 0.0, 1e-10) && approx(z[2], 0.0, 1e-10),
           "self-displacement zero");
     free(z);
 
     // Reverse direction: negative
     Vector* q = constructVector3(R(1), R(2), R(3));
-    double* dn = displacement(p, q);
+    long double* dn = displacement(p, q);
     CHECK(approx(dn[0], -2.0, 1e-10) && approx(dn[1], -2.0, 1e-10) && approx(dn[2], -2.0, 1e-10),
           "reversed direction");
     free(dn);
@@ -100,14 +100,14 @@ void testAverageVelocity() {
     CHECK(averageVelocity(p1, v2, 1.0) == NULL, "dim mismatch");
     freeVector(v2);
 
-    double* v = averageVelocity(p1, p2, 2.0);
+    long double* v = averageVelocity(p1, p2, 2.0);
     CHECK(v != NULL, "allocated");
     CHECK(approx(v[0], 3.0, 1e-10) && approx(v[1], 4.0, 1e-10) && approx(v[2], 0.0, 1e-10),
           "(6,8,0) over 2s = (3,4,0)");
     free(v);
 
     // Same-point: zero velocity
-    double* z = averageVelocity(p1, p1, 5.0);
+    long double* z = averageVelocity(p1, p1, 5.0);
     CHECK(approx(z[0], 0.0, 1e-10) && approx(z[1], 0.0, 1e-10) && approx(z[2], 0.0, 1e-10),
           "same point: zero velocity");
     free(z);
@@ -131,7 +131,7 @@ void testAverageAcceleration() {
     freeVector(v2);
 
     // From rest, 10 m in 2 s: 10 = 0 + 0.5*a*4 => a = 5
-    double* a = averageAcceleration(p1, p2, v0, 2.0);
+    long double* a = averageAcceleration(p1, p2, v0, 2.0);
     CHECK(a != NULL, "allocated");
     CHECK(approx(a[0], 5.0, 1e-10), "rest to 10m in 2s: a = 5");
     free(a);
@@ -140,7 +140,7 @@ void testAverageAcceleration() {
     // Pick p2 = (10.5, 0, 0) => a = 1
     Vector* v1 = constructVector3(R(2), R(0), R(0));
     Vector* p3 = constructVector3(R(10.5), R(0), R(0));
-    double* a2 = averageAcceleration(p1, p3, v1, 3.0);
+    long double* a2 = averageAcceleration(p1, p3, v1, 3.0);
     CHECK(approx(a2[0], 1.0, 1e-10), "a=1 from formula");
     free(a2);
 
@@ -148,7 +148,7 @@ void testAverageAcceleration() {
     Vector* accel = constructVector3(R(2.0), R(-1.0), R(0.5));
     Vector* vInit = constructVector3(R(1.0), R(3.0), R(0.0));
     Vector* posFromAt = positionAtTime(p1, vInit, accel, 4.0);
-    double* aBack = averageAcceleration(p1, posFromAt, vInit, 4.0);
+    long double* aBack = averageAcceleration(p1, posFromAt, vInit, 4.0);
     CHECK(approx(aBack[0], 2.0, 1e-10) &&
           approx(aBack[1], -1.0, 1e-10) &&
           approx(aBack[2], 0.5, 1e-10), "round-trip with positionAtTime");
@@ -249,7 +249,7 @@ void testSpeedAtPosition() {
     Vector* v03 = constructVector3(R(3), R(0), R(0));
     Vector* pos8 = constructVector3(R(8), R(0), R(0));
     Vector* s2 = speedAtPosition(p0, v03, a, pos8);
-    CHECK(approx(re(getEntry(s2, 0, 0)), sqrt(41.0), 1e-10), "v0=3, a=2, x=8: speed=sqrt(41)");
+    CHECK(approx(re(getEntry(s2, 0, 0)), sqrtl(41.0), 1e-10), "v0=3, a=2, x=8: speed=sqrtl(41)");
     freeVector(s2); freeVector(v03); freeVector(pos8);
 
     // No accel: speed stays |v0|
@@ -289,14 +289,14 @@ void testVelocityAtPosition() {
     freeVector(v);
 
     // Ball thrown up: v0=10, a=-10 along y. At y=4 on ascent: t = smallest root
-    // quadratic: 0.5*(-10)*t^2 + 10*t - 4 = 0 => -5t^2 + 10t - 4 = 0 => t = (10 ± sqrt(100-80))/10
-    // Smaller t = (10-sqrt(20))/10 ≈ 0.553, v = 10 - 10*t = sqrt(20)
+    // quadratic: 0.5*(-10)*t^2 + 10*t - 4 = 0 => -5t^2 + 10t - 4 = 0 => t = (10 ± sqrtl(100-80))/10
+    // Smaller t = (10-sqrtl(20))/10 ≈ 0.553, v = 10 - 10*t = sqrtl(20)
     Vector* p0y = constructVector3(R(0), R(0), R(0));
     Vector* vUp0 = constructVector3(R(0), R(10), R(0));
     Vector* aDown = constructVector3(R(0), R(-10), R(0));
     Vector* y4 = constructVector3(R(0), R(4), R(0));
     Vector* vAt4 = velocityAtPosition(p0y, vUp0, aDown, y4);
-    CHECK(approx(re(getEntry(vAt4, 1, 0)), sqrt(20.0), 1e-9), "ball on ascent at y=4: v=+sqrt(20)");
+    CHECK(approx(re(getEntry(vAt4, 1, 0)), sqrtl(20.0), 1e-9), "ball on ascent at y=4: v=+sqrtl(20)");
     freeVector(vAt4);
 
     // At peak (y=5): t=1, v = 10 - 10*1 = 0
@@ -334,14 +334,14 @@ void testProjectileInfo() {
     CHECK(getProjectileInfo(10, 91, 0) == NULL, "angle > 90 NULL");
 
     // Launch at 45 deg from ground, v0=10:
-    //   range     = v^2 * sin(2θ) / g = 100 / g
+    //   range     = v^2 * sinl(2θ) / g = 100 / g
     //   peak      = (v*sinθ)^2 / (2g) = 25 / g
-    //   flightT   = 2*v*sinθ / g = 10*sqrt(2) / g
+    //   flightT   = 2*v*sinθ / g = 10*sqrtl(2) / g
     ProjectileInfo* i45 = getProjectileInfo(10, 45, 0);
     CHECK(i45 != NULL, "allocated");
     CHECK(approx(i45->range, 100.0 / A_GRAVITY, 1e-6), "45 deg: range = 100/g");
     CHECK(approx(i45->peakHeight, 25.0 / A_GRAVITY, 1e-6), "45 deg: peak = 25/g");
-    CHECK(approx(i45->timeOfFlight, 10.0 * sqrt(2.0) / A_GRAVITY, 1e-6), "45 deg: flight = 10*sqrt(2)/g");
+    CHECK(approx(i45->timeOfFlight, 10.0 * sqrtl(2.0) / A_GRAVITY, 1e-6), "45 deg: flight = 10*sqrtl(2)/g");
     free(i45);
 
     // Straight up (90 deg) from ground, v0=10:
@@ -353,10 +353,10 @@ void testProjectileInfo() {
     free(iUp);
 
     // Horizontal (0 deg) from height h=20, v0=10:
-    //   flight = sqrt(2h/g), range = v*flight, peak = h
+    //   flight = sqrtl(2h/g), range = v*flight, peak = h
     ProjectileInfo* iH = getProjectileInfo(10, 0, 20);
-    double tH = sqrt(2.0 * 20.0 / A_GRAVITY);
-    CHECK(approx(iH->timeOfFlight, tH, 1e-6), "horizontal: flight = sqrt(2h/g)");
+    long double tH = sqrtl(2.0 * 20.0 / A_GRAVITY);
+    CHECK(approx(iH->timeOfFlight, tH, 1e-6), "horizontal: flight = sqrtl(2h/g)");
     CHECK(approx(iH->range, 10.0 * tH, 1e-6), "horizontal: range = v*flight");
     CHECK(approx(iH->peakHeight, 20.0, 1e-6), "horizontal: peak = h");
     free(iH);
@@ -556,10 +556,10 @@ void testNormalForce() {
     CHECK(approx(re(getEntry(n->vector, 2, 0)), 0.0, 1e-10), "z = 0");
     freeVector(n->vector); freeVector(n->tailPos); free(n);
 
-    // 45 deg incline: magnitude = m*g*cos(45)
-    Vector* tilt = constructVector3(R(sin(M_PI/4)), R(cos(M_PI/4)), R(0));
+    // 45 deg incline: magnitude = m*g*cosl(45)
+    Vector* tilt = constructVector3(R(sinl(M_PI/4)), R(cosl(M_PI/4)), R(0));
     Force* n2 = normalForce(b, tilt);
-    CHECK(approx(l2Norm(n2->vector), 3.0 * A_GRAVITY * cos(M_PI/4), 1e-10), "45 deg incline magnitude");
+    CHECK(approx(l2Norm(n2->vector), 3.0 * A_GRAVITY * cosl(M_PI/4), 1e-10), "45 deg incline magnitude");
     freeVector(n2->vector); freeVector(n2->tailPos); free(n2);
 
     // Non-unit normal: should be normalized internally
@@ -875,7 +875,6 @@ void testCenterOfMass() {
 
     Body* arr[2] = {b1, b2};
     CHECK(centerOfMass(arr, 0) == NULL, "nBodies=0 NULL");
-    CHECK(centerOfMass(arr, -1) == NULL, "nBodies<0 NULL");
 
     // m1=2 at 0, m2=1 at 6: com = (2*0 + 1*6)/3 = 2
     Vector* com = centerOfMass(arr, 2);
@@ -987,13 +986,13 @@ void testElasticCollision1D() {
     Vector* vb = constructVector3(R(-2), R(0), R(0));
     Body* bb = constructBody(1.0, pb, vb);
 
-    double pBefore = 3.0 * 4.0 + 1.0 * (-2.0);
-    double keBefore = 0.5 * 3.0 * 16.0 + 0.5 * 1.0 * 4.0;
+    long double pBefore = 3.0 * 4.0 + 1.0 * (-2.0);
+    long double keBefore = 0.5 * 3.0 * 16.0 + 0.5 * 1.0 * 4.0;
     elasticCollision1D(ba, bb);
-    double va2 = re(getEntry(ba->velocity, 0, 0));
-    double vb2 = re(getEntry(bb->velocity, 0, 0));
-    double pAfter = 3.0 * va2 + 1.0 * vb2;
-    double keAfter = 0.5 * 3.0 * va2 * va2 + 0.5 * 1.0 * vb2 * vb2;
+    long double va2 = re(getEntry(ba->velocity, 0, 0));
+    long double vb2 = re(getEntry(bb->velocity, 0, 0));
+    long double pAfter = 3.0 * va2 + 1.0 * vb2;
+    long double keAfter = 0.5 * 3.0 * va2 * va2 + 0.5 * 1.0 * vb2 * vb2;
     CHECK(approx(pAfter, pBefore, 1e-10), "momentum conserved");
     CHECK(approx(keAfter, keBefore, 1e-10), "KE conserved");
 
@@ -1047,14 +1046,14 @@ void testInelasticCollision1D() {
     Vector* vb = constructVector3(R(0), R(0), R(0));
     Body* bb = constructBody(3.0, pb, vb);
 
-    double pBefore = 2.0 * 10.0 + 3.0 * 0.0;
-    double keBefore = 0.5 * 2.0 * 100.0 + 0.0;
+    long double pBefore = 2.0 * 10.0 + 3.0 * 0.0;
+    long double keBefore = 0.5 * 2.0 * 100.0 + 0.0;
     inelasticCollision1D(ba, bb);
-    double va2 = re(getEntry(ba->velocity, 0, 0));
-    double vb2 = re(getEntry(bb->velocity, 0, 0));
+    long double va2 = re(getEntry(ba->velocity, 0, 0));
+    long double vb2 = re(getEntry(bb->velocity, 0, 0));
     CHECK(approx(va2, vb2, 1e-10), "inelastic: velocities equal");
     CHECK(approx(va2, pBefore / 5.0, 1e-10), "v = p_total / M_total");
-    double keAfter = 0.5 * 5.0 * va2 * va2;
+    long double keAfter = 0.5 * 5.0 * va2 * va2;
     CHECK(keAfter < keBefore, "KE lost in inelastic");
 
     // NULL safety
@@ -1112,8 +1111,8 @@ void testParallelAxisTheorem() {
     // d = 0: I = I_cm
     CHECK(approx(parallelAxisTheorem(7, 2, 0), 7.0, 1e-10), "d=0: I = I_cm");
     // Rod about end = (1/3) m L^2 = I_cm + m*(L/2)^2 = (1/12)mL^2 + (1/4)mL^2
-    double Icm = momentOfInertiaRod(6, 2);
-    double Iend = parallelAxisTheorem(Icm, 6, 1);
+    long double Icm = momentOfInertiaRod(6, 2);
+    long double Iend = parallelAxisTheorem(Icm, 6, 1);
     CHECK(approx(Iend, (1.0/3.0) * 6 * 4, 1e-10), "rod about end via parallel axis");
 }
 

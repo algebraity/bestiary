@@ -48,7 +48,7 @@ AstNode* astNumber(long long v, size_t line, size_t col) {
     return n;
 }
 
-AstNode* astDecimal(double v, size_t line, size_t col) {
+AstNode* astDecimal(long double v, size_t line, size_t col) {
     AstNode* n = newNode(AST_DECIMAL, line, col);
     n->as.decimal = v;
     return n;
@@ -210,7 +210,7 @@ void astPrint(AstNode* n, int ind) {
     pad(ind);
     switch (n->kind) {
         case AST_NUMBER:   printf("Num %lld\n", n->as.number); break;
-        case AST_DECIMAL:  printf("Dec %g\n", n->as.decimal); break;
+        case AST_DECIMAL:  printf("Dec %Lg\n", n->as.decimal); break;
         case AST_STRING:   printf("String \"%s\"\n", n->as.ident); break;
         case AST_IDENT:    printf("Ident %s\n", n->as.ident); break;
         case AST_BINOP:

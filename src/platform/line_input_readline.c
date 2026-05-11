@@ -61,6 +61,7 @@ static const CommandEntry** collectCompletionMatches(const char* prefix, size_t*
     const CommandEntry** matches = NULL;
 
     for (const CommandEntry* c = commandRegistry(); c; c = c->next) {
+        if (strncmp(c->name, "__", 2) == 0) continue;
         if (strncmp(c->name, prefix, prefix_len) == 0) count++;
     }
     *out_count = count;
@@ -74,6 +75,7 @@ static const CommandEntry** collectCompletionMatches(const char* prefix, size_t*
 
     size_t index = 0;
     for (const CommandEntry* c = commandRegistry(); c; c = c->next) {
+        if (strncmp(c->name, "__", 2) == 0) continue;
         if (strncmp(c->name, prefix, prefix_len) == 0) {
             matches[index++] = c;
         }

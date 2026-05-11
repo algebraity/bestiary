@@ -39,7 +39,7 @@ struct AstNode {
     size_t line, col;
     union {
         long long number;
-        double    decimal;
+        long double    decimal;
         char*     ident;
         struct { AstOp op; char* opname; AstNode* lhs; AstNode* rhs; } binop;
         struct { AstOp op; AstNode* rand; } unary;
@@ -58,7 +58,7 @@ struct AstNode {
 /* ---------- Construct methods ---------- */
 
 AstNode* astNumber(long long n, size_t line, size_t col);
-AstNode* astDecimal(double d, size_t line, size_t col);
+AstNode* astDecimal(long double d, size_t line, size_t col);
 AstNode* astString(const char* s, size_t line, size_t col);
 AstNode* astIdent(const char* name, size_t line, size_t col);
 AstNode* astBinop(AstOp op, const char* opname, AstNode* lhs, AstNode* rhs);
