@@ -35,7 +35,6 @@ typedef struct Number {
 
 /* ---------- Helper methods ---------- */
 int comp(const void* a, const void* b);
-bool isValidStatsNumber(Number x);
 
 /* ---------- Fractions ---------- */
 Fraction constructFraction(long long num, long long denom);
@@ -80,6 +79,15 @@ long long compNumbers(Number a, Number b);
 bool eqNumbers(Number a, Number b);
 void freeNumber(Number x);
 void printNumber(Number x);
+
+/* ---------- Randomness ---------- */
+void seedPRG(unsigned long long seed);
+void resetPRG(void);
+unsigned long long stepPRG(void);
+long long randomInt(long long min, long long max);
+long double randomReal(long double min, long double max);
+Fraction randomFraction(long long minNum, long long maxNum, long long minDenom, long long maxDenom);
+ComplexNumber randomComplex(long double minReal, long double maxReal, long double minImag, long double maxImag);
 
 /* ---------- Transcendental constants ---------- */
 long double pi(void);

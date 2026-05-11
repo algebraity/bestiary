@@ -111,6 +111,7 @@ REPL_SRC = src/repl.c
 GUI_SRC = src/gui/bestiary_gui.cpp
 
 TEST_SRCS = \
+	tests/test_hebi.c \
 	tests/test_sokko.c \
 	tests/test_usagi.c \
 	tests/test_poni.c \
@@ -129,6 +130,7 @@ CLI_BIN := $(BINDIR)/bestiary-cli$(EXEEXT)
 REPL_BIN := $(BINDIR)/repl$(EXEEXT)
 GUI_BIN := $(BINDIR)/bestiary$(EXEEXT)
 TEST_BINS = \
+	$(BINDIR)/test_hebi$(EXEEXT) \
 	$(BINDIR)/test_sokko$(EXEEXT) \
 	$(BINDIR)/test_usagi$(EXEEXT) \
 	$(BINDIR)/test_poni$(EXEEXT) \
@@ -264,6 +266,9 @@ $(BINDIR)/%.dll: | $(BINDIR)
 		exit 1; \
 	fi
 	cp "$(WINDOWS_DLL_DIR)/$*.dll" "$@"
+
+$(BINDIR)/test_hebi$(EXEEXT): $(OBJDIR)/tests/test_hebi.o $(OBJDIR)/src/beasts/hebi.o | $(BINDIR)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ -lm
 
 $(BINDIR)/test_sokko$(EXEEXT): $(OBJDIR)/tests/test_sokko.o $(OBJDIR)/src/beasts/sokko.o $(OBJDIR)/src/beasts/hebi.o | $(BINDIR)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ -lm
