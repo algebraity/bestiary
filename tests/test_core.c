@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include "ast.h"
 #include "eval.h"
+#include "kuma.h"
 #include "lexer.h"
 #include "parser.h"
 #include "script.h"
@@ -216,6 +217,119 @@ static void testListMutation(void) {
     valFree(out);
 
     evalCtxFree(ctx);
+}
+
+static void testListSorting(void) {
+    SECTION("list sorting");
+    EvalContext* ctx = evalCtxNew();
+
+    Value out = evalLine(ctx, "xs = \\list{1,2}; ys = \\copy{xs}; ys[0] = 9; xs");
+    CHECK(out.kind == VAL_LIST
+          && out.as.list.n == 2
+          && out.as.list.items[0].kind == VAL_INT && out.as.list.items[0].as.i == 1
+          && out.as.list.items[1].kind == VAL_INT && out.as.list.items[1].as.i == 2,
+          "copy creates independent list");
+    valFree(out);
+
+    out = evalLine(ctx, "ys");
+    CHECK(out.kind == VAL_LIST
+          && out.as.list.n == 2
+          && out.as.list.items[0].kind == VAL_INT && out.as.list.items[0].as.i == 9,
+          "copied list can be mutated independently");
+    valFree(out);
+
+    out = evalLine(ctx, "z = \\copy{42}; z");
+    CHECK(out.kind == VAL_INT && out.as.i == 42, "copy handles scalar values");
+    valFree(out);
+
+    out = evalLine(ctx, "A = [1,2;3,4]; B = \\copy{A}; B");
+    CHECK(out.kind == VAL_MATRIX, "copy still handles matrices");
+    valFree(out);
+
+    out = evalLine(ctx, "xs = \\list{3, \\frac{1,2}, 2.5, -1}; \\sort{xs}");
+    CHECK(out.kind == VAL_LIST && out.as.list.n == 4, "sort returns sorted list");
+    CHECK(out.kind == VAL_LIST
+          && out.as.list.items[0].kind == VAL_INT && out.as.list.items[0].as.i == -1
+          && out.as.list.items[1].kind == VAL_FRACTION && out.as.list.items[1].as.frac.num == 1
+          && out.as.list.items[1].as.frac.denom == 2
+          && out.as.list.items[2].kind == VAL_DECIMAL && out.as.list.items[2].as.d == 2.5L
+          && out.as.list.items[3].kind == VAL_INT && out.as.list.items[3].as.i == 3,
+          "sort orders mixed real numeric values");
+    valFree(out);
+
+    Value list;
+    CHECK(envList(ctx, "xs", &list), "sort keeps list in env");
+    CHECK(list.as.list.n == 4
+          && list.as.list.items[0].kind == VAL_INT && list.as.list.items[0].as.i == -1
+          && list.as.list.items[3].kind == VAL_INT && list.as.list.items[3].as.i == 3,
+          "sort mutates named list");
+
+    out = evalLine(ctx, "\\sort{\\list{2,1}}");
+    CHECK(out.kind == VAL_LIST
+          && out.as.list.n == 2
+          && out.as.list.items[0].kind == VAL_INT && out.as.list.items[0].as.i == 1
+          && out.as.list.items[1].kind == VAL_INT && out.as.list.items[1].as.i == 2,
+          "sort handles inline lists");
+    valFree(out);
+
+    out = evalLine(ctx, "xs = \\list{3,1,2}; ys = \\sortedCopy{xs}; xs");
+    CHECK(out.kind == VAL_LIST
+          && out.as.list.n == 3
+          && out.as.list.items[0].kind == VAL_INT && out.as.list.items[0].as.i == 3
+          && out.as.list.items[1].kind == VAL_INT && out.as.list.items[1].as.i == 1
+          && out.as.list.items[2].kind == VAL_INT && out.as.list.items[2].as.i == 2,
+          "sortedCopy does not mutate original list");
+    valFree(out);
+
+    out = evalLine(ctx, "ys");
+    CHECK(out.kind == VAL_LIST
+          && out.as.list.n == 3
+          && out.as.list.items[0].kind == VAL_INT && out.as.list.items[0].as.i == 1
+          && out.as.list.items[1].kind == VAL_INT && out.as.list.items[1].as.i == 2
+          && out.as.list.items[2].kind == VAL_INT && out.as.list.items[2].as.i == 3,
+          "sortedCopy returns sorted list");
+    valFree(out);
+
+    out = evalLine(ctx, "\\sort{\\list{1,\"bad\"}}");
+    CHECK(out.kind == VAL_ERROR, "sort rejects nonnumeric list item");
+    valFree(out);
+
+    out = evalLine(ctx, "\\sort{7}");
+    CHECK(out.kind == VAL_ERROR, "sort rejects non-list input");
+    valFree(out);
+
+    evalCtxFree(ctx);
+}
+
+static void testKumaValueOwnership(void) {
+    SECTION("KUMA value ownership");
+
+    ProbabilityDistribution* dist = constructBernoulliDistribution(constructNumberFromFraction(constructFraction(1, 3)));
+    Value wrappedDist = valPtr(VAL_PROBABILITY_DISTRIBUTION, dist);
+    Value copiedDist = valClone(wrappedDist);
+    CHECK(copiedDist.kind == VAL_PROBABILITY_DISTRIBUTION
+          && copiedDist.as.ptr
+          && copiedDist.as.ptr != wrappedDist.as.ptr,
+          "probability distribution values clone deeply");
+    CHECK(copiedDist.kind == VAL_PROBABILITY_DISTRIBUTION
+          && probabilityMean((ProbabilityDistribution*)copiedDist.as.ptr).type == NUMBER_FRACTION,
+          "probability distribution clone remains usable");
+    valFree(copiedDist);
+    valFree(wrappedDist);
+
+    ProbabilityDistribution* rvDist = constructBernoulliDistribution(constructNumberFromFraction(constructFraction(1, 4)));
+    RandomVariable* rv = constructRandomVariable("X", rvDist, true);
+    Value wrappedRv = valPtr(VAL_RANDOM_VARIABLE, rv);
+    Value copiedRv = valClone(wrappedRv);
+    CHECK(copiedRv.kind == VAL_RANDOM_VARIABLE
+          && copiedRv.as.ptr
+          && copiedRv.as.ptr != wrappedRv.as.ptr,
+          "random variable values clone deeply");
+    CHECK(copiedRv.kind == VAL_RANDOM_VARIABLE
+          && rvExpectedValue((RandomVariable*)copiedRv.as.ptr).type == NUMBER_FRACTION,
+          "random variable clone remains usable");
+    valFree(copiedRv);
+    valFree(wrappedRv);
 }
 
 static void testListPrinting(void) {
@@ -566,6 +680,8 @@ int main(void) {
     testListConstruction();
     testListIndexing();
     testListMutation();
+    testListSorting();
+    testKumaValueOwnership();
     testListPrinting();
     testConditionals();
     testMultilineBraceBlocks();

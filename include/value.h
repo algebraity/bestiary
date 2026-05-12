@@ -27,6 +27,8 @@ typedef struct Body Body;
 typedef struct BodySystem BodySystem;
 typedef struct Force Force;
 typedef struct NekoExpr NekoExpr;
+typedef struct ProbabilityDistribution ProbabilityDistribution;
+typedef struct RandomVariable RandomVariable;
 
 /* ---------- Value kinds ---------- */
 
@@ -63,7 +65,9 @@ typedef enum {
     VAL_RING_HOMOMORPHISM,
     VAL_BODY,
     VAL_BODY_SYSTEM,
-    VAL_FORCE
+    VAL_FORCE,
+    VAL_PROBABILITY_DISTRIBUTION,
+    VAL_RANDOM_VARIABLE
 } ValueKind;
 
 /* ---------- Value struct ---------- */
@@ -105,15 +109,17 @@ Value valPtr(ValueKind kind, void* p);            // generic opaque-pointer ctor
 
 /* ---------- Free, clone, introspection ---------- */
 
-// Free the Value payload. Strings/lists are owned directly; matrices,
+// Free the Value payload; strings/lists are owned directly, and matrices,
 // vectors, CombSets, TORA conjugacy classes, TORA representations, and TORA
-// character tables are also owned and released here. Other opaque BEAST
-// pointers are still treated as borrowed until their wrappers define ownership.
+// character tables, probability distributions, and random variables are also
+// owned and released here; other opaque BEAST pointers are still treated as
+// borrowed until their wrappers define ownership
 void valFree(Value v);
 
-// Produce an independently-freeable duplicate. Strings, lists, matrices,
-// vectors, conjugacy classes, representations, and character tables are
-// deep-copied; other opaque pointers remain shallow.
+// Produce an independently-freeable duplicate; strings, lists, matrices,
+// vectors, conjugacy classes, representations, character tables, probability
+// distributions, and random variables are deep-copied; other opaque pointers
+// remain shallow
 Value valClone(Value v);
 
 const char* valKindName(ValueKind k);

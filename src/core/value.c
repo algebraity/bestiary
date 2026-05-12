@@ -3,6 +3,7 @@
 #include<string.h>
 #include<math.h>
 #include "value.h"
+#include "kuma.h"
 #include "neko.h"
 #include "ookami.h"
 #include "poni.h"
@@ -27,7 +28,7 @@ static void printInlineVector(Vector* vector) {
         return;
     }
     putchar('[');
-    for (int i = 0; i < vector->numRows; i++) {
+    for (size_t i = 0; i < vector->numRows; i++) {
         if (i) printf(", ");
         MatrixElement elem = getEntry((Matrix*)vector, i, 0);
         if (elem.isComplex) {
@@ -389,6 +390,26 @@ static void printInlineRingHomomorphism(RingHomomorphism* homo) {
     printf(">");
 }
 
+static void printInlineProbabilityDistribution(ProbabilityDistribution* dist) {
+    if (!dist) {
+        printf("<probabilityDistribution null>");
+        return;
+    }
+    const char* type = dist->type == KUMA_DIST_DISCRETE ? "discrete" : "continuous";
+    printf("<probabilityDistribution %s; kind=%d>", type, dist->kind);
+}
+
+static void printInlineRandomVariable(RandomVariable* rv) {
+    if (!rv) {
+        printf("<randomVariable null>");
+        return;
+    }
+    printf("<randomVariable %s; distribution=",
+           rv->name ? rv->name : "?");
+    printInlineProbabilityDistribution(rv->distribution);
+    printf(">");
+}
+
 /* ---------- Construct methods ---------- */
 
 static long double zeroTiny(long double x) {
@@ -397,8 +418,8 @@ static long double zeroTiny(long double x) {
 
 static bool matrixIsFinite(Matrix* matrix) {
     if (!matrix) return true;
-    for (int r = 0; r < matrix->numRows; r++) {
-        for (int c = 0; c < matrix->numCols; c++) {
+    for (size_t r = 0; r < matrix->numRows; r++) {
+        for (size_t c = 0; c < matrix->numCols; c++) {
             MatrixElement elem = getEntry(matrix, r, c);
             if (elem.isComplex) {
                 if (!isfinite(elem.value.complex.real) || !isfinite(elem.value.complex.imag)) return false;
@@ -441,7 +462,7 @@ Value valPtr(ValueKind kind, void* p) {
 
 /* ---------- Free and clone ---------- */
 
-// Free a Value's own payload (strings, list arrays). See note in value.h
+// Free a Value's own payload; see note in value.h
 void valFree(Value v) {
     switch (v.kind) {
         case VAL_MATRIX:
@@ -465,6 +486,12 @@ void valFree(Value v) {
             break;
         case VAL_NEKO_EXPR:
             if (v.as.ptr) nekoFreeExpr((NekoExpr*)v.as.ptr);
+            break;
+        case VAL_PROBABILITY_DISTRIBUTION:
+            if (v.as.ptr) freeProbabilityDistribution((ProbabilityDistribution*)v.as.ptr);
+            break;
+        case VAL_RANDOM_VARIABLE:
+            if (v.as.ptr) freeRandomVariable((RandomVariable*)v.as.ptr);
             break;
         case VAL_STRING:
         case VAL_SYMBOL:
@@ -538,6 +565,18 @@ Value valClone(Value v) {
         case VAL_NEKO_EXPR:
             return valPtr(VAL_NEKO_EXPR,
                           v.as.ptr ? nekoCloneExpr((NekoExpr*)v.as.ptr) : NULL);
+        case VAL_PROBABILITY_DISTRIBUTION:
+            return valPtr(VAL_PROBABILITY_DISTRIBUTION,
+                          v.as.ptr ? copyProbabilityDistribution((ProbabilityDistribution*)v.as.ptr) : NULL);
+        case VAL_RANDOM_VARIABLE: {
+            RandomVariable* rv = (RandomVariable*)v.as.ptr;
+            if (!rv) return valPtr(VAL_RANDOM_VARIABLE, NULL);
+            ProbabilityDistribution* distCopy = copyProbabilityDistribution(rv->distribution);
+            if (!distCopy) return valPtr(VAL_RANDOM_VARIABLE, NULL);
+            RandomVariable* rvCopy = constructRandomVariable(rv->name ? rv->name : "X", distCopy, true);
+            if (!rvCopy) freeProbabilityDistribution(distCopy);
+            return valPtr(VAL_RANDOM_VARIABLE, rvCopy);
+        }
         case VAL_STRING: return valString(v.as.str);
         case VAL_SYMBOL: return valSymbol(v.as.str);
         case VAL_ERROR:  return valError(v.as.str);
@@ -588,6 +627,8 @@ const char* valKindName(ValueKind k) {
         case VAL_BODY:          return "body";
         case VAL_BODY_SYSTEM:   return "body_system";
         case VAL_FORCE:         return "force";
+        case VAL_PROBABILITY_DISTRIBUTION: return "probability_distribution";
+        case VAL_RANDOM_VARIABLE: return "random_variable";
     }
     return "?";
 }
@@ -725,6 +766,12 @@ void valPrint(Value v) {
             printInlineRingHomomorphism((RingHomomorphism*)v.as.ptr);
             break;
         }
+        case VAL_PROBABILITY_DISTRIBUTION:
+            printInlineProbabilityDistribution((ProbabilityDistribution*)v.as.ptr);
+            break;
+        case VAL_RANDOM_VARIABLE:
+            printInlineRandomVariable((RandomVariable*)v.as.ptr);
+            break;
         default:
             printf("<%s %p>", valKindName(v.kind), v.as.ptr);
             break;

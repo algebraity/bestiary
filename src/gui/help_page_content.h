@@ -13,6 +13,7 @@ enum class Beast {
     Usagi,
     Tora,
     Ookami,
+    Kuma,
 };
 
 struct Section {
@@ -34,7 +35,7 @@ struct Command {
 static constexpr const char* kIntroText =
     "Bestiary is a language, command-line interface, and GUI application through which a collection of C-based animal-themed mathematics libraries are accessed and used together seamlessly, as though they were all one program. Objects are defined by expressions like `A = { 1, 2, 3 }` and can be used with operations such as `A \\otimes A`. The language used in Bestiary is themed after LaTeX, and many objects can be defined in a way identical to how they would be typed in LaTeX.\n\n"
     "All commands in Bestiary start with a backslash `\\` character, like LaTeX. There are hundreds of commands, and while they can all be used together, they are provided by different BEASTs (Bundles of Efficient Algorithms for Science and Technology) and are used for different purposes. You should start by learning the commands for the application you need most.\n\n"
-    "Each of the seven linked help pages below provides the help information for every command associated with a specific BEAST, and describes the objects it provides and how to define and manipulate them. These pages can be searched with Ctrl+F. It is recommended to read the help page on HEBI first, as it is the most general BEAST and is used by all the others.\n\n"
+    "Each of the linked help pages below provides the help information for every command associated with a specific BEAST, and describes the objects it provides and how to define and manipulate them. These pages can be searched with Ctrl+F. It is recommended to read the help page on HEBI first, as it is the most general BEAST and is used by all the others.\n\n"
     "To get started, click one of the links below to open its help page. For more information or to submit issues or feature requests, visit the git page.";
 
 static constexpr Section kSections[] = {
@@ -50,6 +51,9 @@ static constexpr Section kSections[] = {
         "* inspect scalar parts: `\\re{z}`, `\\im{z}`, and `\\conj{z}`\n"
         "* compare values inline: `1 + 1 == 2`\n"
         "* define a list: `xs = \\list{1,2,3}` and access entries with `xs[0]`\n"
+        "* copy a value: `ys = \\copy{xs}`\n"
+        "* sort a numeric list: `\\sort{xs}`\n"
+        "* return a sorted copy without mutating the original: `\\sortedCopy{xs}`\n"
         "* choose between expressions: `\\if{x == 1}{\"yes\"}{\"no\"}`\n"
         "* repeat statements: `\\while{i < 3}{i++}` or `\\for{i = 0; i < n; i++}{\\print{i}}`\n"
         "* define a local user function: `\\def{square}{x}{\\return{x^2}}` and call it with `\\square{5}`\n"
@@ -130,6 +134,12 @@ static constexpr Section kSections[] = {
         "* inspect structure: `\\isAP{P}`, `\\isGP{G}`, and `\\ddsCard{A}`\n"
         "* measure additive behavior: `\\energyAdd{A}` and `\\ruzsaDistance{A,B}`"
     },
+    {
+        Beast::Kuma,
+        "KUMA (statistics and probability)",
+        "KUMA: Kernel for Uncertainty, Measures, and Analysis",
+        "* KUMA commands are being wired into the Bestiary language"
+    },
 };
 
 #define HELP_CMD(name, arity, beast, purpose, values, returns) { name, arity, beast, purpose, values, returns }
@@ -138,6 +148,9 @@ static constexpr Command kCommands[] = {
     HELP_CMD("help", -1, Beast::Hebi, "Displays command usage, accepted value types, and return type.", "zero arguments to list commands, or one command name as a Symbol or String", "String"),
     HELP_CMD("run", 1, Beast::Hebi, "Runs a text file as a Bestiary script, evaluating each nonblank line in the current context.", "String filename, or an unquoted filename in braces such as \\run{script.bsy}", "String summary, or Error if the file cannot be opened"),
     HELP_CMD("list", -1, Beast::Hebi, "Constructs a dynamic Bestiary list.", "zero or more values", "List"),
+    HELP_CMD("copy", 1, Beast::Hebi, "Creates an independently owned copy of a supported value.", "scalar, String, Symbol, List, Matrix, Vector, CombSet, NEKO expression, KUMA distribution, KUMA random variable, or supported TORA value", "same kind as input"),
+    HELP_CMD("sort", 1, Beast::Hebi, "Sorts a List of numeric values in ascending order.", "List containing only Int, Fraction, and Decimal values", "List"),
+    HELP_CMD("sortedCopy", 1, Beast::Hebi, "Creates a sorted copy of a numeric List without mutating the original.", "List containing only Int, Fraction, and Decimal values", "List"),
     HELP_CMD("if", -1, Beast::Hebi, "Evaluates the result branch when a condition is true, otherwise evaluates the optional else branch.", "Bool or truthy condition, result expression, and optional else expression", "selected branch value or none"),
     HELP_CMD("while", 2, Beast::Hebi, "Evaluates a body repeatedly while a condition remains true.", "truthy condition expression and loop body", "last body value or none"),
     HELP_CMD("for", 2, Beast::Hebi, "Evaluates an init, condition, and step header around a repeated body.", "header block of init; condition; step and loop body", "last body value or none"),
@@ -183,7 +196,6 @@ static constexpr Command kCommands[] = {
     HELP_CMD("trace", 1, Beast::Sokko, "Computes the trace of a square matrix.", "square Matrix", "Int, Decimal, Fraction, or Complex scalar"),
     HELP_CMD("frobeniusNorm", 1, Beast::Sokko, "Computes the Frobenius norm of a matrix.", "Matrix", "Decimal"),
     HELP_CMD("det", 1, Beast::Sokko, "Computes the determinant of a square matrix.", "square Matrix", "Int, Decimal, Fraction, or Complex scalar"),
-    HELP_CMD("copy", 1, Beast::Sokko, "Creates a deep copy of a matrix.", "Matrix", "Matrix"),
     HELP_CMD("transpose", 1, Beast::Sokko, "Computes the transpose of a matrix.", "Matrix", "Matrix"),
     HELP_CMD("adjoint", 1, Beast::Sokko, "Computes the conjugate transpose of a matrix.", "Matrix", "Matrix"),
     HELP_CMD("inverse", 1, Beast::Sokko, "Computes the inverse of an invertible square matrix.", "invertible square Matrix", "Matrix"),

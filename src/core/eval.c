@@ -6,6 +6,7 @@
 #include<limits.h>
 #include<stdarg.h>
 #include "eval.h"
+#include "kuma.h"
 #include "lexer.h"
 #include "hebi.h"
 #include "neko.h"
@@ -136,6 +137,9 @@ static const BuiltinDoc BUILTIN_DOCS[] = {
     { "help", "Displays command usage, accepted value types, and return type.", "zero arguments to list commands, or one command name as a Symbol or String", "String" },
     { "run", "Runs a text file as a Bestiary script, evaluating each nonblank line in the current context.", "String filename, or an unquoted filename in braces such as \\run{script.bsy}", "String summary, or Error if the file cannot be opened" },
     { "list", "Constructs a dynamic Bestiary list.", "zero or more values", "List" },
+    { "copy", "Creates an independently owned copy of a supported value.", "scalar, String, Symbol, List, Matrix, Vector, CombSet, NEKO expression, KUMA distribution, KUMA random variable, or supported TORA value", "same kind as input" },
+    { "sort", "Sorts a List of numeric values in ascending order.", "List containing only Int, Fraction, and Decimal values", "List" },
+    { "sortedCopy", "Creates a sorted copy of a numeric List without mutating the original.", "List containing only Int, Fraction, and Decimal values", "List" },
     { "if", "Evaluates the result branch when a condition is true, otherwise evaluates the optional else branch.", "Bool or truthy condition, result expression, and optional else expression", "selected branch value or none" },
     { "while", "Evaluates a body repeatedly while a condition remains true.", "truthy condition expression and loop body", "last body value or none" },
     { "for", "Evaluates an init, condition, and step header around a repeated body.", "header block of init; condition; step and loop body", "last body value or none" },
@@ -207,7 +211,6 @@ static const BuiltinDoc BUILTIN_DOCS[] = {
     { "trace", "Computes the trace of a square matrix.", "square Matrix", "Int, Decimal, Fraction, or Complex scalar" },
     { "frobeniusNorm", "Computes the Frobenius norm of a matrix.", "Matrix", "Decimal" },
     { "det", "Computes the determinant of a square matrix.", "square Matrix", "Int, Decimal, Fraction, or Complex scalar" },
-    { "copy", "Creates a deep copy of a matrix.", "Matrix", "Matrix" },
     { "transpose", "Computes the transpose of a matrix.", "Matrix", "Matrix" },
     { "adjoint", "Computes the conjugate transpose of a matrix.", "Matrix", "Matrix" },
     { "inverse", "Computes the inverse of an invertible square matrix.", "invertible square Matrix", "Matrix" },
@@ -1814,6 +1817,59 @@ static int valueToComparableReal(Value value, long double* out) {
     }
 }
 
+static int valueToKumaNumber(Value value, Number* out) {
+    if (!out) return 0;
+    switch (value.kind) {
+        case VAL_INT:
+            *out = constructNumberFromInt(value.as.i);
+            return isValidStatsNumber(*out);
+        case VAL_DECIMAL:
+            *out = constructNumberFromDouble(value.as.d);
+            return isValidStatsNumber(*out);
+        case VAL_FRACTION:
+            *out = constructNumberFromFraction(value.as.frac);
+            return isValidStatsNumber(*out);
+        default:
+            return 0;
+    }
+}
+
+static int compareKumaNumberValues(const void* lhs, const void* rhs) {
+    Number a;
+    Number b;
+    if (!valueToKumaNumber(*(const Value*)lhs, &a)) return 0;
+    if (!valueToKumaNumber(*(const Value*)rhs, &b)) return 0;
+    return compNumbers(a, b);
+}
+
+static int valueSupportsDeepCopy(Value value) {
+    switch (value.kind) {
+        case VAL_NONE:
+        case VAL_ERROR:
+        case VAL_BOOL:
+        case VAL_INT:
+        case VAL_DECIMAL:
+        case VAL_FRACTION:
+        case VAL_COMPLEX:
+        case VAL_STRING:
+        case VAL_SYMBOL:
+        case VAL_LIST:
+        case VAL_NEKO_EXPR:
+        case VAL_MATRIX:
+        case VAL_VECTOR:
+        case VAL_COMBSET:
+        case VAL_CONJUGACY_CLASS:
+        case VAL_REPRESENTATION:
+        case VAL_CHARACTER:
+        case VAL_CHARACTER_TABLE:
+        case VAL_PROBABILITY_DISTRIBUTION:
+        case VAL_RANDOM_VARIABLE:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
 static Value evalIfBranch(EvalContext* ctx, AstNode* branch) {
     if (!branch) return valNone();
     if (branch->kind == AST_SET && branch->as.tuple.n == 0) return valNone();
@@ -2271,7 +2327,8 @@ Value eval(EvalContext* ctx, AstNode* node) {
                     && firstLogicalCallArg(node)
                     && firstLogicalCallArg(node)->kind == AST_IDENT
                     && (strcmp(node->as.call.name, "append") == 0
-                        || strcmp(node->as.call.name, "remove") == 0)) {
+                        || strcmp(node->as.call.name, "remove") == 0
+                        || strcmp(node->as.call.name, "sort") == 0)) {
                 envSet(ctx->env, firstLogicalCallArg(node)->as.ident, valClone(result));
             }
             return result;
@@ -2469,6 +2526,42 @@ static Value bi_list(EvalContext* c, Value* a, size_t n) {
     }
     for (size_t i = 0; i < n; i++) items[i] = a[i];
     return valList(items, n);
+}
+
+static Value sortListValue(Value list, const char* cmdName) {
+    if (list.kind != VAL_LIST) {
+        valFree(list);
+        char buf[128];
+        snprintf(buf, sizeof(buf), "\\%s expects a List", cmdName);
+        return valError(buf);
+    }
+
+    // Validate that every item is a KUMA-compatible real scalar
+    for (size_t i = 0; i < list.as.list.n; i++) {
+        Number number;
+        if (!valueToKumaNumber(list.as.list.items[i], &number)) {
+            valFree(list);
+            char buf[160];
+            snprintf(buf, sizeof(buf),
+                     "\\%s only supports lists of Int, Fraction, and Decimal values",
+                     cmdName);
+            return valError(buf);
+        }
+    }
+
+    // Sort the cloned list payload in ascending numeric order
+    qsort(list.as.list.items, list.as.list.n, sizeof(Value), compareKumaNumberValues);
+    return list;
+}
+
+static Value bi_sort(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    return sortListValue(a[0], "sort");
+}
+
+static Value bi_sortedCopy(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    return sortListValue(a[0], "sortedCopy");
 }
 
 static Value bi_if(EvalContext* c, Value* a, size_t n) {
@@ -5770,11 +5863,15 @@ static Value bi_det(EvalContext* c, Value* a, size_t n) {
 
 static Value bi_copy(EvalContext* c, Value* a, size_t n) {
     (void)c; (void)n;
-    if (a[0].kind != VAL_MATRIX) return matrixUnaryError("\\copy expects one matrix", a[0]);
-    Matrix* copy = copyMatrix((Matrix*)a[0].as.ptr);
-    if (!copy) return matrixUnaryError("\\copy failed", a[0]);
+    if (!valueSupportsDeepCopy(a[0])) {
+        char buf[160];
+        snprintf(buf, sizeof(buf), "\\copy does not yet support %s values", valKindName(a[0].kind));
+        valFree(a[0]);
+        return valError(buf);
+    }
+    Value out = valClone(a[0]);
     valFree(a[0]);
-    return valPtr(VAL_MATRIX, copy);
+    return out;
 }
 
 static Value bi_transpose(EvalContext* c, Value* a, size_t n) {
@@ -9826,6 +9923,8 @@ void registerBuiltins(void) {
     registerCommand("help", -1, bi_help);
     registerCommand("run", 1, bi_run);
     registerCommand("list", -1, bi_list);
+    registerCommand("sort", 1, bi_sort);
+    registerCommand("sortedCopy", 1, bi_sortedCopy);
     registerCommand("if", -1, bi_if);
     registerCommand("while", 2, bi_while);
     registerCommand("for", 2, bi_for);
