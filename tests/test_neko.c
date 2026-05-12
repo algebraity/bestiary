@@ -82,6 +82,9 @@ static int exprEqualTest(const NekoExpr* a, const NekoExpr* b) {
         case NEKO_EXPR_LOG:
         case NEKO_EXPR_SQRT:
         case NEKO_EXPR_ABS:
+        case NEKO_EXPR_ERF:
+        case NEKO_EXPR_EI:
+        case NEKO_EXPR_STEP:
             return exprEqualTest(a->as.unary.arg, b->as.unary.arg);
         case NEKO_EXPR_CALL:
             if (!a->as.call.name || !b->as.call.name
@@ -178,6 +181,26 @@ static void testTrigExpLogChainRules(void) {
     CHECK_CLOSE(nekoEvalExpr(dTan, "x", x), 2.0 / (c * c), 1e-9, "d tanl(2x)");
     nekoFreeExpr(dTan);
     nekoFreeExpr(tanExpr);
+
+    NekoExpr* erfExpr = nekoErf(nekoMul(nekoConst(2.0), nekoVar("x")));
+    NekoExpr* dErf = diffOrNull(erfExpr);
+    x = 0.25;
+    CHECK_CLOSE(nekoEvalExpr(erfExpr, "x", x), erfl(2.0L * x), 1e-9, "erf expression value");
+    CHECK_CLOSE(nekoEvalExpr(dErf, "x", x), (4.0L / sqrtl(M_PI)) * expl(-4.0L * x * x), 1e-9, "d erf(2x)");
+    nekoFreeExpr(dErf);
+    nekoFreeExpr(erfExpr);
+
+    NekoExpr* eiExpr = nekoEi(nekoAdd(nekoVar("x"), nekoConst(1.0)));
+    NekoExpr* dEi = diffOrNull(eiExpr);
+    x = 0.5;
+    CHECK_CLOSE(nekoEvalExpr(dEi, "x", x), expl(x + 1.0L) / (x + 1.0L), 1e-9, "d Ei(x+1)");
+    nekoFreeExpr(dEi);
+    nekoFreeExpr(eiExpr);
+
+    NekoExpr* stepExpr = nekoStep(nekoSub(nekoVar("x"), nekoConst(1.0)));
+    CHECK_CLOSE(nekoEvalExpr(stepExpr, "x", 0.5), 0.0, 1e-12, "step expression below threshold");
+    CHECK_CLOSE(nekoEvalExpr(stepExpr, "x", 1.5), 1.0, 1e-12, "step expression above threshold");
+    nekoFreeExpr(stepExpr);
 }
 
 static void testGeneralPowerRule(void) {
@@ -336,7 +359,7 @@ static void testNumericalApplications(void) {
     CHECK(area.status == NEKO_OK, "area status");
     CHECK_CLOSE(area.value, 1.0 / 6.0, 1e-8, "area between x and x^2");
 
-    // Minimize (x-2)^2 + 1 subject to x - 1 >= 0 and 3 - x >= 0.
+    // Minimize (x-2)^2 + 1 subject to x - 1 >= 0 and 3 - x >= 0
     NekoExpr* c1Expr = nekoSub(nekoVar("x"), nekoConst(1.0));
     NekoExpr* c2Expr = nekoSub(nekoConst(3.0), nekoVar("x"));
     NekoFunc* c1 = nekoFuncFromExpr(c1Expr);
@@ -477,7 +500,7 @@ static void testSimplification(void) {
 static void testOdeSolvers(void) {
     section("ODE solvers");
 
-    // Bernoulli pattern: y' + 0*y = 1*y^2, y(0)=1 => y = 1/(1-x).
+    // Bernoulli pattern: y' + 0*y = 1*y^2, y(0)=1 => y = 1/(1-x)
     NekoExpr* zeroExpr = nekoConst(0.0);
     NekoExpr* oneExpr = nekoConst(1.0);
     NekoFunc* zero = nekoFuncFromExpr(zeroExpr);
@@ -489,7 +512,7 @@ static void testOdeSolvers(void) {
     CHECK(bernEval.status == NEKO_OK, "Bernoulli eval status");
     CHECK_CLOSE(bernEval.value, 2.0, 1e-6, "Bernoulli y'=y^2 value");
 
-    // y'' + y = 0, y(0)=0, y'(0)=1 => sinl(x).
+    // y'' + y = 0, y(0)=0, y'(0)=1 => sinl(x)
     NekoOde* osc = nekoOdeSecondOrderConst(1.0, 0.0, 1.0, 0.0, 0.0, 1.0);
     CHECK(osc != NULL, "second-order ODE constructed");
     CHECK(nekoMatchOdePattern(osc, NEKO_ODE_SECOND_ORDER_LINEAR_CONST), "second-order pattern matched");
@@ -500,7 +523,7 @@ static void testOdeSolvers(void) {
     NekoExpr* oscGeneral = solveGeneralOrNull(osc);
     nekoFreeExpr(oscGeneral);
 
-    // 2 y' = 6 y, y(1)=5 => y = 5 expl(3(x-1)).
+    // 2 y' = 6 y, y(1)=5 => y = 5 expl(3(x-1))
     NekoOde* first = nekoOdeFirstOrderLinearConst(2.0, 6.0, 1.0, 5.0);
     CHECK(first != NULL, "first-order linear ODE constructed");
     CHECK(nekoMatchOdePattern(first, NEKO_ODE_FIRST_ORDER_LINEAR_CONST), "first-order pattern matched");
@@ -511,7 +534,7 @@ static void testOdeSolvers(void) {
     CHECK_CLOSE(firstEval.value, 5.0 * expl(1.5), 1e-10, "first-order evaluator value");
     nekoFreeExpr(firstSolved);
 
-    // y'' + y = 1, y(0)=2, y'(0)=0 => y = 1 + cosl(x).
+    // y'' + y = 1, y(0)=2, y'(0)=0 => y = 1 + cosl(x)
     NekoOde* forced1 = nekoOdeSecondOrderConstForced(1.0, 0.0, 1.0, 1.0, 0.0, 2.0, 0.0);
     CHECK(forced1 != NULL, "forced second-order ODE constructed");
     NekoExpr* forced1Solved = solveInitialOrNull(forced1);
@@ -521,7 +544,7 @@ static void testOdeSolvers(void) {
     CHECK_CLOSE(forced1Eval.value, 0.0, 1e-10, "forced second-order evaluator value");
     nekoFreeExpr(forced1Solved);
 
-    // y'' = 2, y(0)=1, y'(0)=3 => y = 1 + 3x + x^2.
+    // y'' = 2, y(0)=1, y'(0)=3 => y = 1 + 3x + x^2
     NekoOde* forced2 = nekoOdeSecondOrderConstForced(1.0, 0.0, 0.0, 2.0, 0.0, 1.0, 3.0);
     CHECK(forced2 != NULL, "double-integral ODE constructed");
     NekoExpr* forced2Solved = solveInitialOrNull(forced2);
@@ -531,7 +554,7 @@ static void testOdeSolvers(void) {
     CHECK_CLOSE(forced2Eval.value, 11.0, 1e-10, "double-integral evaluator value");
     nekoFreeExpr(forced2Solved);
 
-    // y' = 3x^2 - 4x + 1, y(0)=2 => y = x^3 - 2x^2 + x + 2.
+    // y' = 3x^2 - 4x + 1, y(0)=2 => y = x^3 - 2x^2 + x + 2
     NekoExpr* polyRhs = nekoAdd(
         nekoSub(
             nekoMul(nekoConst(3.0), nekoPow(nekoVar("x"), nekoConst(2.0))),
@@ -550,7 +573,7 @@ static void testOdeSolvers(void) {
     CHECK_CLOSE(polyEval.value, 14.0, 1e-9, "integrated polynomial evaluator value");
     nekoFreeExpr(polySolved);
 
-    // y'''' = x should integrate four times and differentiate back to x.
+    // y'''' = x should integrate four times and differentiate back to x
     long double quarticInit[] = {1.0, 2.0, 3.0, 4.0};
     NekoOde* quartic = nekoOdeNthOrderIntegrable(4, 1.0, nekoVar("x"), 0.0, quarticInit);
     CHECK(quartic != NULL, "fourth-order integrable ODE constructed");
@@ -567,7 +590,7 @@ static void testOdeSolvers(void) {
     CHECK_CLOSE(quarticEval.value, 16.6, 1e-9, "fourth-order evaluator value");
     nekoFreeExpr(quarticSolved);
 
-    // y' = A y, A = [[0,-1],[1,0]], y(0)=(1,0) => (cos x, sin x).
+    // y' = A y, A = [[0,-1],[1,0]], y(0)=(1,0) => (cos x, sin x)
     long double A[] = {0.0, -1.0, 1.0, 0.0};
     long double y0[] = {1.0, 0.0};
     NekoOde* sys = nekoOdeLinearSystemConst(A, y0, 2, 0.0);

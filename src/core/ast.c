@@ -135,6 +135,14 @@ AstNode* astAssign(const char* name, AstNode* rhs) {
     return n;
 }
 
+AstNode* astIndexAssign(const char* name, AstNode* index, AstNode* rhs) {
+    AstNode* n = newNode(AST_INDEX_ASSIGN, rhs ? rhs->line : 0, rhs ? rhs->col : 0);
+    n->as.indexAssign.name  = dupstr(name);
+    n->as.indexAssign.index = index;
+    n->as.indexAssign.rhs   = rhs;
+    return n;
+}
+
 AstNode* astSeq(AstNode** stmts, size_t count) {
     AstNode* n = newNode(AST_SEQ, 0, 0);
     n->as.seq.stmts = stmts;
@@ -194,12 +202,101 @@ void astFree(AstNode* n) {
             free(n->as.assign.name);
             astFree(n->as.assign.rhs);
             break;
+        case AST_INDEX_ASSIGN:
+            free(n->as.indexAssign.name);
+            astFree(n->as.indexAssign.index);
+            astFree(n->as.indexAssign.rhs);
+            break;
         case AST_SEQ:
             for (size_t i = 0; i < n->as.seq.n; i++) astFree(n->as.seq.stmts[i]);
             free(n->as.seq.stmts);
             break;
     }
     free(n);
+}
+
+/* ---------- Clone ---------- */
+
+// Clone an array of AST child nodes
+static AstNode** cloneNodeArray(AstNode** nodes, size_t count) {
+    if (count == 0) return NULL;
+    AstNode** out = calloc(count, sizeof(AstNode*));
+    if (!out) return NULL;
+    for (size_t i = 0; i < count; i++) {
+        out[i] = astClone(nodes[i]);
+        if (!out[i]) {
+            for (size_t j = 0; j < i; j++) astFree(out[j]);
+            free(out);
+            return NULL;
+        }
+    }
+    return out;
+}
+
+// Recursively clone an AST subtree
+AstNode* astClone(const AstNode* n) {
+    if (!n) return NULL;
+
+    switch (n->kind) {
+        case AST_NUMBER:
+            return astNumber(n->as.number, n->line, n->col);
+        case AST_DECIMAL:
+            return astDecimal(n->as.decimal, n->line, n->col);
+        case AST_STRING:
+            return astString(n->as.ident, n->line, n->col);
+        case AST_IDENT:
+            return astIdent(n->as.ident, n->line, n->col);
+        case AST_BINOP:
+            return astBinop(n->as.binop.op, n->as.binop.opname,
+                            astClone(n->as.binop.lhs),
+                            astClone(n->as.binop.rhs));
+        case AST_UNARY:
+            return astUnary(n->as.unary.op, astClone(n->as.unary.rand));
+        case AST_POWER:
+            return astPower(astClone(n->as.power.base), astClone(n->as.power.exp));
+        case AST_SUBSCRIPT:
+            return astSubscript(astClone(n->as.subscript.base), astClone(n->as.subscript.sub));
+        case AST_CALL:
+            return astCall(n->as.call.name,
+                           cloneNodeArray(n->as.call.args, n->as.call.nargs),
+                           n->as.call.nargs, n->line, n->col);
+        case AST_TUPLE:
+            return astTuple(cloneNodeArray(n->as.tuple.items, n->as.tuple.n),
+                            n->as.tuple.n);
+        case AST_SET:
+            return astSet(cloneNodeArray(n->as.tuple.items, n->as.tuple.n),
+                          n->as.tuple.n, n->line, n->col);
+        case AST_MATRIX: {
+            size_t total = 0;
+            for (size_t r = 0; r < n->as.matrix.nrows; r++) total += n->as.matrix.rowlens[r];
+
+            size_t* rowlens = NULL;
+            if (n->as.matrix.nrows > 0) {
+                rowlens = malloc(n->as.matrix.nrows * sizeof(size_t));
+                if (!rowlens) return NULL;
+                memcpy(rowlens, n->as.matrix.rowlens, n->as.matrix.nrows * sizeof(size_t));
+            }
+
+            AstNode** flat = cloneNodeArray(n->as.matrix.flat, total);
+            if (!flat && total > 0) {
+                free(rowlens);
+                return NULL;
+            }
+
+            return astMatrix(n->as.matrix.tag, flat, rowlens, n->as.matrix.nrows,
+                             n->line, n->col);
+        }
+        case AST_ASSIGN:
+            return astAssign(n->as.assign.name, astClone(n->as.assign.rhs));
+        case AST_INDEX_ASSIGN:
+            return astIndexAssign(n->as.indexAssign.name,
+                                  astClone(n->as.indexAssign.index),
+                                  astClone(n->as.indexAssign.rhs));
+        case AST_SEQ:
+            return astSeq(cloneNodeArray(n->as.seq.stmts, n->as.seq.n),
+                          n->as.seq.n);
+    }
+    return NULL;
 }
 
 /* ---------- Pretty-print ---------- */
@@ -259,6 +356,11 @@ void astPrint(AstNode* n, int ind) {
         case AST_ASSIGN:
             printf("Assign %s =\n", n->as.assign.name);
             astPrint(n->as.assign.rhs, ind + 2);
+            break;
+        case AST_INDEX_ASSIGN:
+            printf("IndexAssign %s[] =\n", n->as.indexAssign.name);
+            astPrint(n->as.indexAssign.index, ind + 2);
+            astPrint(n->as.indexAssign.rhs, ind + 2);
             break;
         case AST_SEQ:
             printf("Seq (%zu)\n", n->as.seq.n);

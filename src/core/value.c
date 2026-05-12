@@ -605,12 +605,12 @@ void valPrint(Value v) {
         case VAL_STRING:   printf("\"%s\"", v.as.str ? v.as.str : ""); break;
         case VAL_SYMBOL:   printf("%s", v.as.str ? v.as.str : ""); break;
         case VAL_LIST:
-            putchar('(');
+            putchar('[');
             for (size_t i = 0; i < v.as.list.n; i++) {
                 if (i) printf(", ");
                 valPrint(v.as.list.items[i]);
             }
-            putchar(')');
+            putchar(']');
             break;
         case VAL_NEKO_EXPR:
             if (v.as.ptr) nekoPrintExpr((NekoExpr*)v.as.ptr);

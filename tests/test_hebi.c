@@ -165,6 +165,23 @@ static void testPrintNumber(void) {
     CHECK(printToBuffer(constructNumberFromDouble(2.5), buf, sizeof(buf)) && strcmp(buf, "2.5") == 0, "print real");
 }
 
+static void testSpecialFunctions(void) {
+    SECTION("special functions");
+
+    ComplexNumber erfI = complexErf((ComplexNumber){0.0L, 1.0L});
+    ComplexNumber eiOne = complexEi((ComplexNumber){1.0L, 0.0L});
+    ComplexNumber eiI = complexEi((ComplexNumber){0.0L, 1.0L});
+
+    CHECK(closeReal(realErf(0.0L), 0.0L), "real erf at zero");
+    CHECK(closeReal(realErf(1.0L), 0.84270079294971486934L), "real erf at one");
+    CHECK(closeReal(realEi(1.0L), 1.89511781635593675547L), "real Ei at one");
+    CHECK(closeReal(realEi(-1.0L), -0.21938393439552027368L), "real Ei at negative one");
+
+    CHECK(closeReal(erfI.real, 0.0L) && closeReal(erfI.imag, 1.6504257587975428760L), "complex erf at i");
+    CHECK(closeReal(eiOne.real, realEi(1.0L)) && closeReal(eiOne.imag, 0.0L), "complex Ei agrees on positive real input");
+    CHECK(closeReal(eiI.real, 0.33740392290096813466L) && closeReal(eiI.imag, 2.5168793971620796342L), "complex Ei at i");
+}
+
 static void testPRG(void) {
     SECTION("PRG");
     seedPRG(12345ULL);
@@ -272,6 +289,7 @@ int main(void) {
     testEqNumbers();
     testFreeNumber();
     testPrintNumber();
+    testSpecialFunctions();
     testPRG();
     testRandomInt();
     testRandomReal();

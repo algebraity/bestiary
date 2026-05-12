@@ -52,6 +52,7 @@ Token* bstLex(char* string, size_t* out_len)
 	char* buf = calloc(bufcap, sizeof(char));
 	size_t line = 1, col = 1, tokcol = 1;
 	size_t l = strlen(string);
+	size_t braceDepth = 0;
 
 	for (size_t i = 0; i < l; i++) {
 		char c = string[i];
@@ -148,6 +149,7 @@ Token* bstLex(char* string, size_t* out_len)
 				break;
 			case '{':
 				curtok = TOK_LBRACE;
+				braceDepth++;
 				break;
 			case '+':
 				curtok = TOK_PLUS;
@@ -223,6 +225,7 @@ Token* bstLex(char* string, size_t* out_len)
 				break;
 			case '}':
 				curtok = TOK_RBRACE;
+				if (braceDepth > 0) braceDepth--;
 				break;
 			case '\\':
 				// Detect \\ by one-char lookahead
@@ -254,6 +257,14 @@ Token* bstLex(char* string, size_t* out_len)
 				continue;
 			case '\n':
 				bstlFlush(&tokens, &len, &cap, curtok, buf, &bufr, line, tokcol);
+				if (braceDepth > 0) {
+					Token tsemi;
+					tsemi.kind = TOK_SEMICOLON;
+					tsemi.text = NULL;
+					tsemi.line = line;
+					tsemi.col = col;
+					bstlPush(&tokens, &len, &cap, tsemi);
+				}
 				curtok = TOK_NONE;
 				line++;
 				col = 1;

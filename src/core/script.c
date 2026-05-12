@@ -109,22 +109,49 @@ static int lineIsBlank(const char* line) {
     return 1;
 }
 
-static void stripLineEnding(char* line) {
-    size_t len = strlen(line);
-    while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
-        line[--len] = '\0';
+static int updateBraceDepth(const char* line, size_t* depth) {
+    int inString = 0;
+    for (const char* p = line; p && *p; p++) {
+        if (*p == '"') {
+            inString = !inString;
+            continue;
+        }
+        if (inString) continue;
+        if (*p == '{') {
+            (*depth)++;
+        } else if (*p == '}') {
+            if (*depth == 0) return 0;
+            (*depth)--;
+        }
     }
+    return 1;
 }
 
-static int evalScriptLine(EvalContext* ctx,
-                          char* line,
-                          const char* filename,
-                          size_t lineNo,
-                          const ScriptRunOptions* options) {
+static int appendLine(char** text, size_t* len, size_t* cap, const char* line) {
+    size_t add = strlen(line);
+    if (*len + add + 1 > *cap) {
+        size_t nextCap = *cap ? *cap * 2 : 1024;
+        while (nextCap < *len + add + 1) nextCap *= 2;
+        char* next = realloc(*text, nextCap);
+        if (!next) return 0;
+        *text = next;
+        *cap = nextCap;
+    }
+    memcpy(*text + *len, line, add);
+    *len += add;
+    (*text)[*len] = '\0';
+    return 1;
+}
+
+static int evalScriptChunk(EvalContext* ctx,
+                           char* text,
+                           const char* filename,
+                           size_t startLine,
+                           const ScriptRunOptions* options) {
     size_t ntok = 0;
-    Token* toks = bstLex(line, &ntok);
+    Token* toks = bstLex(text, &ntok);
     if (options->dumpTokens) {
-        printf("-- tokens: %s:%zu --\n", filename, lineNo);
+        printf("-- tokens: %s:%zu --\n", filename, startLine);
         dumpTokens(toks, ntok);
     }
 
@@ -132,12 +159,12 @@ static int evalScriptLine(EvalContext* ctx,
     AstNode* ast = bstParse(toks, ntok, &perr);
     if (!ast) {
         fprintf(stderr, "%s:%zu: parse error at %zu:%zu: %s\n",
-                filename, lineNo, perr.line, perr.col, perr.msg ? perr.msg : "unknown");
+                filename, startLine, perr.line, perr.col, perr.msg ? perr.msg : "unknown");
         freeTokens(toks, ntok);
         return 0;
     }
     if (options->dumpAst) {
-        printf("-- ast: %s:%zu --\n", filename, lineNo);
+        printf("-- ast: %s:%zu --\n", filename, startLine);
         astPrint(ast, 2);
     }
 
@@ -164,6 +191,11 @@ int bstRunScriptFile(EvalContext* ctx,
     ScriptRunOptions opts = options ? *options : DEFAULT_OPTIONS;
     ScriptRunResult local = {0, 0, 0};
     FILE* fp = NULL;
+    char* chunk = NULL;
+    size_t chunkLen = 0;
+    size_t chunkCap = 0;
+    size_t chunkStartLine = 0;
+    size_t braceDepth = 0;
 
     if (result) *result = local;
     if (!ctx || !filename || !*filename) {
@@ -181,12 +213,39 @@ int bstRunScriptFile(EvalContext* ctx,
         char* line = readLine(fp);
         if (!line) break;
         local.linesRead++;
-        stripLineEnding(line);
-        if (!lineIsBlank(line)) {
-            local.linesEvaluated++;
-            if (!evalScriptLine(ctx, line, filename, local.linesRead, &opts)) local.errors++;
+
+        if (chunkLen == 0 && lineIsBlank(line)) {
+            free(line);
+            continue;
+        }
+
+        if (chunkLen == 0) chunkStartLine = local.linesRead;
+        if (!appendLine(&chunk, &chunkLen, &chunkCap, line)) {
+            local.errors++;
+            free(line);
+            break;
+        }
+
+        if (!updateBraceDepth(line, &braceDepth)) {
+            local.errors++;
+            free(line);
+            break;
         }
         free(line);
+
+        if (braceDepth == 0) {
+            local.linesEvaluated++;
+            if (!evalScriptChunk(ctx, chunk, filename, chunkStartLine, &opts)) local.errors++;
+            free(chunk);
+            chunk = NULL;
+            chunkLen = 0;
+            chunkCap = 0;
+        }
+    }
+
+    if (chunkLen > 0) {
+        local.errors++;
+        free(chunk);
     }
 
     fclose(fp);

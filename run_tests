@@ -9,7 +9,9 @@ if [ "$platform" = "windows" ]; then
 fi
 
 make PLATFORM="$platform" tests
+build/bin/$platform/test_core$exeext
 build/bin/$platform/test_hebi$exeext
+build/bin/$platform/test_kuma$exeext
 build/bin/$platform/test_ookami$exeext
 build/bin/$platform/test_sokko$exeext
 build/bin/$platform/test_usagi$exeext

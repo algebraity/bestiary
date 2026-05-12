@@ -66,6 +66,12 @@ ComplexNumber complexSqrt(ComplexNumber a);
 ComplexNumber complexCbrt(ComplexNumber a);
 bool complexEq(ComplexNumber a, ComplexNumber b, long double tol);
 
+/* ---------- Special functions ---------- */
+long double realErf(long double x);
+long double realEi(long double x);
+ComplexNumber complexErf(ComplexNumber z);
+ComplexNumber complexEi(ComplexNumber z);
+
 /* ---------- Number arithmetic ---------- */
 Number constructNumberFromInt(long long i);
 Number constructNumberFromDouble(long double x);

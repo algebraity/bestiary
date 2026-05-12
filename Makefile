@@ -92,6 +92,7 @@ endif
 
 BEAST_SRCS = \
 	src/beasts/hebi.c \
+	src/beasts/kuma.c \
 	src/beasts/sokko.c \
 	src/beasts/usagi.c \
 	src/beasts/poni.c \
@@ -111,7 +112,9 @@ REPL_SRC = src/repl.c
 GUI_SRC = src/gui/bestiary_gui.cpp
 
 TEST_SRCS = \
+	tests/test_core.c \
 	tests/test_hebi.c \
+	tests/test_kuma.c \
 	tests/test_sokko.c \
 	tests/test_usagi.c \
 	tests/test_poni.c \
@@ -130,7 +133,9 @@ CLI_BIN := $(BINDIR)/bestiary-cli$(EXEEXT)
 REPL_BIN := $(BINDIR)/repl$(EXEEXT)
 GUI_BIN := $(BINDIR)/bestiary$(EXEEXT)
 TEST_BINS = \
+	$(BINDIR)/test_core$(EXEEXT) \
 	$(BINDIR)/test_hebi$(EXEEXT) \
+	$(BINDIR)/test_kuma$(EXEEXT) \
 	$(BINDIR)/test_sokko$(EXEEXT) \
 	$(BINDIR)/test_usagi$(EXEEXT) \
 	$(BINDIR)/test_poni$(EXEEXT) \
@@ -267,7 +272,13 @@ $(BINDIR)/%.dll: | $(BINDIR)
 	fi
 	cp "$(WINDOWS_DLL_DIR)/$*.dll" "$@"
 
+$(BINDIR)/test_core$(EXEEXT): $(OBJDIR)/tests/test_core.o $(CORE_OBJS) $(BEAST_OBJS) | $(BINDIR)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
+
 $(BINDIR)/test_hebi$(EXEEXT): $(OBJDIR)/tests/test_hebi.o $(OBJDIR)/src/beasts/hebi.o | $(BINDIR)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ -lm
+
+$(BINDIR)/test_kuma$(EXEEXT): $(OBJDIR)/tests/test_kuma.o $(OBJDIR)/src/beasts/kuma.o $(OBJDIR)/src/beasts/neko.o $(OBJDIR)/src/beasts/hebi.o | $(BINDIR)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ -lm
 
 $(BINDIR)/test_sokko$(EXEEXT): $(OBJDIR)/tests/test_sokko.o $(OBJDIR)/src/beasts/sokko.o $(OBJDIR)/src/beasts/hebi.o | $(BINDIR)
@@ -285,7 +296,7 @@ $(BINDIR)/test_ookami$(EXEEXT): $(OBJDIR)/tests/test_ookami.o $(OBJDIR)/src/beas
 $(BINDIR)/test_tora$(EXEEXT): $(OBJDIR)/tests/test_tora.o $(OBJDIR)/src/beasts/tora.o $(OBJDIR)/src/beasts/sokko.o $(OBJDIR)/src/beasts/usagi.o $(OBJDIR)/src/beasts/hebi.o | $(BINDIR)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ -lm
 
-$(BINDIR)/test_neko$(EXEEXT): $(OBJDIR)/tests/test_neko.o $(OBJDIR)/src/beasts/neko.o | $(BINDIR)
+$(BINDIR)/test_neko$(EXEEXT): $(OBJDIR)/tests/test_neko.o $(OBJDIR)/src/beasts/neko.o $(OBJDIR)/src/beasts/hebi.o | $(BINDIR)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ -lm
 
 $(BUILD_CONFIG_STAMP): FORCE

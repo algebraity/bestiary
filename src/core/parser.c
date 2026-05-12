@@ -145,10 +145,13 @@ static BinInfo peekBinop(P* p) {
     Token* t = peek(p);
     switch (t->kind) {
         case TOK_EQEQ: b = (BinInfo){1,  5, 0, OP_CMD, "=="}; break;
+        case TOK_LESS: b = (BinInfo){1,  5, 0, OP_CMD, "<"}; break;
+        case TOK_GREATER: b = (BinInfo){1,  5, 0, OP_CMD, ">"}; break;
         case TOK_PLUS:  b = (BinInfo){1, 10, 0, OP_ADD, NULL}; break;
         case TOK_MINUS: b = (BinInfo){1, 10, 0, OP_SUB, NULL}; break;
         case TOK_STAR:  b = (BinInfo){1, 20, 0, OP_MUL, NULL}; break;
         case TOK_SLASH: b = (BinInfo){1, 20, 0, OP_DIV, NULL}; break;
+        case TOK_PERCENT: b = (BinInfo){1, 20, 0, OP_CMD, "%"}; break;
         case TOK_COMMAND: {
             const InfixCmd* c = findInfixCmd(t->text);
             if (c) b = (BinInfo){1, c->prec, c->rightAssoc, OP_CMD, t->text};
@@ -346,17 +349,38 @@ static AstNode* parsePipeGroup(P* p) {
 // Parse '{ expr }'; returns the inner expression (the braces are grouping)
 static AstNode* parseBraceGroup(P* p) {
     if (!match(p, TOK_LBRACE)) { parseError(p, "expected '{'"); return NULL; }
+    while (match(p, TOK_SEMICOLON)) { }
     if (check(p, TOK_RBRACE)) {
         advance(p);
         return astSet(NULL, 0, 0, 0);
     }
-    AstNode* inner = parseExpr(p);
+    AstNode* inner = parseStmt(p);
     if (check(p, TOK_COMMA)) {
         NodeBuf items; nbInit(&items);
         nbPush(&items, inner);
-        while (match(p, TOK_COMMA)) nbPush(&items, parseExpr(p));
+        while (match(p, TOK_COMMA)) {
+            while (match(p, TOK_SEMICOLON)) { }
+            nbPush(&items, parseExpr(p));
+        }
+        while (match(p, TOK_SEMICOLON)) { }
         if (!match(p, TOK_RBRACE)) { parseError(p, "expected '}'"); }
         return astTuple(items.data, items.len);
+    }
+    if (check(p, TOK_SEMICOLON)) {
+        NodeBuf stmts; nbInit(&stmts);
+        nbPush(&stmts, inner);
+        do {
+            while (match(p, TOK_SEMICOLON)) { }
+            if (check(p, TOK_RBRACE)) break;
+            nbPush(&stmts, parseStmt(p));
+        } while (!p->failed && check(p, TOK_SEMICOLON));
+        if (!match(p, TOK_RBRACE)) { parseError(p, "expected '}'"); }
+        if (stmts.len == 1) {
+            AstNode* only = stmts.data[0];
+            free(stmts.data);
+            return only;
+        }
+        return astSeq(stmts.data, stmts.len);
     }
     if (!match(p, TOK_RBRACE)) { parseError(p, "expected '}'"); astFree(inner); return NULL; }
     return inner;
@@ -372,8 +396,13 @@ static AstNode* parseSetLiteral(P* p) {
         return astSet(NULL, 0, lbrace->line, lbrace->col);
     }
     NodeBuf items; nbInit(&items);
+    while (match(p, TOK_SEMICOLON)) { }
     nbPush(&items, parseExpr(p));
-    while (match(p, TOK_COMMA)) nbPush(&items, parseExpr(p));
+    while (match(p, TOK_COMMA)) {
+        while (match(p, TOK_SEMICOLON)) { }
+        nbPush(&items, parseExpr(p));
+    }
+    while (match(p, TOK_SEMICOLON)) { }
     if (!match(p, TOK_RBRACE)) { parseError(p, "expected '}'"); }
     return astSet(items.data, items.len, lbrace->line, lbrace->col);
 }
@@ -855,6 +884,12 @@ static AstNode* parsePostfix(P* p) {
             left = astSubscript(left, r);
             continue;
         }
+        if (match(p, TOK_LBRACK)) {
+            AstNode* r = parseExpr(p);
+            if (!match(p, TOK_RBRACK)) { parseError(p, "expected ']' after index"); }
+            left = astSubscript(left, r);
+            continue;
+        }
         if (check(p, TOK_BANG)) {
             Token* bang = advance(p);
             AstNode** args = malloc(sizeof(AstNode*));
@@ -879,6 +914,17 @@ static AstNode* parsePostfix(P* p) {
             left = astCall("derivative", args, 1, prime->line, prime->col);
             continue;
         }
+        if (check(p, TOK_PLUS) && peekAt(p, 1)->kind == TOK_PLUS && left && left->kind == AST_IDENT) {
+            Token* plus = advance(p);
+            advance(p);
+            AstNode* one = astNumber(1, plus->line, plus->col);
+            AstNode* ident = astIdent(left->as.ident ? left->as.ident : "", left->line, left->col);
+            AstNode* rhs = astBinop(OP_ADD, NULL, ident, one);
+            AstNode* assign = astAssign(left->as.ident ? left->as.ident : "", rhs);
+            astFree(left);
+            left = assign;
+            continue;
+        }
         if (check(p, TOK_LPAREN) && left && left->kind == AST_IDENT) {
             AstNode* arg = parseCallArgList(p);
             AstNode** args = malloc(2 * sizeof(AstNode*));
@@ -895,6 +941,8 @@ static AstNode* parsePostfix(P* p) {
         }
         Token* nx = peek(p);
         if (tokStartsPrimary(nx->kind)) {
+            // Comparisons must be left for the binary-operator pass
+            if (nx->kind == TOK_LESS || nx->kind == TOK_GREATER) break;
             // Don't consume infix commands via implicit-mul...
             if (nx->kind == TOK_COMMAND && findInfixCmd(nx->text)) break;
             // ...and treat \end as a hard boundary (closes an environment).
@@ -953,6 +1001,20 @@ static AstNode* parseExpr(P* p) { return parseBinop(p, 0); }
 
 /* ---------- Statements ---------- */
 
+// Return the lowered operator for a compound-assignment token
+static int compoundAssignOp(TokenKind kind, AstOp* op, const char** opname) {
+    if (!op || !opname) return 0;
+    *opname = NULL;
+    switch (kind) {
+        case TOK_PLUS:    *op = OP_ADD; return 1;
+        case TOK_MINUS:   *op = OP_SUB; return 1;
+        case TOK_STAR:    *op = OP_MUL; return 1;
+        case TOK_SLASH:   *op = OP_DIV; return 1;
+        case TOK_PERCENT: *op = OP_CMD; *opname = "%"; return 1;
+        default: return 0;
+    }
+}
+
 // A statement is either an assignment `ident = expr` (detected by a
 // two-token lookahead) or an expression.
 static AstNode* parseStmt(P* p) {
@@ -961,6 +1023,31 @@ static AstNode* parseStmt(P* p) {
         advance(p);         // consume '='
         AstNode* rhs = parseExpr(p);
         return astAssign(name->text ? name->text : "", rhs);
+    }
+    AstOp compoundOp = OP_ADD;
+    const char* compoundName = NULL;
+    if (check(p, TOK_IDENT)
+            && compoundAssignOp(peekAt(p, 1)->kind, &compoundOp, &compoundName)
+            && peekAt(p, 2)->kind == TOK_EQUALS) {
+        Token* name = advance(p);
+        advance(p);         // consume compound operator
+        advance(p);         // consume '='
+        AstNode* lhs = astIdent(name->text ? name->text : "", name->line, name->col);
+        AstNode* rhs = astBinop(compoundOp, compoundName, lhs, parseExpr(p));
+        return astAssign(name->text ? name->text : "", rhs);
+    }
+    if (check(p, TOK_IDENT) && peekAt(p, 1)->kind == TOK_LBRACK) {
+        size_t savedPos = p->pos;
+        Token* name = advance(p);
+        advance(p);         // consume '['
+        AstNode* index = parseExpr(p);
+        if (p->failed) return NULL;
+        if (match(p, TOK_RBRACK) && match(p, TOK_EQUALS)) {
+            AstNode* rhs = parseExpr(p);
+            return astIndexAssign(name->text ? name->text : "", index, rhs);
+        }
+        astFree(index);
+        p->pos = savedPos;
     }
     return parseExpr(p);
 }

@@ -14,19 +14,44 @@ void bstLineInputSetPlainMode(int enabled) {
     (void)enabled;
 }
 
+void bstLineInputSetEvalContext(EvalContext* ctx) {
+    (void)ctx;
+}
+
 void bstLineInputRecoverInterrupt(void) {
     putchar('\n');
     fflush(stdout);
 }
 
 char* bstReadLine(const char* prompt) {
+    return bstReadLineWithInitial(prompt, NULL);
+}
+
+char* bstReadLineWithInitial(const char* prompt, const char* initial) {
+    BestiaryLineContext context = {
+        .initial = initial,
+        .protectedLen = 0,
+        .blockLines = NULL,
+        .blockLineCount = 0
+    };
+    return bstReadLineWithContext(prompt, &context, NULL);
+}
+
+char* bstReadLineWithContext(const char* prompt, const BestiaryLineContext* context, int* selectedBlockLine) {
     char stackBuf[1024];
     char* out = NULL;
     size_t len = 0;
     size_t cap = 0;
+    const char* initial = context ? context->initial : NULL;
+
+    if (selectedBlockLine) *selectedBlockLine = -1;
 
     if (prompt) {
         fputs(prompt, stdout);
+        fflush(stdout);
+    }
+    if (initial && *initial) {
+        fputs(initial, stdout);
         fflush(stdout);
     }
 

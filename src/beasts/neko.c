@@ -4,6 +4,7 @@
 #include<math.h>
 #include<limits.h>
 #include "neko.h"
+#include "hebi.h"
 
 /* ---------- Helper methods ---------- */
 
@@ -76,6 +77,9 @@ static bool isUnaryKind(NekoExprKind kind) {
         case NEKO_EXPR_LOG:
         case NEKO_EXPR_SQRT:
         case NEKO_EXPR_ABS:
+        case NEKO_EXPR_ERF:
+        case NEKO_EXPR_EI:
+        case NEKO_EXPR_STEP:
             return true;
         default:
             return false;
@@ -209,6 +213,12 @@ NekoExpr* nekoLog(NekoExpr* arg) { return nekoUnary(NEKO_EXPR_LOG, arg); }
 NekoExpr* nekoSqrt(NekoExpr* arg) { return nekoUnary(NEKO_EXPR_SQRT, arg); }
 // Construct an absolute-value expression
 NekoExpr* nekoAbs(NekoExpr* arg) { return nekoUnary(NEKO_EXPR_ABS, arg); }
+// Construct an error-function expression
+NekoExpr* nekoErf(NekoExpr* arg) { return nekoUnary(NEKO_EXPR_ERF, arg); }
+// Construct an exponential-integral expression
+NekoExpr* nekoEi(NekoExpr* arg) { return nekoUnary(NEKO_EXPR_EI, arg); }
+// Construct a step-function expression
+NekoExpr* nekoStep(NekoExpr* arg) { return nekoUnary(NEKO_EXPR_STEP, arg); }
 
 /* ---------- Free and clone ---------- */
 
@@ -241,6 +251,9 @@ void nekoFreeExpr(NekoExpr* expr) {
         case NEKO_EXPR_LOG:
         case NEKO_EXPR_SQRT:
         case NEKO_EXPR_ABS:
+        case NEKO_EXPR_ERF:
+        case NEKO_EXPR_EI:
+        case NEKO_EXPR_STEP:
             nekoFreeExpr(expr->as.unary.arg);
             break;
         case NEKO_EXPR_CALL:
@@ -289,6 +302,9 @@ NekoExpr* nekoCloneExpr(const NekoExpr* expr) {
         case NEKO_EXPR_LOG:
         case NEKO_EXPR_SQRT:
         case NEKO_EXPR_ABS:
+        case NEKO_EXPR_ERF:
+        case NEKO_EXPR_EI:
+        case NEKO_EXPR_STEP:
             return nekoUnary(expr->kind, nekoCloneExpr(expr->as.unary.arg));
         case NEKO_EXPR_CALL: {
             NekoExpr** args = NULL;
@@ -358,6 +374,14 @@ long double nekoEvalExpr(const NekoExpr* expr, const char* var, long double x) {
             return sqrtl(nekoEvalExpr(expr->as.unary.arg, var, x));
         case NEKO_EXPR_ABS:
             return fabsl(nekoEvalExpr(expr->as.unary.arg, var, x));
+        case NEKO_EXPR_ERF:
+            return realErf(nekoEvalExpr(expr->as.unary.arg, var, x));
+        case NEKO_EXPR_EI:
+            return realEi(nekoEvalExpr(expr->as.unary.arg, var, x));
+        case NEKO_EXPR_STEP: {
+            long double v = nekoEvalExpr(expr->as.unary.arg, var, x);
+            return v >= 0.0L ? 1.0L : 0.0L;
+        }
         case NEKO_EXPR_CALL:
             return NAN;
     }
@@ -489,6 +513,9 @@ static int exprDependsOnVar(const NekoExpr* expr, const char* var) {
         case NEKO_EXPR_LOG:
         case NEKO_EXPR_SQRT:
         case NEKO_EXPR_ABS:
+        case NEKO_EXPR_ERF:
+        case NEKO_EXPR_EI:
+        case NEKO_EXPR_STEP:
             return exprDependsOnVar(expr->as.unary.arg, var);
         case NEKO_EXPR_CALL:
             // Search every call argument for the requested variable
@@ -1334,6 +1361,33 @@ NekoDiffResult nekoDifferentiateExpr(const NekoExpr* expr, const char* var) {
             return diffOk(nekoSimplify(nekoMul(du, nekoDiv(u, nekoAbs(nekoCloneExpr(expr->as.unary.arg))))));
         }
 
+        case NEKO_EXPR_ERF: {
+            // Apply the chain rule for erf(u)
+            bool ok = true;
+            NekoExpr* du = derivOrFree(expr->as.unary.arg, var, &ok);
+            if (!ok) return diffErr(NEKO_ERR_UNSUPPORTED);
+
+            // Build (2/sqrt(pi))*exp(-u^2)*u'
+            NekoExpr* scale = nekoConst(2.0L / sqrtl(M_PI));
+            NekoExpr* gaussian = nekoExp(nekoNeg(nekoPow(nekoCloneExpr(expr->as.unary.arg), nekoConst(2.0L))));
+            return diffOk(nekoSimplify(nekoMul(nekoMul(scale, gaussian), du)));
+        }
+
+        case NEKO_EXPR_EI: {
+            // Apply the chain rule for Ei(u)
+            bool ok = true;
+            NekoExpr* du = derivOrFree(expr->as.unary.arg, var, &ok);
+            if (!ok) return diffErr(NEKO_ERR_UNSUPPORTED);
+
+            // Build exp(u)*u'/u
+            NekoExpr* numerator = nekoMul(nekoExp(nekoCloneExpr(expr->as.unary.arg)), du);
+            return diffOk(nekoSimplify(nekoDiv(numerator, nekoCloneExpr(expr->as.unary.arg))));
+        }
+
+        case NEKO_EXPR_STEP:
+            // The step function is intentionally unsupported by symbolic differentiation
+            return diffErr(NEKO_ERR_UNSUPPORTED);
+
         case NEKO_EXPR_CALL:
             // Calls are intentionally unsupported by symbolic differentiation
             return diffErr(NEKO_ERR_UNSUPPORTED);
@@ -1546,6 +1600,9 @@ static bool exprEqual(const NekoExpr* a, const NekoExpr* b) {
         case NEKO_EXPR_LOG:
         case NEKO_EXPR_SQRT:
         case NEKO_EXPR_ABS:
+        case NEKO_EXPR_ERF:
+        case NEKO_EXPR_EI:
+        case NEKO_EXPR_STEP:
             return exprEqual(a->as.unary.arg, b->as.unary.arg);
         case NEKO_EXPR_CALL:
             // Calls must have matching names and arity before comparing arguments
@@ -1988,8 +2045,11 @@ NekoIntegralResult nekoIntegrateExpr(const NekoExpr* expr, const char* var) {
         }
 
         case NEKO_EXPR_ABS:
+        case NEKO_EXPR_ERF:
+        case NEKO_EXPR_EI:
+        case NEKO_EXPR_STEP:
         case NEKO_EXPR_CALL:
-            // Absolute values and calls are intentionally unsupported here
+            // These unary forms and calls are intentionally unsupported here
             return integErr(NEKO_ERR_UNSUPPORTED);
     }
 
@@ -3185,6 +3245,9 @@ static const char* unaryName(NekoExprKind kind) {
         case NEKO_EXPR_LOG: return "log";
         case NEKO_EXPR_SQRT: return "sqrt";
         case NEKO_EXPR_ABS: return "abs";
+        case NEKO_EXPR_ERF: return "erf";
+        case NEKO_EXPR_EI: return "Ei";
+        case NEKO_EXPR_STEP: return "step";
         default: return "?";
     }
 }
@@ -3455,6 +3518,9 @@ static void printExprPrec(const NekoExpr* expr, int parentPrec) {
         case NEKO_EXPR_LOG:
         case NEKO_EXPR_SQRT:
         case NEKO_EXPR_ABS:
+        case NEKO_EXPR_ERF:
+        case NEKO_EXPR_EI:
+        case NEKO_EXPR_STEP:
             // Print unary functions using function-call notation
             printf("%s(", unaryName(expr->kind));
             printExprPrec(expr->as.unary.arg, 0);

@@ -35,6 +35,9 @@ typedef enum {
     NEKO_EXPR_LOG,
     NEKO_EXPR_SQRT,
     NEKO_EXPR_ABS,
+    NEKO_EXPR_ERF,
+    NEKO_EXPR_EI,
+    NEKO_EXPR_STEP,
 
     NEKO_EXPR_CALL
 } NekoExprKind;
@@ -205,6 +208,9 @@ NekoExpr* nekoExp(NekoExpr* arg);
 NekoExpr* nekoLog(NekoExpr* arg);
 NekoExpr* nekoSqrt(NekoExpr* arg);
 NekoExpr* nekoAbs(NekoExpr* arg);
+NekoExpr* nekoErf(NekoExpr* arg);
+NekoExpr* nekoEi(NekoExpr* arg);
+NekoExpr* nekoStep(NekoExpr* arg);
 NekoExpr* nekoCloneExpr(const NekoExpr* expr);
 void nekoFreeExpr(NekoExpr* expr);
 void nekoPrintExpr(const NekoExpr* expr);

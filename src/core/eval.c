@@ -19,6 +19,13 @@
 
 /* ---------- Helper methods ---------- */
 
+typedef enum {
+    LOOP_CONTROL_NONE = 0,
+    LOOP_CONTROL_BREAK = 1,
+    LOOP_CONTROL_CONTINUE = 2,
+    LOOP_CONTROL_RETURN = 3
+} LoopControl;
+
 // Duplicate a C string (returns NULL on NULL input)
 static char* dupstr(const char* s) {
     if (!s) return NULL;
@@ -90,6 +97,30 @@ void envSet(Env* env, const char* name, Value v) {
     env->head = e;
 }
 
+/* ---------- User functions ---------- */
+
+// Free every user-defined function owned by an eval context
+static void freeUserFunctions(UserFunction* fn) {
+    while (fn) {
+        UserFunction* next = fn->next;
+        free(fn->name);
+        for (size_t i = 0; i < fn->paramCount; i++) free(fn->params[i]);
+        free(fn->params);
+        astFree(fn->body);
+        free(fn);
+        fn = next;
+    }
+}
+
+// Find a user-defined function by command name
+static UserFunction* lookupUserFunction(EvalContext* ctx, const char* name) {
+    if (!ctx || !name) return NULL;
+    for (UserFunction* fn = ctx->functions; fn; fn = fn->next) {
+        if (fn->name && strcmp(fn->name, name) == 0) return fn;
+    }
+    return NULL;
+}
+
 /* ---------- Command registry ---------- */
 
 static CommandEntry* g_commands = NULL;
@@ -104,11 +135,23 @@ typedef struct {
 static const BuiltinDoc BUILTIN_DOCS[] = {
     { "help", "Displays command usage, accepted value types, and return type.", "zero arguments to list commands, or one command name as a Symbol or String", "String" },
     { "run", "Runs a text file as a Bestiary script, evaluating each nonblank line in the current context.", "String filename, or an unquoted filename in braces such as \\run{script.bsy}", "String summary, or Error if the file cannot be opened" },
+    { "list", "Constructs a dynamic Bestiary list.", "zero or more values", "List" },
+    { "if", "Evaluates the result branch when a condition is true, otherwise evaluates the optional else branch.", "Bool or truthy condition, result expression, and optional else expression", "selected branch value or none" },
+    { "while", "Evaluates a body repeatedly while a condition remains true.", "truthy condition expression and loop body", "last body value or none" },
+    { "for", "Evaluates an init, condition, and step header around a repeated body.", "header block of init; condition; step and loop body", "last body value or none" },
+    { "break", "Exits the nearest active loop.", "no values", "None" },
+    { "continue", "Skips the rest of the current loop body.", "no values", "None" },
+    { "def", "Defines a user function with local-only variables.", "function name, parameter list, and body", "None" },
+    { "return", "Ends the current user function and returns a value.", "single value", "the returned value" },
+    { "print", "Prints a value to stdout, using raw text and $name interpolation for strings.", "any single value", "None" },
     { "+", "Adds compatible values.", "Int/Fraction/Decimal/Complex with numeric; Matrix with same-size Matrix; Vector with same-dimension Vector; CombSet with Int for translation; CombSet with CombSet for sumset; RingElement with RingElement from the same Ring; Ideal with Ideal from the same Ring and side; Symbol/NEKO expression/numeric for symbolic addition", "same family as the operands, or numeric/symbolic result" },
     { "-", "Subtracts compatible values.", "Int/Fraction/Decimal/Complex with numeric; Matrix with same-size Matrix; Vector with same-dimension Vector; CombSet with CombSet for difference set; RingElement with RingElement from the same Ring; Symbol/NEKO expression/numeric for symbolic subtraction", "same family as the operands, or numeric/symbolic result" },
     { "*", "Multiplies compatible values.", "numeric with numeric; Matrix with compatible Matrix; Matrix with compatible Vector; Vector with Vector for dot product; Vector/Matrix with numeric scalar; CombSet with CombSet for product set; CombSet with Int for dilation; Int with CombSet for repeated sum/difference set; GroupElement with GroupElement from the same Group; RingElement with RingElement from the same Ring; RingElement with Int; Ideal with Ideal from the same Ring and side; Symbol/NEKO expression/numeric for symbolic multiplication", "same family as the operation, numeric scalar for dot products, or symbolic expression" },
     { "/", "Divides compatible values.", "numeric numerator and nonzero numeric denominator; Group by normal SubGroup for quotient group; Ring by Ideal for quotient ring; GroupElement by GroupElement from the same Group; RingElement by invertible RingElement from the same Ring; Symbol/NEKO expression/numeric for symbolic quotient", "numeric, Group, Ring, GroupElement, RingElement, or NEKO expression" },
+    { "%", "Computes integer remainder.", "two Int values with nonzero divisor", "Int" },
     { "==", "Tests two Bestiary values for equality.", "two values of comparable Bestiary kinds", "Bool" },
+    { "<", "Tests whether one real numeric value is less than another.", "two real numeric values", "Bool" },
+    { ">", "Tests whether one real numeric value is greater than another.", "two real numeric values", "Bool" },
     { "u-", "Negates one value.", "numeric value, Vector, RingElement, CombSet, Symbol, or NEKO expression", "same kind as the input, or NEKO expression" },
     { "u+", "Returns one value unchanged.", "any single Bestiary value", "same value kind as the input" },
     { "^", "Raises a supported base to a power or applies a matrix superscript.", "numeric base with numeric exponent; Matrix with Int exponent or Symbol T/t; CombSet with positive Int exponent; GroupElement with Int exponent; RingElement with Int exponent; Symbol/NEKO expression/numeric for symbolic power", "numeric, Matrix, CombSet, GroupElement, RingElement, or NEKO expression" },
@@ -197,8 +240,8 @@ static const BuiltinDoc BUILTIN_DOCS[] = {
     { "subsetSums", "Computes subset sums of a finite integer set.", "CombSet, optionally followed by Int subset size k >= 0", "CombSet" },
     { "translate", "Translates every element of a finite integer set by an integer.", "CombSet and Int translation", "CombSet" },
     { "dilate", "Multiplies every element of a finite integer set by an integer.", "CombSet and Int scale", "CombSet" },
-    { "append", "Adds an integer to a finite integer set.", "CombSet and Int element", "CombSet" },
-    { "remove", "Removes an integer from a finite integer set.", "CombSet and Int element already in the set", "CombSet" },
+    { "append", "Appends a value to a List or adds an integer to a finite integer set.", "List and any value, or CombSet and Int element", "List or CombSet" },
+    { "remove", "Removes the first matching value from a List or removes an integer from a finite integer set.", "List and any value, or CombSet and Int element already in the set", "List or CombSet" },
     { "adsCard", "Counts the additive sumset A+A.", "CombSet", "Int" },
     { "ddsCard", "Counts the difference set A-A.", "CombSet", "Int" },
     { "mdsCard", "Counts the product set A*A.", "CombSet", "Int" },
@@ -578,20 +621,23 @@ EvalContext* evalCtxNew(void) {
         free(ctx);
         return NULL;
     }
+    ctx->returnValue = valNone();
     return ctx;
 }
 
 void evalCtxFree(EvalContext* ctx) {
     if (!ctx) return;
     envFree(ctx->env);
+    freeUserFunctions(ctx->functions);
+    valFree(ctx->returnValue);
     free(ctx);
 }
 
 /* ---------- Dispatcher ---------- */
 
-// Invoke a registered command with an already-evaluated args array.
-// Calling convention: callee frees each arg it used; we free the array.
-// Unknown name or wrong arity -> VAL_ERROR (and args are freed here).
+// Invoke a registered command with an already-evaluated args array
+// Calling convention: callee frees each arg it used; we free the array
+// Unknown name or wrong arity -> VAL_ERROR and args are freed here
 static Value dispatch(EvalContext* ctx, const char* name, Value* args, size_t nargs) {
     const CommandEntry* e = lookupCommand(name);
     if (!e) {
@@ -600,22 +646,6 @@ static Value dispatch(EvalContext* ctx, const char* name, Value* args, size_t na
         char buf[128];
         snprintf(buf, sizeof(buf), "unknown command: \\%s", name);
         return valError(buf);
-    }
-    if (e->arity > 1 && nargs == 1 && args[0].kind == VAL_LIST && (int)args[0].as.list.n == e->arity) {
-        size_t tupleCount = args[0].as.list.n;
-        Value* unpacked = calloc(tupleCount, sizeof(Value));
-        if (!unpacked) {
-            valFree(args[0]);
-            free(args);
-            return valError("failed to unpack command tuple arguments");
-        }
-        for (size_t i = 0; i < tupleCount; i++) {
-            unpacked[i] = valClone(args[0].as.list.items[i]);
-        }
-        valFree(args[0]);
-        free(args);
-        args = unpacked;
-        nargs = tupleCount;
     }
     if (e->arity >= 0 && (int)nargs != e->arity) {
         for (size_t i = 0; i < nargs; i++) valFree(args[i]);
@@ -629,12 +659,45 @@ static Value dispatch(EvalContext* ctx, const char* name, Value* args, size_t na
     return r;
 }
 
-// Evaluate every node in `nodes` into a fresh Value array
-static Value* evalArgs(EvalContext* ctx, AstNode** nodes, size_t n) {
-    Value* out = calloc(n, sizeof(Value));
-    if (!out && n > 0) return NULL;
-    for (size_t i = 0; i < n; i++) out[i] = eval(ctx, nodes[i]);
+// Count logical call arguments, flattening comma groups outside \list
+static size_t callArgCount(const char* name, AstNode** nodes, size_t n) {
+    if (name && strcmp(name, "list") == 0) return n;
+
+    size_t count = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (nodes[i] && nodes[i]->kind == AST_TUPLE) count += nodes[i]->as.tuple.n;
+        else count++;
+    }
+    return count;
+}
+
+// Evaluate command arguments after flattening comma groups outside \list
+static Value* evalCallArgs(EvalContext* ctx, const char* name, AstNode** nodes, size_t n, size_t* outCount) {
+    size_t count = callArgCount(name, nodes, n);
+    if (outCount) *outCount = count;
+
+    Value* out = calloc(count, sizeof(Value));
+    if (!out && count > 0) return NULL;
+
+    size_t index = 0;
+    for (size_t i = 0; i < n; i++) {
+        if (name && strcmp(name, "list") != 0 && nodes[i] && nodes[i]->kind == AST_TUPLE) {
+            for (size_t j = 0; j < nodes[i]->as.tuple.n; j++) {
+                out[index++] = eval(ctx, nodes[i]->as.tuple.items[j]);
+            }
+        } else {
+            out[index++] = eval(ctx, nodes[i]);
+        }
+    }
     return out;
+}
+
+// Return the first logical raw argument after tuple flattening
+static AstNode* firstLogicalCallArg(AstNode* call) {
+    if (!call || call->kind != AST_CALL || call->as.call.nargs == 0) return NULL;
+    AstNode* first = call->as.call.args[0];
+    if (first && first->kind == AST_TUPLE && first->as.tuple.n > 0) return first->as.tuple.items[0];
+    return first;
 }
 
 static int valueToMatrixElement(Value v, MatrixElement* out) {
@@ -1688,6 +1751,428 @@ static int unpackVectorPair(Value* args, size_t nargs, Value* lhs, Value* rhs) {
     return 0;
 }
 
+static int normalizeListIndex(long long raw, size_t count, size_t* out) {
+    if (!out || count == 0) return 0;
+    if (raw < 0) {
+        unsigned long long offset = (unsigned long long)(-(raw + 1)) + 1ULL;
+        if (offset > count) return 0;
+        *out = count - (size_t)offset;
+        return 1;
+    }
+    if ((unsigned long long)raw >= count) return 0;
+    *out = (size_t)raw;
+    return 1;
+}
+
+static int valueTruthy(Value value, int* ok) {
+    if (ok) *ok = 1;
+    switch (value.kind) {
+        case VAL_ERROR:
+            if (ok) *ok = 0;
+            return 0;
+        case VAL_NONE:
+            return 0;
+        case VAL_BOOL:
+            return value.as.b;
+        case VAL_INT:
+            return value.as.i != 0;
+        case VAL_DECIMAL:
+            return value.as.d != 0.0;
+        case VAL_FRACTION:
+            return value.as.frac.num != 0;
+        case VAL_COMPLEX:
+            return value.as.cplx.real != 0.0 || value.as.cplx.imag != 0.0;
+        case VAL_STRING:
+        case VAL_SYMBOL:
+            return value.as.str && value.as.str[0] != '\0';
+        case VAL_LIST:
+            return value.as.list.n != 0;
+        default:
+            return value.as.ptr != NULL;
+    }
+}
+
+static int valueToComparableReal(Value value, long double* out) {
+    switch (value.kind) {
+        case VAL_INT:
+            if (out) *out = (long double)value.as.i;
+            return 1;
+        case VAL_DECIMAL:
+            if (!isfinite(value.as.d)) return 0;
+            if (out) *out = value.as.d;
+            return 1;
+        case VAL_FRACTION:
+            if (value.as.frac.denom == 0) return 0;
+            if (out) *out = (long double)value.as.frac.num / (long double)value.as.frac.denom;
+            return 1;
+        case VAL_COMPLEX:
+            if (value.as.cplx.imag != 0.0 || !isfinite(value.as.cplx.real)) return 0;
+            if (out) *out = value.as.cplx.real;
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+static Value evalIfBranch(EvalContext* ctx, AstNode* branch) {
+    if (!branch) return valNone();
+    if (branch->kind == AST_SET && branch->as.tuple.n == 0) return valNone();
+    return eval(ctx, branch);
+}
+
+static Value evalLoopCondition(EvalContext* ctx, AstNode* node, const char* commandName, int* out) {
+    Value cond = eval(ctx, node);
+    if (cond.kind == VAL_ERROR) return cond;
+
+    int ok = 1;
+    int truthy = valueTruthy(cond, &ok);
+    valFree(cond);
+    if (!ok) {
+        char buf[160];
+        snprintf(buf, sizeof(buf), "\\%s condition cannot be evaluated", commandName);
+        return valError(buf);
+    }
+
+    if (out) *out = truthy;
+    return valNone();
+}
+
+static Value evalWhileCall(EvalContext* ctx, AstNode* node) {
+    if (node->as.call.nargs != 2) return valError("\\while expects 2 args");
+
+    Value last = valNone();
+    ctx->loopDepth++;
+
+    for (;;) {
+        int keepGoing = 0;
+        Value cond = evalLoopCondition(ctx, node->as.call.args[0], "while", &keepGoing);
+        if (cond.kind == VAL_ERROR) {
+            ctx->loopDepth--;
+            valFree(last);
+            return cond;
+        }
+        valFree(cond);
+        if (!keepGoing) break;
+
+        Value body = evalIfBranch(ctx, node->as.call.args[1]);
+        if (body.kind == VAL_ERROR) {
+            ctx->loopDepth--;
+            valFree(last);
+            return body;
+        }
+        valFree(last);
+        last = body;
+
+        if (ctx->loopControl == LOOP_CONTROL_BREAK) {
+            ctx->loopControl = LOOP_CONTROL_NONE;
+            break;
+        }
+        if (ctx->loopControl == LOOP_CONTROL_CONTINUE) {
+            ctx->loopControl = LOOP_CONTROL_NONE;
+            continue;
+        }
+        if (ctx->loopControl == LOOP_CONTROL_RETURN) {
+            ctx->loopDepth--;
+            return last;
+        }
+    }
+
+    ctx->loopDepth--;
+    return last;
+}
+
+static Value evalForCall(EvalContext* ctx, AstNode* node) {
+    if (node->as.call.nargs != 2) return valError("\\for expects 2 args");
+
+    AstNode* header = node->as.call.args[0];
+    if (!header || header->kind != AST_SEQ || header->as.seq.n != 3) {
+        return valError("\\for expects header {init; condition; step}");
+    }
+
+    Value init = eval(ctx, header->as.seq.stmts[0]);
+    if (init.kind == VAL_ERROR) return init;
+    valFree(init);
+
+    Value last = valNone();
+    ctx->loopDepth++;
+
+    for (;;) {
+        int keepGoing = 0;
+        Value cond = evalLoopCondition(ctx, header->as.seq.stmts[1], "for", &keepGoing);
+        if (cond.kind == VAL_ERROR) {
+            ctx->loopDepth--;
+            valFree(last);
+            return cond;
+        }
+        valFree(cond);
+        if (!keepGoing) break;
+
+        Value body = evalIfBranch(ctx, node->as.call.args[1]);
+        if (body.kind == VAL_ERROR) {
+            ctx->loopDepth--;
+            valFree(last);
+            return body;
+        }
+        valFree(last);
+        last = body;
+
+        int control = ctx->loopControl;
+        if (control == LOOP_CONTROL_BREAK) {
+            ctx->loopControl = LOOP_CONTROL_NONE;
+            break;
+        }
+        if (control == LOOP_CONTROL_RETURN) {
+            ctx->loopDepth--;
+            return last;
+        }
+        if (control == LOOP_CONTROL_CONTINUE) ctx->loopControl = LOOP_CONTROL_NONE;
+
+        Value step = eval(ctx, header->as.seq.stmts[2]);
+        if (step.kind == VAL_ERROR) {
+            ctx->loopDepth--;
+            valFree(last);
+            return step;
+        }
+        valFree(step);
+
+        if (ctx->loopControl == LOOP_CONTROL_BREAK) {
+            ctx->loopControl = LOOP_CONTROL_NONE;
+            break;
+        }
+        if (ctx->loopControl == LOOP_CONTROL_RETURN) {
+            ctx->loopDepth--;
+            return last;
+        }
+        if (ctx->loopControl == LOOP_CONTROL_CONTINUE) ctx->loopControl = LOOP_CONTROL_NONE;
+    }
+
+    ctx->loopDepth--;
+    return last;
+}
+
+// Free a collected parameter-name array
+static void freeParamNames(char** params, size_t count) {
+    for (size_t i = 0; i < count; i++) free(params[i]);
+    free(params);
+}
+
+// Test whether a parameter name is already present
+static int paramNameExists(char** params, size_t count, const char* name) {
+    for (size_t i = 0; i < count; i++) {
+        if (strcmp(params[i], name) == 0) return 1;
+    }
+    return 0;
+}
+
+// Append a unique parameter name to the collected parameter list
+static int appendParamName(char*** params, size_t* count, const char* name,
+                           char* err, size_t errSize) {
+    if (!name || !*name) {
+        snprintf(err, errSize, "\\def parameter names must be identifiers");
+        return 0;
+    }
+    if (paramNameExists(*params, *count, name)) {
+        snprintf(err, errSize, "\\def has duplicate parameter: %s", name);
+        return 0;
+    }
+
+    char** next = realloc(*params, (*count + 1) * sizeof(char*));
+    if (!next) {
+        snprintf(err, errSize, "failed to allocate function parameters");
+        return 0;
+    }
+    *params = next;
+    (*params)[*count] = dupstr(name);
+    if (!(*params)[*count]) {
+        snprintf(err, errSize, "failed to allocate function parameter");
+        return 0;
+    }
+    (*count)++;
+    return 1;
+}
+
+// Collect the raw identifier names from a \def parameter block
+static int collectDefParams(AstNode* node, char*** outParams, size_t* outCount,
+                            char* err, size_t errSize) {
+    char** params = NULL;
+    size_t count = 0;
+
+    if (!node) {
+        snprintf(err, errSize, "\\def expects a parameter list");
+        return 0;
+    }
+
+    if (node->kind == AST_SET && node->as.tuple.n == 0) {
+        *outParams = NULL;
+        *outCount = 0;
+        return 1;
+    }
+
+    if (node->kind == AST_IDENT) {
+        if (!appendParamName(&params, &count, node->as.ident, err, errSize)) {
+            freeParamNames(params, count);
+            return 0;
+        }
+        *outParams = params;
+        *outCount = count;
+        return 1;
+    }
+
+    if (node->kind != AST_TUPLE) {
+        snprintf(err, errSize, "\\def parameter list must contain identifiers");
+        return 0;
+    }
+
+    for (size_t i = 0; i < node->as.tuple.n; i++) {
+        AstNode* item = node->as.tuple.items[i];
+        if (!item || item->kind != AST_IDENT) {
+            snprintf(err, errSize, "\\def parameter list must contain identifiers");
+            freeParamNames(params, count);
+            return 0;
+        }
+        if (!appendParamName(&params, &count, item->as.ident, err, errSize)) {
+            freeParamNames(params, count);
+            return 0;
+        }
+    }
+
+    *outParams = params;
+    *outCount = count;
+    return 1;
+}
+
+// Store a user-defined function without evaluating its body
+static Value defineUserFunction(EvalContext* ctx, AstNode* node) {
+    if (node->as.call.nargs != 3) return valError("\\def expects 3 args");
+
+    AstNode* nameNode = node->as.call.args[0];
+    if (!nameNode || nameNode->kind != AST_IDENT || !nameNode->as.ident || !*nameNode->as.ident) {
+        return valError("\\def expects an identifier function name");
+    }
+
+    const char* name = nameNode->as.ident;
+    if (lookupCommand(name) || lookupUserFunction(ctx, name)) {
+        char buf[160];
+        snprintf(buf, sizeof(buf), "cannot override existing function: \\%s", name);
+        return valError(buf);
+    }
+
+    char err[160] = {0};
+    char** params = NULL;
+    size_t paramCount = 0;
+    if (!collectDefParams(node->as.call.args[1], &params, &paramCount, err, sizeof(err))) {
+        return valError(err[0] ? err : "\\def failed to collect parameters");
+    }
+
+    AstNode* body = astClone(node->as.call.args[2]);
+    if (!body) {
+        freeParamNames(params, paramCount);
+        return valError("failed to clone function body");
+    }
+
+    UserFunction* fn = calloc(1, sizeof(UserFunction));
+    if (!fn) {
+        freeParamNames(params, paramCount);
+        astFree(body);
+        return valError("failed to allocate user function");
+    }
+
+    fn->name = dupstr(name);
+    if (!fn->name) {
+        freeParamNames(params, paramCount);
+        astFree(body);
+        free(fn);
+        return valError("failed to allocate user function name");
+    }
+
+    fn->params = params;
+    fn->paramCount = paramCount;
+    fn->body = body;
+    fn->next = ctx->functions;
+    ctx->functions = fn;
+    return valNone();
+}
+
+// Match a user call's raw argument nodes against the function arity
+static int userCallArgNodes(UserFunction* fn, AstNode* call, AstNode*** outNodes, size_t* outCount) {
+    AstNode** nodes = call->as.call.args;
+    size_t count = call->as.call.nargs;
+
+    if (count == 1 && fn->paramCount != 1 && nodes[0] && nodes[0]->kind == AST_TUPLE) {
+        AstNode* tuple = nodes[0];
+        nodes = tuple->as.tuple.items;
+        count = tuple->as.tuple.n;
+    } else if (count == 1 && fn->paramCount == 0 && nodes[0]
+               && nodes[0]->kind == AST_SET && nodes[0]->as.tuple.n == 0) {
+        nodes = NULL;
+        count = 0;
+    }
+
+    if (outNodes) *outNodes = nodes;
+    if (outCount) *outCount = count;
+    return count == fn->paramCount;
+}
+
+// Evaluate a user-defined function in a fresh local scope
+static Value evalUserFunctionCall(EvalContext* ctx, UserFunction* fn, AstNode* call) {
+    AstNode** argNodes = NULL;
+    size_t argCount = 0;
+    if (!userCallArgNodes(fn, call, &argNodes, &argCount)) {
+        char buf[160];
+        snprintf(buf, sizeof(buf), "\\%s expects %zu args, got %zu",
+                 fn->name ? fn->name : "", fn->paramCount, argCount);
+        return valError(buf);
+    }
+
+    Value* args = calloc(fn->paramCount, sizeof(Value));
+    if (!args && fn->paramCount > 0) return valError("failed to allocate function arguments");
+
+    for (size_t i = 0; i < fn->paramCount; i++) {
+        args[i] = eval(ctx, argNodes[i]);
+        if (args[i].kind == VAL_ERROR || ctx->loopControl != LOOP_CONTROL_NONE) {
+            Value out = args[i].kind == VAL_ERROR ? args[i] : valNone();
+            for (size_t j = 0; j < i; j++) valFree(args[j]);
+            free(args);
+            return out;
+        }
+    }
+
+    Env* local = envNew(NULL);
+    if (!local) {
+        for (size_t i = 0; i < fn->paramCount; i++) valFree(args[i]);
+        free(args);
+        return valError("failed to allocate function scope");
+    }
+
+    for (size_t i = 0; i < fn->paramCount; i++) {
+        envSet(local, fn->params[i], args[i]);
+    }
+    free(args);
+
+    Env* callerEnv = ctx->env;
+    ctx->env = local;
+    ctx->functionDepth++;
+
+    Value body = evalIfBranch(ctx, fn->body);
+
+    ctx->functionDepth--;
+    ctx->env = callerEnv;
+    envFree(local);
+
+    if (body.kind == VAL_ERROR) return body;
+
+    if (ctx->loopControl == LOOP_CONTROL_RETURN) {
+        Value returned = ctx->returnValue;
+        ctx->returnValue = valNone();
+        ctx->loopControl = LOOP_CONTROL_NONE;
+        valFree(body);
+        return returned;
+    }
+
+    valFree(body);
+    return valNone();
+}
+
 /* ---------- AST walker ---------- */
 
 // Walk an AST subtree and produce a Value
@@ -1702,12 +2187,12 @@ Value eval(EvalContext* ctx, AstNode* node) {
         case AST_IDENT: {
             Value v;
             // envGet returns a borrowed view; clone so the caller can
-            // freely valFree without disturbing env.
+            // freely valFree without disturbing env
             if (envGet(ctx->env, node->as.ident, &v)) return valClone(v);
             if (strcmp(node->as.ident, "i") == 0) {
                 return valComplex((ComplexNumber){ .real = 0.0, .imag = 1.0 });
             }
-            // Unbound -> carry as a symbol; commands may consume it.
+            // Unbound -> carry as a symbol; commands may consume it
             return valSymbol(node->as.ident);
         }
 
@@ -1753,16 +2238,41 @@ Value eval(EvalContext* ctx, AstNode* node) {
         }
 
         case AST_CALL: {
-            Value* args = evalArgs(ctx, node->as.call.args, node->as.call.nargs);
-            if (!args && node->as.call.nargs > 0) return valError("out of memory while evaluating call arguments");
-            Value result = dispatch(ctx, node->as.call.name, args, node->as.call.nargs);
+            if (strcmp(node->as.call.name, "if") == 0) {
+                if (node->as.call.nargs != 2 && node->as.call.nargs != 3) {
+                    return valError("\\if expects 2 or 3 args");
+                }
+
+                Value cond = eval(ctx, node->as.call.args[0]);
+                if (cond.kind == VAL_ERROR) return cond;
+
+                int ok = 1;
+                int takeThen = valueTruthy(cond, &ok);
+                valFree(cond);
+                if (!ok) return valError("\\if condition cannot be evaluated");
+
+                if (takeThen) return evalIfBranch(ctx, node->as.call.args[1]);
+                if (node->as.call.nargs == 3) return evalIfBranch(ctx, node->as.call.args[2]);
+                return valNone();
+            }
+            if (strcmp(node->as.call.name, "while") == 0) return evalWhileCall(ctx, node);
+            if (strcmp(node->as.call.name, "for") == 0) return evalForCall(ctx, node);
+            if (strcmp(node->as.call.name, "def") == 0) return defineUserFunction(ctx, node);
+
+            UserFunction* fn = lookupUserFunction(ctx, node->as.call.name);
+            if (fn) return evalUserFunctionCall(ctx, fn, node);
+
+            size_t argCount = 0;
+            Value* args = evalCallArgs(ctx, node->as.call.name, node->as.call.args,
+                                       node->as.call.nargs, &argCount);
+            if (!args && argCount > 0) return valError("out of memory while evaluating call arguments");
+            Value result = dispatch(ctx, node->as.call.name, args, argCount);
             if (result.kind != VAL_ERROR
-                    && node->as.call.nargs >= 1
-                    && node->as.call.args[0]
-                    && node->as.call.args[0]->kind == AST_IDENT
+                    && firstLogicalCallArg(node)
+                    && firstLogicalCallArg(node)->kind == AST_IDENT
                     && (strcmp(node->as.call.name, "append") == 0
                         || strcmp(node->as.call.name, "remove") == 0)) {
-                envSet(ctx->env, node->as.call.args[0]->as.ident, valClone(result));
+                envSet(ctx->env, firstLogicalCallArg(node)->as.ident, valClone(result));
             }
             return result;
         }
@@ -1884,10 +2394,41 @@ Value eval(EvalContext* ctx, AstNode* node) {
         case AST_ASSIGN: {
             // envSet takes ownership of the rhs value; assignment itself
             // evaluates to VAL_NONE so we avoid deep-copying owned
-            // payloads (strings, lists, BEAST pointers).
+            // payloads (strings, lists, BEAST pointers)
             Value v = eval(ctx, node->as.assign.rhs);
             if (v.kind == VAL_ERROR) return v;
             envSet(ctx->env, node->as.assign.name, v);
+            return valNone();
+        }
+
+        case AST_INDEX_ASSIGN: {
+            Value target;
+            if (!envGet(ctx->env, node->as.indexAssign.name, &target)) {
+                char buf[160];
+                snprintf(buf, sizeof(buf), "cannot index-assign unbound variable %s",
+                         node->as.indexAssign.name ? node->as.indexAssign.name : "");
+                return valError(buf);
+            }
+            if (target.kind != VAL_LIST) return valError("indexed assignment expects a List");
+
+            Value index = eval(ctx, node->as.indexAssign.index);
+            if (index.kind == VAL_ERROR) return index;
+            if (index.kind != VAL_INT) {
+                valFree(index);
+                return valError("list index must be an integer");
+            }
+
+            size_t at = 0;
+            if (!normalizeListIndex(index.as.i, target.as.list.n, &at)) {
+                valFree(index);
+                return valError("list index out of range");
+            }
+            valFree(index);
+
+            Value rhs = eval(ctx, node->as.indexAssign.rhs);
+            if (rhs.kind == VAL_ERROR) return rhs;
+            valFree(target.as.list.items[at]);
+            target.as.list.items[at] = rhs;
             return valNone();
         }
 
@@ -1896,6 +2437,7 @@ Value eval(EvalContext* ctx, AstNode* node) {
             for (size_t i = 0; i < node->as.seq.n; i++) {
                 if (i > 0) valFree(last);
                 last = eval(ctx, node->as.seq.stmts[i]);
+                if (last.kind == VAL_ERROR || ctx->loopControl != LOOP_CONTROL_NONE) break;
             }
             return last;
         }
@@ -1910,6 +2452,147 @@ Value eval(EvalContext* ctx, AstNode* node) {
  * Register your own override to handle e.g. matrix+matrix, group
  * element products, set unions, etc. Later registrations win.
  */
+
+static Value bi_list(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    if (n == 0) return valList(NULL, 0);
+    if (n == 1 && a[0].kind == VAL_LIST) return a[0];
+    if (n == 1 && valueIsEmptyCombSet(a[0])) {
+        valFree(a[0]);
+        return valList(NULL, 0);
+    }
+
+    Value* items = calloc(n, sizeof(Value));
+    if (!items && n > 0) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("failed to allocate list");
+    }
+    for (size_t i = 0; i < n; i++) items[i] = a[i];
+    return valList(items, n);
+}
+
+static Value bi_if(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    for (size_t i = 0; i < n; i++) valFree(a[i]);
+    return valError("\\if must be evaluated before its branches are evaluated");
+}
+
+static Value bi_while(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    for (size_t i = 0; i < n; i++) valFree(a[i]);
+    return valError("\\while must be evaluated before its body is evaluated");
+}
+
+static Value bi_for(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    for (size_t i = 0; i < n; i++) valFree(a[i]);
+    return valError("\\for must be evaluated before its body is evaluated");
+}
+
+// Reject eager evaluation of \def through the generic dispatcher
+static Value bi_def(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    for (size_t i = 0; i < n; i++) valFree(a[i]);
+    return valError("\\def must be evaluated before its body is evaluated");
+}
+
+static Value bi_break(EvalContext* c, Value* a, size_t n) {
+    (void)a; (void)n;
+    if (!c || c->loopDepth == 0) return valError("\\break can only be used inside a loop");
+    c->loopControl = LOOP_CONTROL_BREAK;
+    return valNone();
+}
+
+static Value bi_continue(EvalContext* c, Value* a, size_t n) {
+    (void)a; (void)n;
+    if (!c || c->loopDepth == 0) return valError("\\continue can only be used inside a loop");
+    c->loopControl = LOOP_CONTROL_CONTINUE;
+    return valNone();
+}
+
+// Mark the current user function as returning the evaluated value
+static Value bi_return(EvalContext* c, Value* a, size_t n) {
+    (void)n;
+    if (!c || c->functionDepth == 0) {
+        valFree(a[0]);
+        return valError("\\return can only be used inside a user function");
+    }
+
+    valFree(c->returnValue);
+    c->returnValue = a[0];
+    c->loopControl = LOOP_CONTROL_RETURN;
+    return valNone();
+}
+
+// Print one string with $name substitutions from the active environment
+static void printInterpolatedString(EvalContext* c, const char* text) {
+    for (size_t i = 0; text && text[i]; ) {
+        if (text[i] != '$' || !isalnum((unsigned char)text[i + 1])) {
+            putchar(text[i]);
+            i++;
+            continue;
+        }
+
+        size_t start = i + 1;
+        size_t end = start;
+        while (isalnum((unsigned char)text[end])) end++;
+
+        size_t nameLen = end - start;
+        char* name = malloc(nameLen + 1);
+        if (!name) {
+            putchar(text[i]);
+            i++;
+            continue;
+        }
+        memcpy(name, text + start, nameLen);
+        name[nameLen] = '\0';
+
+        Value value;
+        if (c && c->env && envGet(c->env, name, &value)) {
+            if (value.kind == VAL_STRING) fputs(value.as.str ? value.as.str : "", stdout);
+            else valPrint(value);
+            i = end;
+        } else {
+            putchar(text[i]);
+            i++;
+        }
+        free(name);
+    }
+    putchar('\n');
+}
+
+static Value bi_print(EvalContext* c, Value* a, size_t n) {
+    (void)n;
+    if (a[0].kind == VAL_STRING) {
+        printInterpolatedString(c, a[0].as.str ? a[0].as.str : "");
+    } else {
+        valPrint(a[0]);
+        putchar('\n');
+    }
+    valFree(a[0]);
+    return valNone();
+}
+
+static Value bi_index(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (a[0].kind != VAL_LIST || a[1].kind != VAL_INT) {
+        valFree(a[0]);
+        valFree(a[1]);
+        return valError("list indexing expects a List and an integer index");
+    }
+
+    size_t at = 0;
+    if (!normalizeListIndex(a[1].as.i, a[0].as.list.n, &at)) {
+        valFree(a[0]);
+        valFree(a[1]);
+        return valError("list index out of range");
+    }
+
+    Value out = valClone(a[0].as.list.items[at]);
+    valFree(a[0]);
+    valFree(a[1]);
+    return out;
+}
 
 static Fraction valueToFraction(Value v) {
     if (v.kind == VAL_FRACTION) return v.as.frac;
@@ -1959,6 +2642,10 @@ static Value numericBinop(Value a, Value b, char op) {
                     if (fraction.denom == 0) return integerOverflowError("fraction construction");
                     return valFraction(fraction);
                 }
+            case '%':
+                if (y == 0) return valError("modulo by zero");
+                if (x == LLONG_MIN && y == -1) return valInt(0);
+                return valInt(x % y);
         }
     }
     if ((a.kind == VAL_INT || a.kind == VAL_FRACTION)
@@ -2224,6 +2911,14 @@ static Value bi_mul(EvalContext* c, Value* a, size_t n) {
     Value nr = nekoBinaryResult(a[0], a[1], nekoMul, &handled);
     if (handled) return nr;
     Value r = numericBinop(a[0], a[1], '*');
+    valFree(a[0]); valFree(a[1]);
+    return r;
+}
+
+// a % b
+static Value bi_mod(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    Value r = numericBinop(a[0], a[1], '%');
     valFree(a[0]); valFree(a[1]);
     return r;
 }
@@ -2787,6 +3482,9 @@ static int exprDependsOnVar(const NekoExpr* expr, const char* var) {
         case NEKO_EXPR_LOG:
         case NEKO_EXPR_SQRT:
         case NEKO_EXPR_ABS:
+        case NEKO_EXPR_ERF:
+        case NEKO_EXPR_EI:
+        case NEKO_EXPR_STEP:
             return exprDependsOnVar(expr->as.unary.arg, var);
         case NEKO_EXPR_CALL:
             for (int i = 0; i < expr->as.call.nargs; i++) {
@@ -2861,6 +3559,9 @@ static int collectCalcVariables(const NekoExpr* expr, CalcVarList* vars) {
         case NEKO_EXPR_LOG:
         case NEKO_EXPR_SQRT:
         case NEKO_EXPR_ABS:
+        case NEKO_EXPR_ERF:
+        case NEKO_EXPR_EI:
+        case NEKO_EXPR_STEP:
             return collectCalcVariables(expr->as.unary.arg, vars);
         case NEKO_EXPR_CALL:
             for (int i = 0; i < expr->as.call.nargs; i++) {
@@ -3116,7 +3817,10 @@ static int appendNekoExprString(StringBuf* buf, const NekoExpr* expr) {
         case NEKO_EXPR_EXP:
         case NEKO_EXPR_LOG:
         case NEKO_EXPR_SQRT:
-        case NEKO_EXPR_ABS: {
+        case NEKO_EXPR_ABS:
+        case NEKO_EXPR_ERF:
+        case NEKO_EXPR_EI:
+        case NEKO_EXPR_STEP: {
             const char* name = expr->kind == NEKO_EXPR_SIN ? "sin"
                 : expr->kind == NEKO_EXPR_COS ? "cos"
                 : expr->kind == NEKO_EXPR_TAN ? "tan"
@@ -3126,7 +3830,10 @@ static int appendNekoExprString(StringBuf* buf, const NekoExpr* expr) {
                 : expr->kind == NEKO_EXPR_EXP ? "exp"
                 : expr->kind == NEKO_EXPR_LOG ? "log"
                 : expr->kind == NEKO_EXPR_SQRT ? "sqrt"
-                : "abs";
+                : expr->kind == NEKO_EXPR_ABS ? "abs"
+                : expr->kind == NEKO_EXPR_ERF ? "erf"
+                : expr->kind == NEKO_EXPR_EI ? "Ei"
+                : "step";
             return stringBufAppendText(buf, name)
                 && stringBufAppendChar(buf, '(')
                 && appendNekoExprString(buf, expr->as.unary.arg)
@@ -5283,6 +5990,40 @@ static Value bi_eq(EvalContext* c, Value* a, size_t n) {
     return valBool(result);
 }
 
+static Value compareRealValues(Value* a, const char* op) {
+    long double lhs = 0.0;
+    long double rhs = 0.0;
+    if (!valueToComparableReal(a[0], &lhs) || !valueToComparableReal(a[1], &rhs)) {
+        valFree(a[0]);
+        valFree(a[1]);
+        char buf[160];
+        snprintf(buf, sizeof(buf), "\\%s expects two real numeric values", op);
+        return valError(buf);
+    }
+    bool result = strcmp(op, "<") == 0 ? lhs < rhs : lhs > rhs;
+    valFree(a[0]);
+    valFree(a[1]);
+    return valBool(result);
+}
+
+static Value bi_lt(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    return compareRealValues(a, "<");
+}
+
+static Value bi_gt(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    return compareRealValues(a, ">");
+}
+
+static bool valueEqualsBorrowed(Value lhs, Value rhs) {
+    Value args[2] = { valClone(lhs), valClone(rhs) };
+    Value result = bi_eq(NULL, args, 2);
+    bool equal = result.kind == VAL_BOOL && result.as.b;
+    valFree(result);
+    return equal;
+}
+
 static Value bi_rank(EvalContext* c, Value* a, size_t n) {
     (void)c; (void)n;
     if (a[0].kind != VAL_MATRIX) return matrixUnaryError("\\rank expects one matrix", a[0]);
@@ -5681,9 +6422,28 @@ static Value bi_dilate(EvalContext* c, Value* a, size_t n) {
 
 static Value bi_append(EvalContext* c, Value* a, size_t n) {
     (void)c; (void)n;
+    if (a[0].kind == VAL_LIST) {
+        size_t count = a[0].as.list.n;
+        if (count == (size_t)-1) {
+            valFree(a[0]);
+            valFree(a[1]);
+            return valError("\\append failed: list is too large");
+        }
+        Value* items = realloc(a[0].as.list.items, (count + 1) * sizeof(Value));
+        if (!items) {
+            valFree(a[0]);
+            valFree(a[1]);
+            return valError("\\append failed to grow list");
+        }
+        a[0].as.list.items = items;
+        a[0].as.list.items[count] = a[1];
+        a[0].as.list.n = count + 1;
+        return a[0];
+    }
+
     long long x;
     if (!valueIsCombSet(a[0]) || !valueToCombSetInt(a[1], &x)) {
-        return combsetBinaryError("\\append expects a CombSet and an integer", a[0], a[1]);
+        return combsetBinaryError("\\append expects a List and any value, or a CombSet and an integer", a[0], a[1]);
     }
     if (valueIsEmptyCombSet(a[0])) {
         long long elem = x;
@@ -5699,9 +6459,29 @@ static Value bi_append(EvalContext* c, Value* a, size_t n) {
 
 static Value bi_remove(EvalContext* c, Value* a, size_t n) {
     (void)c; (void)n;
+    if (a[0].kind == VAL_LIST) {
+        size_t count = a[0].as.list.n;
+        for (size_t i = 0; i < count; i++) {
+            if (!valueEqualsBorrowed(a[0].as.list.items[i], a[1])) continue;
+            valFree(a[0].as.list.items[i]);
+            for (size_t j = i + 1; j < count; j++) {
+                a[0].as.list.items[j - 1] = a[0].as.list.items[j];
+            }
+            a[0].as.list.n = count - 1;
+            if (a[0].as.list.n == 0) {
+                free(a[0].as.list.items);
+                a[0].as.list.items = NULL;
+            }
+            valFree(a[1]);
+            return a[0];
+        }
+        valFree(a[1]);
+        return a[0];
+    }
+
     long long x;
     if (!valueIsCombSet(a[0]) || !valueToCombSetInt(a[1], &x)) {
-        return combsetBinaryError("\\remove expects a CombSet and an integer", a[0], a[1]);
+        return combsetBinaryError("\\remove expects a List and any value, or a CombSet and an integer", a[0], a[1]);
     }
     if (valueIsEmptyCombSet(a[0])) {
         return combsetBinaryError("\\remove failed: element not in set", a[0], a[1]);
@@ -9045,11 +9825,24 @@ static Value bi_vproj(EvalContext* c, Value* a, size_t n) {
 void registerBuiltins(void) {
     registerCommand("help", -1, bi_help);
     registerCommand("run", 1, bi_run);
+    registerCommand("list", -1, bi_list);
+    registerCommand("if", -1, bi_if);
+    registerCommand("while", 2, bi_while);
+    registerCommand("for", 2, bi_for);
+    registerCommand("break", 0, bi_break);
+    registerCommand("continue", 0, bi_continue);
+    registerCommand("def", 3, bi_def);
+    registerCommand("return", 1, bi_return);
+    registerCommand("print", 1, bi_print);
     registerCommand("+",  2, bi_add);
     registerCommand("-",  2, bi_sub);
     registerCommand("*",  2, bi_mul);
     registerCommand("/",  2, bi_div);
+    registerCommand("%",  2, bi_mod);
     registerCommand("==", 2, bi_eq);
+    registerCommand("<", 2, bi_lt);
+    registerCommand(">", 2, bi_gt);
+    registerCommand("_", 2, bi_index);
     registerCommand("cdot",  2, bi_cdot);
     registerCommand("charIP",  2, bi_charIP_cmd);
     registerCommand("times",  2, bi_times);

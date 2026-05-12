@@ -19,6 +19,7 @@ typedef enum {
     AST_SET,         // {a, b, c}         -- CombSet literal in primary position
     AST_MATRIX,      // [a,b;c,d]  or  \begin{env}..\end{env}
     AST_ASSIGN,      // name = expr
+    AST_INDEX_ASSIGN,// name[index] = expr
     AST_SEQ          // stmt ; stmt ; stmt
 } AstKind;
 
@@ -51,6 +52,7 @@ struct AstNode {
         // tag is the environment name (e.g. "pmatrix") or "matrix" for [..].
         struct { char* tag; AstNode** flat; size_t* rowlens; size_t nrows; } matrix;
         struct { char* name; AstNode* rhs; } assign;
+        struct { char* name; AstNode* index; AstNode* rhs; } indexAssign;
         struct { AstNode** stmts; size_t n; } seq;
     } as;
 };
@@ -70,11 +72,13 @@ AstNode* astTuple(AstNode** items, size_t n);
 AstNode* astSet(AstNode** items, size_t n, size_t line, size_t col);
 AstNode* astMatrix(const char* tag, AstNode** flat, size_t* rowlens, size_t nrows, size_t line, size_t col);
 AstNode* astAssign(const char* name, AstNode* rhs);
+AstNode* astIndexAssign(const char* name, AstNode* index, AstNode* rhs);
 AstNode* astSeq(AstNode** stmts, size_t n);
 
 /* ---------- Free and print ---------- */
 
 void astFree(AstNode* node);
+AstNode* astClone(const AstNode* node);
 void astPrint(AstNode* node, int indent);
 
 #endif

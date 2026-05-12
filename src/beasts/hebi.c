@@ -5,6 +5,9 @@
 #include<limits.h>
 #include "hebi.h"
 
+#define HEBI_EULER_GAMMA 0.577215664901532860606512090082402431L
+#define HEBI_PI 3.141592653589793238462643383279502884L
+
 /* ---------- Helper methods ---------- */
 
 // comp method for qsort
@@ -329,6 +332,104 @@ ComplexNumber complexCbrt(ComplexNumber a) {
 // Tell if two ComplexNumbers are equal up to some tolerance
 bool complexEq(ComplexNumber a, ComplexNumber b, long double tol) {
     return fabsl(a.real - b.real) <= tol && fabsl(a.imag - b.imag) <= tol;
+}
+
+/* ---------- Special functions ---------- */
+
+// Return the real error function
+long double realErf(long double x) {
+    return erfl(x);
+}
+
+// Return the real exponential integral Ei on its real branch
+long double realEi(long double x) {
+    // Handle the logarithmic singularity at zero
+    if (x == 0.0L) return -INFINITY;
+    if (isnan(x)) return NAN;
+    if (!isfinite(x)) return x > 0.0L ? INFINITY : 0.0L;
+
+    // Use the defining power series for moderate real inputs
+    if (fabsl(x) <= 40.0L) {
+        long double term = x;
+        long double sum = term;
+        for (int k = 2; k <= 400; k++) {
+            term *= x / (long double)k;
+            long double add = term / (long double)k;
+            sum += add;
+            if (fabsl(add) <= 1e-21L * (1.0L + fabsl(sum))) break;
+        }
+        return HEBI_EULER_GAMMA + logl(fabsl(x)) + sum;
+    }
+
+    // Use the standard asymptotic expansion away from the origin
+    long double term = 1.0L;
+    long double sum = term;
+    long double prev = fabsl(term);
+    for (int k = 1; k <= 200; k++) {
+        term *= (long double)k / x;
+        long double mag = fabsl(term);
+        if (mag > prev) break;
+        sum += term;
+        prev = mag;
+        if (mag <= 1e-21L * (1.0L + fabsl(sum))) break;
+    }
+    return expl(x) * sum / x;
+}
+
+// Return the complex error function
+ComplexNumber complexErf(ComplexNumber z) {
+    // Use the real branch when the input is real
+    if (z.imag == 0.0L) return (ComplexNumber){realErf(z.real), 0.0L};
+
+    // Sum the entire power series for erf(z)
+    long double complex w = toC99Complex(z);
+    long double complex term = w;
+    long double complex sum = term;
+    for (int n = 1; n <= 300; n++) {
+        term *= -w * w / (long double)n;
+        long double complex add = term / (long double)(2 * n + 1);
+        sum += add;
+        if (cabsl(add) <= 1e-18L * (1.0L + cabsl(sum))) break;
+    }
+
+    return fromC99Complex((2.0L / sqrtl(HEBI_PI)) * sum);
+}
+
+// Return the principal complex exponential integral Ei
+ComplexNumber complexEi(ComplexNumber z) {
+    // Use the real branch when the input is positive real
+    if (z.imag == 0.0L && z.real > 0.0L) return (ComplexNumber){realEi(z.real), 0.0L};
+
+    // Handle the logarithmic singularity at zero
+    long double complex w = toC99Complex(z);
+    if (cabsl(w) == 0.0L) return (ComplexNumber){-INFINITY, 0.0L};
+
+    // Use the defining principal-branch series for moderate inputs
+    if (cabsl(w) <= 40.0L) {
+        long double complex term = w;
+        long double complex sum = term;
+        for (int k = 2; k <= 500; k++) {
+            term *= w / (long double)k;
+            long double complex add = term / (long double)k;
+            sum += add;
+            if (cabsl(add) <= 1e-18L * (1.0L + cabsl(sum))) break;
+        }
+        return fromC99Complex(HEBI_EULER_GAMMA + clogl(w) + sum);
+    }
+
+    // Use the standard asymptotic expansion for large inputs
+    long double complex term = 1.0L;
+    long double complex sum = term;
+    long double prev = cabsl(term);
+    for (int k = 1; k <= 250; k++) {
+        term *= (long double)k / w;
+        long double mag = cabsl(term);
+        if (mag > prev) break;
+        sum += term;
+        prev = mag;
+        if (mag <= 1e-18L * (1.0L + cabsl(sum))) break;
+    }
+    return fromC99Complex(cexpl(w) * sum / w);
 }
 
 /* ---------- Number arithmetic ---------- */

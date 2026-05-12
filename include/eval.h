@@ -32,6 +32,7 @@ void  envSet(Env* env, const char* name, Value v);
 /* ---------- Command registry ---------- */
 
 typedef struct EvalContext EvalContext;
+typedef struct UserFunction UserFunction;
 
 typedef Value (*CommandFn)(EvalContext* ctx, Value* args, size_t nargs);
 
@@ -58,6 +59,19 @@ void registerBuiltins(void);
 
 struct EvalContext {
     Env* env;
+    UserFunction* functions;
+    int loopControl;
+    size_t loopDepth;
+    size_t functionDepth;
+    Value returnValue;
+};
+
+struct UserFunction {
+    char* name;
+    char** params;
+    size_t paramCount;
+    AstNode* body;
+    UserFunction* next;
 };
 
 EvalContext* evalCtxNew(void);

@@ -46,8 +46,14 @@ static constexpr Section kSections[] = {
         "* define an exact fraction: `q = \\frac{3,4}`\n"
         "* define a complex scalar inline: `z = 1 + 2i`\n"
         "* use powers and products inline: `w = (1 + i)^3 / 2`\n"
+        "* update variables in place: `x += 1`, `A *= B`, and `n %= 3`\n"
         "* inspect scalar parts: `\\re{z}`, `\\im{z}`, and `\\conj{z}`\n"
         "* compare values inline: `1 + 1 == 2`\n"
+        "* define a list: `xs = \\list{1,2,3}` and access entries with `xs[0]`\n"
+        "* choose between expressions: `\\if{x == 1}{\"yes\"}{\"no\"}`\n"
+        "* repeat statements: `\\while{i < 3}{i++}` or `\\for{i = 0; i < n; i++}{\\print{i}}`\n"
+        "* define a local user function: `\\def{square}{x}{\\return{x^2}}` and call it with `\\square{5}`\n"
+        "* print output from scripts: `\\print{\"hello $name\"}` and `\\print{xs}`\n"
         "* run a script in the current session: `\\run{notes.bsy}`"
     },
     {
@@ -131,11 +137,23 @@ static constexpr Section kSections[] = {
 static constexpr Command kCommands[] = {
     HELP_CMD("help", -1, Beast::Hebi, "Displays command usage, accepted value types, and return type.", "zero arguments to list commands, or one command name as a Symbol or String", "String"),
     HELP_CMD("run", 1, Beast::Hebi, "Runs a text file as a Bestiary script, evaluating each nonblank line in the current context.", "String filename, or an unquoted filename in braces such as \\run{script.bsy}", "String summary, or Error if the file cannot be opened"),
+    HELP_CMD("list", -1, Beast::Hebi, "Constructs a dynamic Bestiary list.", "zero or more values", "List"),
+    HELP_CMD("if", -1, Beast::Hebi, "Evaluates the result branch when a condition is true, otherwise evaluates the optional else branch.", "Bool or truthy condition, result expression, and optional else expression", "selected branch value or none"),
+    HELP_CMD("while", 2, Beast::Hebi, "Evaluates a body repeatedly while a condition remains true.", "truthy condition expression and loop body", "last body value or none"),
+    HELP_CMD("for", 2, Beast::Hebi, "Evaluates an init, condition, and step header around a repeated body.", "header block of init; condition; step and loop body", "last body value or none"),
+    HELP_CMD("break", 0, Beast::Hebi, "Exits the nearest active loop.", "no values", "None"),
+    HELP_CMD("continue", 0, Beast::Hebi, "Skips the rest of the current loop body.", "no values", "None"),
+    HELP_CMD("def", 3, Beast::Hebi, "Defines a user function with local-only variables.", "function name, parameter list, and body", "None"),
+    HELP_CMD("return", 1, Beast::Hebi, "Ends the current user function and returns a value.", "single value", "the returned value"),
+    HELP_CMD("print", 1, Beast::Hebi, "Prints a value to stdout, using raw text and $name interpolation for strings.", "any single value", "None"),
     HELP_CMD("+", 2, Beast::Hebi, "Adds compatible values.", "Int/Fraction/Decimal/Complex with numeric; Matrix with same-size Matrix; Vector with same-dimension Vector; CombSet with Int for translation; CombSet with CombSet for sumset; RingElement with RingElement from the same Ring; Ideal with Ideal from the same Ring and side; Symbol/NEKO expression/numeric for symbolic addition", "same family as the operands, or numeric/symbolic result"),
     HELP_CMD("-", 2, Beast::Hebi, "Subtracts compatible values.", "Int/Fraction/Decimal/Complex with numeric; Matrix with same-size Matrix; Vector with same-dimension Vector; CombSet with CombSet for difference set; RingElement with RingElement from the same Ring; Symbol/NEKO expression/numeric for symbolic subtraction", "same family as the operands, or numeric/symbolic result"),
     HELP_CMD("*", 2, Beast::Hebi, "Multiplies compatible values.", "numeric with numeric; Matrix with compatible Matrix; Matrix with compatible Vector; Vector with Vector for dot product; Vector/Matrix with numeric scalar; CombSet with CombSet for product set; CombSet with Int for dilation; Int with CombSet for repeated sum/difference set; GroupElement with GroupElement from the same Group; RingElement with RingElement from the same Ring; RingElement with Int; Ideal with Ideal from the same Ring and side; Symbol/NEKO expression/numeric for symbolic multiplication", "same family as the operation, numeric scalar for dot products, or symbolic expression"),
     HELP_CMD("/", 2, Beast::Hebi, "Divides compatible values.", "numeric numerator and nonzero numeric denominator; Group by normal SubGroup for quotient group; Ring by Ideal for quotient ring; GroupElement by GroupElement from the same Group; RingElement by invertible RingElement from the same Ring; Symbol/NEKO expression/numeric for symbolic quotient", "numeric, Group, Ring, GroupElement, RingElement, or NEKO expression"),
+    HELP_CMD("%", 2, Beast::Hebi, "Computes integer remainder.", "two Int values with nonzero divisor", "Int"),
     HELP_CMD("==", 2, Beast::Hebi, "Tests two Bestiary values for equality.", "two values of comparable Bestiary kinds", "Bool"),
+    HELP_CMD("<", 2, Beast::Hebi, "Tests whether one real numeric value is less than another.", "two real numeric values", "Bool"),
+    HELP_CMD(">", 2, Beast::Hebi, "Tests whether one real numeric value is greater than another.", "two real numeric values", "Bool"),
     HELP_CMD("u-", 1, Beast::Hebi, "Negates one value.", "numeric value, Vector, RingElement, CombSet, Symbol, or NEKO expression", "same kind as the input, or NEKO expression"),
     HELP_CMD("u+", 1, Beast::Hebi, "Returns one value unchanged.", "any single Bestiary value", "same value kind as the input"),
     HELP_CMD("^", 2, Beast::Hebi, "Raises a supported base to a power or applies a matrix superscript.", "numeric base with numeric exponent; Matrix with Int exponent or Symbol T/t; CombSet with positive Int exponent; GroupElement with Int exponent; RingElement with Int exponent; Symbol/NEKO expression/numeric for symbolic power", "numeric, Matrix, CombSet, GroupElement, RingElement, or NEKO expression"),
@@ -414,8 +432,8 @@ static constexpr Command kCommands[] = {
     HELP_CMD("subsetSums", -1, Beast::Ookami, "Computes subset sums of a finite integer set.", "CombSet, optionally followed by Int subset size k >= 0", "CombSet"),
     HELP_CMD("translate", 2, Beast::Ookami, "Translates every element of a finite integer set by an integer.", "CombSet and Int translation", "CombSet"),
     HELP_CMD("dilate", 2, Beast::Ookami, "Multiplies every element of a finite integer set by an integer.", "CombSet and Int scale", "CombSet"),
-    HELP_CMD("append", 2, Beast::Ookami, "Adds an integer to a finite integer set.", "CombSet and Int element", "CombSet"),
-    HELP_CMD("remove", 2, Beast::Ookami, "Removes an integer from a finite integer set.", "CombSet and Int element already in the set", "CombSet"),
+    HELP_CMD("append", 2, Beast::Ookami, "Appends a value to a List or adds an integer to a finite integer set.", "List and any value, or CombSet and Int element", "List or CombSet"),
+    HELP_CMD("remove", 2, Beast::Ookami, "Removes the first matching value from a List or removes an integer from a finite integer set.", "List and any value, or CombSet and Int element already in the set", "List or CombSet"),
     HELP_CMD("adsCard", 1, Beast::Ookami, "Counts the additive sumset A+A.", "CombSet", "Int"),
     HELP_CMD("ddsCard", 1, Beast::Ookami, "Counts the difference set A-A.", "CombSet", "Int"),
     HELP_CMD("mdsCard", 1, Beast::Ookami, "Counts the product set A*A.", "CombSet", "Int"),
