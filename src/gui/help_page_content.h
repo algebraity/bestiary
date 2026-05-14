@@ -6,6 +6,7 @@
 namespace BestiaryHelpPage {
 
 enum class Beast {
+    Basic,
     Hebi,
     Sokko,
     Neko,
@@ -14,6 +15,7 @@ enum class Beast {
     Tora,
     Ookami,
     Kuma,
+    Quaternionic,
 };
 
 struct Section {
@@ -35,10 +37,24 @@ struct Command {
 static constexpr const char* kIntroText =
     "Bestiary is a language, command-line interface, and GUI application through which a collection of C-based animal-themed mathematics libraries are accessed and used together seamlessly, as though they were all one program. Objects are defined by expressions like `A = { 1, 2, 3 }` and can be used with operations such as `A \\otimes A`. The language used in Bestiary is themed after LaTeX, and many objects can be defined in a way identical to how they would be typed in LaTeX.\n\n"
     "All commands in Bestiary start with a backslash `\\` character, like LaTeX. There are hundreds of commands, and while they can all be used together, they are provided by different BEASTs (Bundles of Efficient Algorithms for Science and Technology) and are used for different purposes. You should start by learning the commands for the application you need most.\n\n"
-    "Each of the linked help pages below provides the help information for every command associated with a specific BEAST, and describes the objects it provides and how to define and manipulate them. These pages can be searched with Ctrl+F. It is recommended to read the help page on HEBI first, as it is the most general BEAST and is used by all the others.\n\n"
+    "Each of the linked help pages below provides the help information for every command associated with a specific area of Bestiary, and describes the objects it provides and how to define and manipulate them. These pages can be searched with Ctrl+F. It is recommended to read the Basic features and commands page first, then HEBI, as HEBI is the most general BEAST and is used by all the others.\n\n"
     "To get started, click one of the links below to open its help page. For more information or to submit issues or feature requests, visit the git page.";
 
 static constexpr Section kSections[] = {
+    {
+        Beast::Basic,
+        "Basic features and commands",
+        "Basic features and commands",
+        "* Creating a new tab: use Ctrl+T or the \"+\" button on the tab bar to create a new tab containing a Bestiary shell.\n\n"
+        "* Navigating tabs: Use Ctrl+n to move to the nth tab after the start page, Ctrl+` to move to the start page, and Ctrl+D to close the current tab.\n\n"
+        "* Zoom: Use Ctrl+- and Ctrl++ to zoom out and in to a terminal or help page. Bestiary remembers your zoom level and shares it across tabs of the same type! In graphs, use the scroll wheel or touchpad to zoom.\n\n"
+        "* Graphing: Use the `\\graph{function}` command to graph a function in a new Graph tab, `\\graph{function}{n}` to add a function to the nth Graph tab, or `\\graph{x=c}` to graph a vertical line at a real constant c. Expressions involving y, such as `\\graph{x*y}`, are graphed implicitly as `x*y = 0`, and equations such as `\\graph{x^2 + y^2 = 1}` are shifted internally to graph the zero set. The graph command treats x and y as graph axes even if variables with those names exist in the shell.\n\n"
+        "* Persistence: Bestiary remembers what tabs you have open when you close it, and restores them for you automatically. Use `\\export{\"filename.bsy\"}` to create a script that restores your session, so you can share your work with others!\n\n"
+        "* Loops: Bestiary supports for and while loops via the backslash commands `\\for{i = start; i < end; inc (e.g. i += 1)}{stuff}` and `\\while{condition}{stuff}`.\n\n"
+        "* Conditionals: Bestiary supports conditions via the command `\\if{condition}{stuff}{else this stuff}`.\n\n"
+        "* User-defined functions: You can define your own function with: `\\def{funcName}{input}{stuff...optional \\return{output}}`. Shift+Enter produces a new line while inside curly braces, like in other languages with support for conditionals and functions. After defining them, your functions may be called with `\\funcName{input}`.\n\n"
+        "* Mutable lists: Define a list with `list = \\list{item1, item2, ...}`, append elements with `\\append{list}{element}`, remove a matching element with `\\remove{list}{element}`, and conveniently access list elements with `list[index]`."
+    },
     {
         Beast::Hebi,
         "HEBI (basic math and common libraries)",
@@ -46,19 +62,14 @@ static constexpr Section kSections[] = {
         "* define scalars inline: `x = 2 + 3 / 4` and `y = (\\phi^2 - \\pi) / e`\n"
         "* define an exact fraction: `q = \\frac{3,4}`\n"
         "* define a complex scalar inline: `z = 1 + 2i`\n"
+        "* construct fields: `F = \\QQ`, `R = \\RR`, `C = \\CC`, `\\mathbb{Q}`, and `K = \\GF{5}`\n"
+        "* construct field elements: `a = \\fieldElement{F}{\\frac{1}{2}}`\n"
         "* use powers and products inline: `w = (1 + i)^3 / 2`\n"
         "* update variables in place: `x += 1`, `A *= B`, and `n %= 3`\n"
         "* inspect scalar parts: `\\re{z}`, `\\im{z}`, and `\\conj{z}`\n"
         "* compare values inline: `1 + 1 == 2`\n"
-        "* define a list: `xs = \\list{1,2,3}` and access entries with `xs[0]`\n"
-        "* copy a value: `ys = \\copy{xs}`\n"
-        "* sort a numeric list: `\\sort{xs}`\n"
-        "* return a sorted copy without mutating the original: `\\sortedCopy{xs}`\n"
-        "* choose between expressions: `\\if{x == 1}{\"yes\"}{\"no\"}`\n"
-        "* repeat statements: `\\while{i < 3}{i++}` or `\\for{i = 0; i < n; i++}{\\print{i}}`\n"
-        "* define a local user function: `\\def{square}{x}{\\return{x^2}}` and call it with `\\square{5}`\n"
-        "* print output from scripts: `\\print{\"hello $name\"}` and `\\print{xs}`\n"
-        "* run a script in the current session: `\\run{notes.bsy}`"
+        "* generate random values: `\\randInt{1}{6}`, `\\randReal{0}{1}`, and `\\randComplexMod{0}{2}`\n"
+        "* solve low-degree equations over the complex numbers: `\\solveQuadratic{1,-3,2}`"
     },
     {
         Beast::Sokko,
@@ -106,6 +117,8 @@ static constexpr Section kSections[] = {
         "* define a subgroup: `H = \\subgroupGeneratedBy{G,g}`\n"
         "* define a subring and ideals: `S = \\subring{a}`, `I = \\leftIdeal{a}`, and `J = \\rightIdeal{a}`\n"
         "* form quotient structures inline: `G / \\groupCenter{G}` and `R / I`\n"
+        "* compute commutators and associators: `\\commutator{g}{h}` and `\\associator{a}{b}{c}`\n"
+        "* test zero divisors: `\\isLeftZeroDivisor{a}` and `\\isRightZeroDivisor{a}`\n"
         "* define homomorphisms: `phi = \\groupHomomorphism{G,H,[g0:h0,g1:h1,...]}` and `psi = \\ringHomomorphism{R,S,[a0:b0,a1:b1,...]}`\n"
         "* inspect structure info: `\\groupInfo{G}`, `\\subgroupInfo{H}`, `\\ringInfo{R}`, and `\\idealInfo{I}`"
     },
@@ -140,44 +153,124 @@ static constexpr Section kSections[] = {
         "KUMA: Kernel for Uncertainty, Measures, and Analysis",
         "* KUMA commands are being wired into the Bestiary language"
     },
+    {
+        Beast::Quaternionic,
+        "Quaternionic (Cayley-Dickson algebras)",
+        "Quaternionic: Cayley-Dickson, Quaternion, and Octonion Arithmetic",
+        "* construct standard algebras: `H = \\HH` and `O = \\OO`\n"
+        "* construct Cayley-Dickson algebras: `A = \\cdAlgebra{\\RR}{-1,-1}`\n"
+        "* construct quaternions: `H = \\quaternionAlgebra{\\RR}{-1}{-1}` and `q = \\quaternion{H}{1}{2}{3}{4}`\n"
+        "* use Hamilton defaults inline: `1 + j`, `1 + i + j`, and `1 + i*j`\n"
+        "* construct octonions: `O = \\octonionAlgebra{\\RR}{-1}{-1}{-1}` and `x = \\octonion{O}{1,0,0,0,0,0,0,0}`\n"
+        "* use ordinary operations: `x + y`, `x - y`, `x * y`, `x / y`, and `x^{-1}`\n"
+        "* compute the Cayley-Dickson norm with `|x|`, `||x||`, or `\\cdNorm{x}`\n"
+        "* build generated objects: `\\cdLeftIdeal{x}`, `\\cdRightIdeal{x}`, `\\cdTwoSidedIdeal{x}`, and `\\cdSubalgebra{x,y}`\n"
+        "* test membership and intersections: `x \\in I`, `I \\cap J`, and `\\intersect{S}{T}`\n"
+        "* use ideal arithmetic: `I + J`, `I - J`, `x * I`, `I * x`, and `2 * I`\n"
+        "* inspect multiplication operators: `\\cdLeftMatrix{x}`, `\\cdRightMatrix{x}`, `\\cdCommutatorMatrix{x}`, and `\\cdAssociatorMatrix{x}{y}`\n"
+        "* use vector and representation helpers: `\\cdToVector{x}`, `\\cdSpanBasis{x,y}`, and `\\quaternionToMatrix{x}`\n"
+        "* compute structure data: `\\center{A}`, `\\nucleus{A}`, `\\cdLeftAnnihilator{x}`, and `\\cdRightAnnihilator{x}`"
+    },
 };
 
 #define HELP_CMD(name, arity, beast, purpose, values, returns) { name, arity, beast, purpose, values, returns }
 
 static constexpr Command kCommands[] = {
-    HELP_CMD("help", -1, Beast::Hebi, "Displays command usage, accepted value types, and return type.", "zero arguments to list commands, or one command name as a Symbol or String", "String"),
-    HELP_CMD("run", 1, Beast::Hebi, "Runs a text file as a Bestiary script, evaluating each nonblank line in the current context.", "String filename, or an unquoted filename in braces such as \\run{script.bsy}", "String summary, or Error if the file cannot be opened"),
-    HELP_CMD("list", -1, Beast::Hebi, "Constructs a dynamic Bestiary list.", "zero or more values", "List"),
-    HELP_CMD("copy", 1, Beast::Hebi, "Creates an independently owned copy of a supported value.", "scalar, String, Symbol, List, Matrix, Vector, CombSet, NEKO expression, KUMA distribution, KUMA random variable, or supported TORA value", "same kind as input"),
-    HELP_CMD("sort", 1, Beast::Hebi, "Sorts a List of numeric values in ascending order.", "List containing only Int, Fraction, and Decimal values", "List"),
-    HELP_CMD("sortedCopy", 1, Beast::Hebi, "Creates a sorted copy of a numeric List without mutating the original.", "List containing only Int, Fraction, and Decimal values", "List"),
-    HELP_CMD("if", -1, Beast::Hebi, "Evaluates the result branch when a condition is true, otherwise evaluates the optional else branch.", "Bool or truthy condition, result expression, and optional else expression", "selected branch value or none"),
-    HELP_CMD("while", 2, Beast::Hebi, "Evaluates a body repeatedly while a condition remains true.", "truthy condition expression and loop body", "last body value or none"),
-    HELP_CMD("for", 2, Beast::Hebi, "Evaluates an init, condition, and step header around a repeated body.", "header block of init; condition; step and loop body", "last body value or none"),
-    HELP_CMD("break", 0, Beast::Hebi, "Exits the nearest active loop.", "no values", "None"),
-    HELP_CMD("continue", 0, Beast::Hebi, "Skips the rest of the current loop body.", "no values", "None"),
-    HELP_CMD("def", 3, Beast::Hebi, "Defines a user function with local-only variables.", "function name, parameter list, and body", "None"),
-    HELP_CMD("return", 1, Beast::Hebi, "Ends the current user function and returns a value.", "single value", "the returned value"),
-    HELP_CMD("print", 1, Beast::Hebi, "Prints a value to stdout, using raw text and $name interpolation for strings.", "any single value", "None"),
-    HELP_CMD("+", 2, Beast::Hebi, "Adds compatible values.", "Int/Fraction/Decimal/Complex with numeric; Matrix with same-size Matrix; Vector with same-dimension Vector; CombSet with Int for translation; CombSet with CombSet for sumset; RingElement with RingElement from the same Ring; Ideal with Ideal from the same Ring and side; Symbol/NEKO expression/numeric for symbolic addition", "same family as the operands, or numeric/symbolic result"),
-    HELP_CMD("-", 2, Beast::Hebi, "Subtracts compatible values.", "Int/Fraction/Decimal/Complex with numeric; Matrix with same-size Matrix; Vector with same-dimension Vector; CombSet with CombSet for difference set; RingElement with RingElement from the same Ring; Symbol/NEKO expression/numeric for symbolic subtraction", "same family as the operands, or numeric/symbolic result"),
-    HELP_CMD("*", 2, Beast::Hebi, "Multiplies compatible values.", "numeric with numeric; Matrix with compatible Matrix; Matrix with compatible Vector; Vector with Vector for dot product; Vector/Matrix with numeric scalar; CombSet with CombSet for product set; CombSet with Int for dilation; Int with CombSet for repeated sum/difference set; GroupElement with GroupElement from the same Group; RingElement with RingElement from the same Ring; RingElement with Int; Ideal with Ideal from the same Ring and side; Symbol/NEKO expression/numeric for symbolic multiplication", "same family as the operation, numeric scalar for dot products, or symbolic expression"),
-    HELP_CMD("/", 2, Beast::Hebi, "Divides compatible values.", "numeric numerator and nonzero numeric denominator; Group by normal SubGroup for quotient group; Ring by Ideal for quotient ring; GroupElement by GroupElement from the same Group; RingElement by invertible RingElement from the same Ring; Symbol/NEKO expression/numeric for symbolic quotient", "numeric, Group, Ring, GroupElement, RingElement, or NEKO expression"),
+    HELP_CMD("help", -1, Beast::Basic, "Displays command usage, accepted value types, and return type.", "zero arguments to list commands, or one command name as a Symbol or String", "String"),
+    HELP_CMD("run", 1, Beast::Basic, "Runs a text file as a Bestiary script, evaluating each nonblank line in the current context.", "String filename, or an unquoted filename in braces such as \\run{script.bsy}", "String summary, or Error if the file cannot be opened"),
+    HELP_CMD("list", -1, Beast::Basic, "Constructs a dynamic Bestiary list.", "zero or more values", "List"),
+    HELP_CMD("copy", 1, Beast::Basic, "Creates an independently owned copy of a supported value.", "scalar, String, Symbol, List, Matrix, Vector, CombSet, Field, FieldElement, CD algebra, CD element, NEKO expression, KUMA distribution, KUMA random variable, or supported TORA value", "same kind as input"),
+    HELP_CMD("sort", 1, Beast::Basic, "Sorts a List of numeric values in ascending order.", "List containing only Int, Fraction, and Decimal values", "List"),
+    HELP_CMD("sortedCopy", 1, Beast::Basic, "Creates a sorted copy of a numeric List without mutating the original.", "List containing only Int, Fraction, and Decimal values", "List"),
+    HELP_CMD("shuffle", 1, Beast::Basic, "Randomly shuffles a List in place using HEBI's PRG.", "List", "List"),
+    HELP_CMD("randInt", 2, Beast::Hebi, "Generates a random integer in an inclusive range using HEBI's PRG.", "Int lower and Int upper", "Int"),
+    HELP_CMD("randFrac", 4, Beast::Hebi, "Generates a random fraction with numerator and denominator in inclusive integer ranges using HEBI's PRG.", "Int numLower, Int numUpper, Int denomLower, Int denomUpper", "Fraction"),
+    HELP_CMD("randReal", 2, Beast::Hebi, "Generates a random real number in an inclusive range using HEBI's PRG.", "real numeric lower and upper", "Decimal"),
+    HELP_CMD("randComplexComp", 4, Beast::Hebi, "Generates a random complex number from inclusive real and imaginary ranges using HEBI's PRG.", "real lower, real upper, imaginary lower, imaginary upper", "Complex"),
+    HELP_CMD("randComplexMod", 2, Beast::Hebi, "Generates a random complex number whose modulus lies in an inclusive range using HEBI's PRG.", "nonnegative real modulus lower and upper", "Complex"),
+    HELP_CMD("solveQuadratic", -1, Beast::Hebi, "Solves a quadratic equation over the complex numbers.", "polynomial in x, List of coefficients, or coefficients a,b,c for a*x^2+b*x+c", "List of Decimal or Complex roots"),
+    HELP_CMD("solveCubic", -1, Beast::Hebi, "Solves a cubic equation over the complex numbers.", "polynomial in x, List of coefficients, or coefficients a,b,c,d for a*x^3+b*x^2+c*x+d", "List of Decimal or Complex roots"),
+    HELP_CMD("solveQuartic", -1, Beast::Hebi, "Solves a quartic equation over the complex numbers.", "polynomial in x, List of coefficients, or coefficients a,b,c,d,e for a*x^4+b*x^3+c*x^2+d*x+e", "List of Decimal or Complex roots"),
+    HELP_CMD("if", -1, Beast::Basic, "Evaluates the result branch when a condition is true, otherwise evaluates the optional else branch.", "Bool or truthy condition, result expression, and optional else expression", "selected branch value or none"),
+    HELP_CMD("while", 2, Beast::Basic, "Evaluates a body repeatedly while a condition remains true.", "truthy condition expression and loop body", "last body value or none"),
+    HELP_CMD("for", 2, Beast::Basic, "Evaluates an init, condition, and step header around a repeated body.", "header block of init; condition; step and loop body", "last body value or none"),
+    HELP_CMD("break", 0, Beast::Basic, "Exits the nearest active loop.", "no values", "None"),
+    HELP_CMD("continue", 0, Beast::Basic, "Skips the rest of the current loop body.", "no values", "None"),
+    HELP_CMD("def", 3, Beast::Basic, "Defines a user function with local-only variables.", "function name, parameter list, and body", "None"),
+    HELP_CMD("return", 1, Beast::Basic, "Ends the current user function and returns a value.", "single value", "the returned value"),
+    HELP_CMD("print", 1, Beast::Basic, "Prints a value to stdout, using raw text and $name interpolation for strings.", "any single value", "None"),
+    HELP_CMD("+", 2, Beast::Hebi, "Adds compatible values.", "Int/Fraction/Decimal/Complex with numeric; FieldElement with compatible scalar or FieldElement; CD element with CD element from the same algebra; CD ideal with CD ideal from the same algebra; Matrix with same-size Matrix; Vector with same-dimension Vector; CombSet with Int for translation; CombSet with CombSet for sumset; RingElement with RingElement from the same Ring; Ideal with Ideal from the same Ring and side; Symbol/NEKO expression/numeric for symbolic addition", "same family as the operands, or numeric/symbolic result"),
+    HELP_CMD("-", 2, Beast::Hebi, "Subtracts compatible values.", "Int/Fraction/Decimal/Complex with numeric; FieldElement with compatible scalar or FieldElement; CD element with CD element from the same algebra; CD ideal with CD ideal from the same algebra; Matrix with same-size Matrix; Vector with same-dimension Vector; CombSet with CombSet for difference set; RingElement with RingElement from the same Ring; Symbol/NEKO expression/numeric for symbolic subtraction", "same family as the operands, or numeric/symbolic result"),
+    HELP_CMD("*", 2, Beast::Hebi, "Multiplies compatible values.", "numeric with numeric; FieldElement with compatible scalar or FieldElement; CD element with CD element from the same algebra; CD ideal with compatible scalar or CD element on either side; Matrix with compatible Matrix; Matrix with compatible Vector; Vector with Vector for dot product; Vector/Matrix with numeric scalar; CombSet with CombSet for product set; CombSet with Int for dilation; Int with CombSet for repeated sum/difference set; GroupElement with GroupElement from the same Group; RingElement with RingElement from the same Ring; RingElement with Int; Ideal with Ideal from the same Ring and side; Symbol/NEKO expression/numeric for symbolic multiplication", "same family as the operation, numeric scalar for dot products, or symbolic expression"),
+    HELP_CMD("/", 2, Beast::Hebi, "Divides compatible values.", "numeric numerator and nonzero numeric denominator; FieldElement by compatible scalar or FieldElement; CD element by CD element as x*y^{-1}; Group by normal SubGroup for quotient group; Ring by Ideal for quotient ring; GroupElement by GroupElement from the same Group; RingElement by invertible RingElement from the same Ring; Symbol/NEKO expression/numeric for symbolic quotient", "numeric, FieldElement, CD element, Group, Ring, GroupElement, RingElement, or NEKO expression"),
     HELP_CMD("%", 2, Beast::Hebi, "Computes integer remainder.", "two Int values with nonzero divisor", "Int"),
     HELP_CMD("==", 2, Beast::Hebi, "Tests two Bestiary values for equality.", "two values of comparable Bestiary kinds", "Bool"),
+    HELP_CMD("in", 2, Beast::Quaternionic, "Tests whether a CD element lies in a CD ideal or subalgebra.", "CD element and CD ideal or CD subalgebra", "Bool"),
     HELP_CMD("<", 2, Beast::Hebi, "Tests whether one real numeric value is less than another.", "two real numeric values", "Bool"),
     HELP_CMD(">", 2, Beast::Hebi, "Tests whether one real numeric value is greater than another.", "two real numeric values", "Bool"),
-    HELP_CMD("u-", 1, Beast::Hebi, "Negates one value.", "numeric value, Vector, RingElement, CombSet, Symbol, or NEKO expression", "same kind as the input, or NEKO expression"),
+    HELP_CMD("u-", 1, Beast::Hebi, "Negates one value.", "numeric value, FieldElement, CD element, Vector, RingElement, CombSet, Symbol, or NEKO expression", "same kind as the input, or NEKO expression"),
     HELP_CMD("u+", 1, Beast::Hebi, "Returns one value unchanged.", "any single Bestiary value", "same value kind as the input"),
-    HELP_CMD("^", 2, Beast::Hebi, "Raises a supported base to a power or applies a matrix superscript.", "numeric base with numeric exponent; Matrix with Int exponent or Symbol T/t; CombSet with positive Int exponent; GroupElement with Int exponent; RingElement with Int exponent; Symbol/NEKO expression/numeric for symbolic power", "numeric, Matrix, CombSet, GroupElement, RingElement, or NEKO expression"),
+    HELP_CMD("^", 2, Beast::Hebi, "Raises a supported base to a power or applies a matrix superscript.", "numeric base with numeric exponent; FieldElement or CD element with exponent -1; Matrix with Int exponent or Symbol T/t; CombSet with positive Int exponent; GroupElement with Int exponent; RingElement with Int exponent; Symbol/NEKO expression/numeric for symbolic power", "numeric, FieldElement, CD element, Matrix, CombSet, GroupElement, RingElement, or NEKO expression"),
     HELP_CMD("pi", 0, Beast::Hebi, "Returns the mathematical constant pi.", "no values", "Decimal"),
     HELP_CMD("e", 0, Beast::Hebi, "Returns Euler's number.", "no values", "Decimal"),
     HELP_CMD("phi", 0, Beast::Hebi, "Returns the golden ratio.", "no values", "Decimal"),
     HELP_CMD("frac", 2, Beast::Hebi, "Constructs an exact rational fraction.", "Int numerator and Int denominator", "Fraction, or Int when normalized elsewhere"),
+    HELP_CMD("QQ", 0, Beast::Hebi, "Constructs the rational field.", "no values", "Field"),
+    HELP_CMD("RR", 0, Beast::Hebi, "Constructs the real field.", "no values", "Field"),
+    HELP_CMD("CC", 0, Beast::Hebi, "Constructs the complex field.", "no values", "Field"),
+    HELP_CMD("HH", 0, Beast::Quaternionic, "Constructs the standard Hamilton quaternion algebra over RR.", "no values", "CD algebra"),
+    HELP_CMD("OO", 0, Beast::Quaternionic, "Constructs the standard octonion algebra over RR.", "no values", "CD algebra"),
+    HELP_CMD("mathbb", 1, Beast::Hebi, "Maps LaTeX blackboard-bold names Q, R, C, H, and O to their Bestiary commands.", "Symbol or String Q, R, C, H, or O", "Field or CD algebra"),
+    HELP_CMD("GF", 1, Beast::Hebi, "Constructs a prime finite field.", "prime Int p", "Field"),
+    HELP_CMD("fieldElement", 2, Beast::Hebi, "Constructs an element of a field.", "Field and compatible scalar", "FieldElement"),
+    HELP_CMD("zero", 1, Beast::Hebi, "Returns the additive identity of a field.", "Field", "FieldElement"),
+    HELP_CMD("one", 1, Beast::Hebi, "Returns the multiplicative identity of a field.", "Field", "FieldElement"),
+    HELP_CMD("quadraticExtension", 2, Beast::Hebi, "Constructs a quadratic field extension.", "Field and compatible radicand", "Field"),
+    HELP_CMD("quadExt", 2, Beast::Hebi, "Alias for quadraticExtension.", "Field and compatible radicand", "Field"),
+    HELP_CMD("cdAlgebra", -1, Beast::Quaternionic, "Constructs a Cayley-Dickson algebra over a field.", "Field followed by one or more doubling parameters", "CD algebra"),
+    HELP_CMD("cdElement", -1, Beast::Quaternionic, "Constructs a Cayley-Dickson element.", "CD algebra followed by dim(A) coefficients", "CD element"),
+    HELP_CMD("quaternionAlgebra", 3, Beast::Quaternionic, "Constructs a quaternion algebra.", "Field and two doubling parameters", "CD algebra"),
+    HELP_CMD("quaternion", -1, Beast::Quaternionic, "Constructs a quaternion element.", "Quaternion algebra and four coefficients", "CD element"),
+    HELP_CMD("octonionAlgebra", 4, Beast::Quaternionic, "Constructs an octonion algebra.", "Field and three doubling parameters", "CD algebra"),
+    HELP_CMD("octonion", -1, Beast::Quaternionic, "Constructs an octonion element.", "Octonion algebra and eight coefficients", "CD element"),
+    HELP_CMD("cdAdd", 2, Beast::Quaternionic, "Adds two Cayley-Dickson elements.", "two CD elements from the same algebra", "CD element"),
+    HELP_CMD("cdSub", 2, Beast::Quaternionic, "Subtracts two Cayley-Dickson elements.", "two CD elements from the same algebra", "CD element"),
+    HELP_CMD("cdMul", 2, Beast::Quaternionic, "Multiplies two Cayley-Dickson elements.", "two CD elements from the same algebra", "CD element"),
+    HELP_CMD("cdConj", 1, Beast::Quaternionic, "Computes Cayley-Dickson conjugation.", "CD element", "CD element"),
+    HELP_CMD("cdNorm", 1, Beast::Quaternionic, "Computes the Cayley-Dickson norm.", "CD element", "FieldElement"),
+    HELP_CMD("cdInv", 1, Beast::Quaternionic, "Computes the Cayley-Dickson inverse.", "invertible CD element", "CD element"),
+    HELP_CMD("cdCommutator", 2, Beast::Quaternionic, "Computes xy - yx.", "two CD elements from the same algebra", "CD element"),
+    HELP_CMD("cdAssociator", 3, Beast::Quaternionic, "Computes (xy)z - x(yz).", "three CD elements from the same algebra", "CD element"),
+    HELP_CMD("cdLeftDivide", 3, Beast::Quaternionic, "Computes y^{-1}x in a Cayley-Dickson algebra.", "CD algebra A and two elements x, y of A", "CD element"),
+    HELP_CMD("cdRightDivide", 3, Beast::Quaternionic, "Computes xy^{-1} in a Cayley-Dickson algebra.", "CD algebra A and two elements x, y of A", "CD element"),
+    HELP_CMD("cdLeftMatrix", 1, Beast::Quaternionic, "Computes the left multiplication matrix of a CD element.", "CD element", "Matrix"),
+    HELP_CMD("cdRightMatrix", 1, Beast::Quaternionic, "Computes the right multiplication matrix of a CD element.", "CD element", "Matrix"),
+    HELP_CMD("cdToVector", 1, Beast::Quaternionic, "Converts a CD element to its coefficient vector.", "CD element", "Vector"),
+    HELP_CMD("cdFromVector", 2, Beast::Quaternionic, "Converts a coefficient vector to a CD element.", "CD algebra and Vector", "CD element"),
+    HELP_CMD("cdSpanBasis", -1, Beast::Quaternionic, "Computes a basis for the span of CD elements.", "one or more CD elements from the same algebra, or a List of them", "List of CD elements"),
+    HELP_CMD("cdInSpan", -1, Beast::Quaternionic, "Tests whether a CD element lies in the span of generators.", "CD element followed by span generators or a List of them", "Bool"),
+    HELP_CMD("cdBasisElement", 2, Beast::Quaternionic, "Returns a standard basis element by zero-based index.", "CD algebra and nonnegative Int index", "CD element"),
+    HELP_CMD("cdStandardBasis", 1, Beast::Quaternionic, "Returns the standard basis of a CD algebra.", "CD algebra", "List of CD elements"),
+    HELP_CMD("quaternionMatrixRep", 1, Beast::Quaternionic, "Constructs the standard 2x2 matrix representation data for a quaternion algebra.", "Quaternion algebra", "Quaternion matrix representation"),
+    HELP_CMD("quaternionToMatrix", -1, Beast::Quaternionic, "Converts a quaternion to its standard 2x2 matrix representation.", "Quaternion element and optional Quaternion matrix representation", "Matrix"),
+    HELP_CMD("cdLeftIdeal", -1, Beast::Quaternionic, "Constructs the left ideal generated by CD elements.", "one or more CD elements from the same algebra, or a List of them", "CD ideal"),
+    HELP_CMD("cdRightIdeal", -1, Beast::Quaternionic, "Constructs the right ideal generated by CD elements.", "one or more CD elements from the same algebra, or a List of them", "CD ideal"),
+    HELP_CMD("cdTwoSidedIdeal", -1, Beast::Quaternionic, "Constructs the two-sided ideal generated by CD elements.", "one or more CD elements from the same algebra, or a List of them", "CD ideal"),
+    HELP_CMD("cdSubalgebra", -1, Beast::Quaternionic, "Constructs the unital subalgebra generated by CD elements.", "one or more CD elements from the same algebra, or a List of them", "CD subalgebra"),
+    HELP_CMD("cdCommutatorMatrix", 1, Beast::Quaternionic, "Computes the matrix of y -> xy - yx.", "CD element", "Matrix"),
+    HELP_CMD("cdAssociatorMatrix", 2, Beast::Quaternionic, "Computes the matrix of z -> (xy)z - x(yz).", "two CD elements", "Matrix"),
+    HELP_CMD("cdLeftAnnihilator", 1, Beast::Quaternionic, "Computes the left annihilator of a CD element.", "CD element", "CD ideal"),
+    HELP_CMD("cdRightAnnihilator", 1, Beast::Quaternionic, "Computes the right annihilator of a CD element.", "CD element", "CD ideal"),
+    HELP_CMD("center", 1, Beast::Quaternionic, "Computes the center of a CD algebra.", "CD algebra", "CD subalgebra"),
+    HELP_CMD("nucleus", 1, Beast::Quaternionic, "Computes the nucleus of a CD algebra.", "CD algebra", "CD subalgebra"),
+    HELP_CMD("commutator", 2, Beast::Quaternionic, "Computes the commutator for CD, group, or ring elements.", "two compatible CD, GroupElement, or RingElement values", "same algebraic element family"),
+    HELP_CMD("associator", 3, Beast::Quaternionic, "Computes the associator for CD, group, or ring elements.", "three compatible CD, GroupElement, or RingElement values", "same algebraic element family"),
+    HELP_CMD("isLeftZeroDivisor", 1, Beast::Quaternionic, "Tests whether a CD or ring element is a left zero divisor.", "CD element or RingElement", "Bool"),
+    HELP_CMD("isRightZeroDivisor", 1, Beast::Quaternionic, "Tests whether a CD or ring element is a right zero divisor.", "CD element or RingElement", "Bool"),
     HELP_CMD("sqrt", 1, Beast::Hebi, "Computes or constructs a principal square root.", "Int, Fraction, Decimal, Complex, Symbol, or NEKO expression", "Int/Fraction when exact, Decimal or Complex when numeric, or NEKO expression"),
     HELP_CMD("cbrt", 1, Beast::Hebi, "Computes a principal cube root.", "Int, Fraction, Decimal, or Complex", "Decimal or Complex"),
-    HELP_CMD("conj", 1, Beast::Hebi, "Computes complex conjugation.", "Int, Fraction, Decimal, or Complex", "same scalar family, or Complex"),
-    HELP_CMD("abs", 1, Beast::Hebi, "Computes an absolute value or constructs abs(x).", "Int, Fraction, Decimal, Complex, Symbol, or NEKO expression", "Int/Fraction for exact real input, Decimal for numeric magnitude, or NEKO expression"),
+    HELP_CMD("conj", 1, Beast::Hebi, "Computes complex or Cayley-Dickson conjugation.", "Int, Fraction, Decimal, Complex, or CD element", "same scalar family, Complex, or CD element"),
+    HELP_CMD("abs", 1, Beast::Hebi, "Computes an absolute value, CD norm, or constructs abs(x).", "Int, Fraction, Decimal, Complex, CD element, Symbol, or NEKO expression", "Int/Fraction for exact real input, Decimal for numeric magnitude, FieldElement for CD input, or NEKO expression"),
     HELP_CMD("arg", 1, Beast::Hebi, "Computes the principal complex argument.", "Int, Fraction, Decimal, or Complex", "Decimal"),
     HELP_CMD("re", 1, Beast::Hebi, "Extracts the real part of a scalar.", "Int, Fraction, Decimal, or Complex", "same scalar family for real input, Decimal for Complex input"),
     HELP_CMD("im", 1, Beast::Hebi, "Extracts the imaginary part of a scalar.", "Int, Fraction, Decimal, or Complex", "Int 0 for real input, Decimal for Complex input"),
@@ -198,7 +291,7 @@ static constexpr Command kCommands[] = {
     HELP_CMD("det", 1, Beast::Sokko, "Computes the determinant of a square matrix.", "square Matrix", "Int, Decimal, Fraction, or Complex scalar"),
     HELP_CMD("transpose", 1, Beast::Sokko, "Computes the transpose of a matrix.", "Matrix", "Matrix"),
     HELP_CMD("adjoint", 1, Beast::Sokko, "Computes the conjugate transpose of a matrix.", "Matrix", "Matrix"),
-    HELP_CMD("inverse", 1, Beast::Sokko, "Computes the inverse of an invertible square matrix.", "invertible square Matrix", "Matrix"),
+    HELP_CMD("inverse", 1, Beast::Sokko, "Computes an inverse.", "invertible square Matrix, FieldElement, or CD element", "Matrix, FieldElement, or CD element"),
     HELP_CMD("rref", 1, Beast::Sokko, "Computes the row-reduced echelon form of a matrix.", "Matrix", "Matrix"),
     HELP_CMD("eigenvalues", 1, Beast::Sokko, "Computes eigenvalues of a supported square matrix.", "square Matrix", "List of numeric or Complex values"),
     HELP_CMD("eigenvectors", 1, Beast::Sokko, "Computes eigenvectors of a supported square matrix.", "square Matrix", "List of Vector values or none entries"),
@@ -310,6 +403,8 @@ static constexpr Command kCommands[] = {
     HELP_CMD("getElement", 2, Beast::Usagi, "Retrieves an element by its printed representation.", "Group or Ring, then String representation", "GroupElement for Group input, RingElement for Ring input"),
     HELP_CMD("groupElementConjugate", 2, Beast::Usagi, "Computes g*h*g^-1 for group elements.", "GroupElement conjugator and GroupElement target from the same Group", "GroupElement"),
     HELP_CMD("groupCommutator", 2, Beast::Usagi, "Computes the commutator of two group elements.", "two GroupElement values from the same Group", "GroupElement"),
+    HELP_CMD("commutator", 2, Beast::Usagi, "Computes the commutator for group or ring elements.", "two compatible GroupElement or RingElement values", "same algebraic element family"),
+    HELP_CMD("associator", 3, Beast::Usagi, "Computes the associator for group or ring elements.", "three compatible GroupElement or RingElement values", "same algebraic element family"),
     HELP_CMD("elementOrderGroup", 1, Beast::Usagi, "Computes the order of a group element.", "GroupElement", "Int"),
     HELP_CMD("additiveOrder", 1, Beast::Usagi, "Computes the additive order of a ring element.", "RingElement", "Int"),
     HELP_CMD("multiplicativeOrder", 1, Beast::Usagi, "Computes the multiplicative order of a ring element.", "RingElement", "Int"),
@@ -368,8 +463,8 @@ static constexpr Command kCommands[] = {
     HELP_CMD("kProductGroup", 2, Beast::Usagi, "Constructs the k-fold direct product of a group.", "Group and positive Int k", "Group"),
     HELP_CMD("kProductRing", 2, Beast::Usagi, "Constructs the k-fold direct product of a ring.", "Ring and positive Int k", "Ring"),
     HELP_CMD("subring", 1, Beast::Usagi, "Constructs the subring generated by ring elements.", "RingElement or List of RingElement values from the same Ring", "SubRing"),
-    HELP_CMD("leftIdeal", 1, Beast::Usagi, "Constructs the left ideal generated by ring elements.", "RingElement or List of RingElement values from the same Ring", "Ideal"),
-    HELP_CMD("rightIdeal", 1, Beast::Usagi, "Constructs the right ideal generated by ring elements.", "RingElement or List of RingElement values from the same Ring", "Ideal"),
+    HELP_CMD("leftIdeal", 1, Beast::Usagi, "Constructs the left ideal generated by ring or CD elements.", "RingElement values from the same Ring, or CD element generators from the same algebra", "Ideal or CD ideal"),
+    HELP_CMD("rightIdeal", 1, Beast::Usagi, "Constructs the right ideal generated by ring or CD elements.", "RingElement values from the same Ring, or CD element generators from the same algebra", "Ideal or CD ideal"),
     HELP_CMD("isTrivialSubring", 1, Beast::Usagi, "Tests whether a subring is trivial.", "SubRing", "Bool"),
     HELP_CMD("subgroupGeneratedBy", 2, Beast::Usagi, "Constructs the subgroup generated by one or more group elements.", "Group and GroupElement or List of GroupElement values from that Group", "SubGroup"),
     HELP_CMD("subgroupAsGroup", 1, Beast::Usagi, "Converts a subgroup into a standalone group.", "SubGroup", "Group"),
@@ -397,6 +492,8 @@ static constexpr Command kCommands[] = {
     HELP_CMD("isMultInverse", 2, Beast::Usagi, "Tests whether two ring elements are multiplicative inverses.", "two RingElement values from the same Ring", "Bool"),
     HELP_CMD("hasMultInverse", 1, Beast::Usagi, "Tests whether a ring element has a multiplicative inverse in its ring.", "RingElement", "Bool"),
     HELP_CMD("isZeroDivisor", 1, Beast::Usagi, "Tests whether a ring element is a zero divisor in its ring.", "RingElement", "Bool"),
+    HELP_CMD("isLeftZeroDivisor", 1, Beast::Usagi, "Tests whether a ring element is a zero divisor in its ring.", "RingElement", "Bool"),
+    HELP_CMD("isRightZeroDivisor", 1, Beast::Usagi, "Tests whether a ring element is a zero divisor in its ring.", "RingElement", "Bool"),
     HELP_CMD("hasZeroDivisors", 1, Beast::Usagi, "Tests whether a ring has any zero divisors.", "Ring", "Bool"),
     HELP_CMD("isIntegralDomain", 1, Beast::Usagi, "Tests whether a ring is an integral domain.", "Ring", "Bool"),
     HELP_CMD("isDivisionRing", 1, Beast::Usagi, "Tests whether a ring is a division ring.", "Ring", "Bool"),
@@ -431,7 +528,8 @@ static constexpr Command kCommands[] = {
     HELP_CMD("printTable", 1, Beast::Tora, "Alias for printCharTable.", "CharacterTable", "None"),
     HELP_CMD("printRep", 1, Beast::Tora, "Prints all representation matrices to stdout.", "Representation", "None"),
 
-    HELP_CMD("cap", 2, Beast::Ookami, "Computes the intersection of two finite integer sets.", "CombSet and CombSet", "CombSet"),
+    HELP_CMD("cap", 2, Beast::Ookami, "Computes the intersection of two compatible objects.", "two CombSets, two CD ideals, or two CD subalgebras", "CombSet, CD ideal, or CD subalgebra"),
+    HELP_CMD("intersect", 2, Beast::Ookami, "Alias for cap.", "two CombSets, two CD ideals, or two CD subalgebras", "CombSet, CD ideal, or CD subalgebra"),
     HELP_CMD("cup", 2, Beast::Ookami, "Computes the union of two finite integer sets.", "CombSet and CombSet", "CombSet"),
     HELP_CMD("isSubset", 2, Beast::Ookami, "Tests whether the first finite integer set is a subset of the second.", "CombSet candidate subset and CombSet candidate superset", "Bool"),
     HELP_CMD("cardinality", 1, Beast::Ookami, "Computes the cardinality of a finite integer set. Also available as |A|.", "CombSet", "Int"),
@@ -444,8 +542,8 @@ static constexpr Command kCommands[] = {
     HELP_CMD("subsetSums", -1, Beast::Ookami, "Computes subset sums of a finite integer set.", "CombSet, optionally followed by Int subset size k >= 0", "CombSet"),
     HELP_CMD("translate", 2, Beast::Ookami, "Translates every element of a finite integer set by an integer.", "CombSet and Int translation", "CombSet"),
     HELP_CMD("dilate", 2, Beast::Ookami, "Multiplies every element of a finite integer set by an integer.", "CombSet and Int scale", "CombSet"),
-    HELP_CMD("append", 2, Beast::Ookami, "Appends a value to a List or adds an integer to a finite integer set.", "List and any value, or CombSet and Int element", "List or CombSet"),
-    HELP_CMD("remove", 2, Beast::Ookami, "Removes the first matching value from a List or removes an integer from a finite integer set.", "List and any value, or CombSet and Int element already in the set", "List or CombSet"),
+    HELP_CMD("append", 2, Beast::Basic, "Appends a value to a List or adds an integer to a finite integer set.", "List and any value, or CombSet and Int element", "List or CombSet"),
+    HELP_CMD("remove", 2, Beast::Basic, "Removes the first matching value from a List or removes an integer from a finite integer set.", "List and any value, or CombSet and Int element already in the set", "List or CombSet"),
     HELP_CMD("adsCard", 1, Beast::Ookami, "Counts the additive sumset A+A.", "CombSet", "Int"),
     HELP_CMD("ddsCard", 1, Beast::Ookami, "Counts the difference set A-A.", "CombSet", "Int"),
     HELP_CMD("mdsCard", 1, Beast::Ookami, "Counts the product set A*A.", "CombSet", "Int"),

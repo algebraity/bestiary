@@ -6,20 +6,18 @@
 #include "poni.h"
 #include "sokko.h"
 
-/* PONI assumes every value is a real long double. Sokko's MatrixElement is a
-   tagged union over long double/ComplexNumber, so we funnel everything through
-   these two helpers: re() pulls the real component out of a MatrixElement,
-   and R() lifts a long double into one. */
-static inline long double re(MatrixElement e) { return e.value.real; }
-static inline MatrixElement R(long double x) { return elemFromReal(x); }
+/* PONI assumes every value is a real long double, so these helpers convert
+   between SOKKO FieldElements and real values */
+static inline long double re(FieldElement e) { return elemToComplex(e).real; }
+static inline FieldElement R(long double x) { return elemFromReal(x); }
 
 static bool vectorIsFinite(Vector* vector) {
     if (!vector) return false;
     for (int i = 0; i < vector->numRows; i++) {
-        MatrixElement elem = getEntry((Matrix*)vector, i, 0);
-        if (elem.isComplex) {
-            if (!isfinite(elem.value.complex.real) || !isfinite(elem.value.complex.imag)) return false;
-        } else if (!isfinite(elem.value.real)) {
+        FieldElement elem = getEntry((Matrix*)vector, i, 0);
+        ComplexNumber z = elemToComplex(elem);
+        freeFieldElement(&elem);
+        if (!isfinite(z.real) || !isfinite(z.imag) || z.imag != 0.0L) {
             return false;
         }
     }

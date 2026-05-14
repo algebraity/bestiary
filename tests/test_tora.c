@@ -26,11 +26,11 @@ static int testsPassed = 0;
 
 #define SECTION(name) printf("\n=== %s ===\n", name)
 
-static long double realOf(MatrixElement e) {
-    return e.isComplex ? e.value.complex.real : e.value.real;
+static long double realOf(FieldElement e) {
+    return elemToComplex(e).real;
 }
 
-static bool approxReal(MatrixElement e, long double expected, long double tol) {
+static bool approxReal(FieldElement e, long double expected, long double tol) {
     long double actual = realOf(e);
     return fabsl(actual - expected) <= tol;
 }
@@ -393,7 +393,7 @@ void testGet1Dreps() {
     for (int r = 0; r < count; r++) {
         ComplexNumber sum = {0.0, 0.0};
         for (int j = 0; j < Z4->card; j++) {
-            MatrixElement e = getEntry(reps[r]->images[j], 0, 0);
+            FieldElement e = getEntry(reps[r]->images[j], 0, 0);
             ComplexNumber c = elemToComplex(e);
             sum = complexAdd(sum, c);
         }
@@ -418,7 +418,7 @@ void testGet1Dreps() {
         bool allOnes = true;
         bool isSign = true;
         for (int g = 0; g < S3->card; g++) {
-            MatrixElement e = getEntry(reps[r]->images[g], 0, 0);
+            FieldElement e = getEntry(reps[r]->images[g], 0, 0);
             ComplexNumber c = elemToComplex(e);
             if (!(fabsl(c.real - 1.0) < 1e-6 && fabsl(c.imag) < 1e-6)) allOnes = false;
             // Sign: +-1 only
@@ -497,9 +497,9 @@ void testSymmetricAndWedgeProduct() {
     // Trace of sym + trace of wedge = (trace V)^2  (for any g)
     bool traceOk = true;
     for (int g = 0; g < S3->card; g++) {
-        MatrixElement tV = trace(std->images[g]);
-        MatrixElement tS = trace(sym->images[g]);
-        MatrixElement tW = trace(wedge->images[g]);
+        FieldElement tV = trace(std->images[g]);
+        FieldElement tS = trace(sym->images[g]);
+        FieldElement tW = trace(wedge->images[g]);
         ComplexNumber tVc = elemToComplex(tV);
         ComplexNumber tSc = elemToComplex(tS);
         ComplexNumber tWc = elemToComplex(tW);
@@ -515,8 +515,8 @@ void testSymmetricAndWedgeProduct() {
     bool symId = true, wedgeId = true;
     for (int g = 0; g < S3->card; g++) {
         int g2 = S3->table[g][g];
-        MatrixElement tV = trace(std->images[g]);
-        MatrixElement tV2 = trace(std->images[g2]);
+        FieldElement tV = trace(std->images[g]);
+        FieldElement tV2 = trace(std->images[g2]);
         ComplexNumber a = elemToComplex(tV);
         ComplexNumber b = elemToComplex(tV2);
         ComplexNumber a2 = complexMul(a, a);

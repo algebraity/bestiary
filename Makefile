@@ -94,6 +94,7 @@ BEAST_SRCS = \
 	src/beasts/hebi.c \
 	src/beasts/kuma.c \
 	src/beasts/sokko.c \
+	src/beasts/quaternionic.c \
 	src/beasts/usagi.c \
 	src/beasts/poni.c \
 	src/beasts/ookami.c \
@@ -116,6 +117,7 @@ TEST_SRCS = \
 	tests/test_hebi.c \
 	tests/test_kuma.c \
 	tests/test_sokko.c \
+	tests/test_quaternionic.c \
 	tests/test_usagi.c \
 	tests/test_poni.c \
 	tests/test_ookami.c \
@@ -137,6 +139,7 @@ TEST_BINS = \
 	$(BINDIR)/test_hebi$(EXEEXT) \
 	$(BINDIR)/test_kuma$(EXEEXT) \
 	$(BINDIR)/test_sokko$(EXEEXT) \
+	$(BINDIR)/test_quaternionic$(EXEEXT) \
 	$(BINDIR)/test_usagi$(EXEEXT) \
 	$(BINDIR)/test_poni$(EXEEXT) \
 	$(BINDIR)/test_ookami$(EXEEXT) \
@@ -283,6 +286,9 @@ $(BINDIR)/test_kuma$(EXEEXT): $(OBJDIR)/tests/test_kuma.o $(OBJDIR)/src/beasts/k
 
 $(BINDIR)/test_sokko$(EXEEXT): $(OBJDIR)/tests/test_sokko.o $(OBJDIR)/src/beasts/sokko.o $(OBJDIR)/src/beasts/hebi.o | $(BINDIR)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ -lm
+
+$(BINDIR)/test_quaternionic$(EXEEXT): $(OBJDIR)/tests/test_quaternionic.o $(CORE_OBJS) $(BEAST_OBJS) | $(BINDIR)
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
 $(BINDIR)/test_usagi$(EXEEXT): $(OBJDIR)/tests/test_usagi.o $(OBJDIR)/src/beasts/usagi.o | $(BINDIR)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ -lm

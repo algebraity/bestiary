@@ -2563,7 +2563,10 @@ private:
         StyleDarkHyperlink(link);
         wxFont monoFont(wxFontInfo(10).Family(wxFONTFAMILY_TELETYPE));
         monoFont.SetWeight(wxFONTWEIGHT_NORMAL);
-        auto* gettingStartedLabel = new wxStaticText(page, wxID_ANY, "Getting started");
+        wxString featureLabel = section->beast == BestiaryHelpPage::Beast::Basic
+            ? "Basic features"
+            : "Getting started";
+        auto* gettingStartedLabel = new wxStaticText(page, wxID_ANY, featureLabel);
         StyleDarkLabel(gettingStartedLabel);
         gettingStartedLabel->SetFont(sectionFont);
         auto* commandsLabel = new wxStaticText(page, wxID_ANY, "Commands");
@@ -2586,7 +2589,7 @@ private:
         sizer->Add(link, 0, wxLEFT | wxRIGHT | wxBOTTOM, 16);
         helpPageState->targets.push_back({link, link->GetLabel(), -1, kHelpSearchPrioritySectionLabel});
         sizer->Add(gettingStartedLabel, 0, wxLEFT | wxRIGHT | wxBOTTOM, 16);
-        helpPageState->targets.push_back({gettingStartedLabel, "Getting started", -1, kHelpSearchPrioritySectionLabel});
+        helpPageState->targets.push_back({gettingStartedLabel, featureLabel, -1, kHelpSearchPrioritySectionLabel});
         helpPageState->controlFonts.push_back({gettingStartedLabel, sectionFont});
 
         std::vector<wxWindow*> scrollTargets = {

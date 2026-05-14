@@ -1735,6 +1735,38 @@ GroupElement* groupCommutator(GroupElement* g, GroupElement* h) {
 	return groupMult(groupMult(groupInverse(g), groupInverse(h)), groupMult(g, h));
 }
 
+// Return the associator ((gh)k)(g(hk))^{-1}
+GroupElement* groupAssociator(GroupElement* g, GroupElement* h, GroupElement* k) {
+	if (!g || !h || !k) return NULL;
+	if (!cmpGroups(g->group, h->group) || !cmpGroups(g->group, k->group)) return NULL;
+
+	GroupElement* left = groupMult(groupMult(g, h), k);
+	GroupElement* right = groupMult(g, groupMult(h, k));
+	return groupMult(left, groupInverse(right));
+}
+
+// Return the ring commutator xy-yx
+RingElement* ringCommutator(RingElement* x, RingElement* y) {
+	if (!x || !y) return NULL;
+	if (!cmpRings(x->ring, y->ring)) return NULL;
+
+	RingElement* xy = ringMult(x, y);
+	RingElement* yx = ringMult(y, x);
+	RingElement* negYx = ringAddInverse(yx);
+	return negYx ? ringAdd(xy, negYx) : NULL;
+}
+
+// Return the ring associator (xy)z-x(yz)
+RingElement* ringAssociator(RingElement* x, RingElement* y, RingElement* z) {
+	if (!x || !y || !z) return NULL;
+	if (!cmpRings(x->ring, y->ring) || !cmpRings(x->ring, z->ring)) return NULL;
+
+	RingElement* xyZ = ringMult(ringMult(x, y), z);
+	RingElement* xYz = ringMult(x, ringMult(y, z));
+	RingElement* negXYz = ringAddInverse(xYz);
+	return negXYz ? ringAdd(xyZ, negXYz) : NULL;
+}
+
 // Return the trivial group
 Group* trivialGroup() {
 	GroupElement* e = malloc(sizeof(GroupElement));

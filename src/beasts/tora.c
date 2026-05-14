@@ -444,9 +444,9 @@ Representation* standardRepresentation(Group* G) {
         }
         for (int a = 1; a < n; a++) {
             for (int k = 1; k < n; k++) {
-                MatrixElement ak = getEntry(perm->images[g], a, k);
-                MatrixElement a0 = getEntry(perm->images[g], a, 0);
-                MatrixElement val = elemSub(ak, a0);
+                FieldElement ak = getEntry(perm->images[g], a, k);
+                FieldElement a0 = getEntry(perm->images[g], a, 0);
+                FieldElement val = elemSub(ak, a0);
                 if (!elemIsZero(val, 1e-12))
                     setEntry(images[g], a-1, k-1, val);
             }
@@ -637,7 +637,7 @@ Representation* conjugateRepresentation(Representation* V) {
         }
         for (int i = 0; i < A->numRows; i++) {
             for (int j = 0; j < A->numCols; j++) {
-                MatrixElement e = getEntry(A, i, j);
+                FieldElement e = getEntry(A, i, j);
                 if (!elemIsZero(e, 1e-15))
                     setEntry(M, i, j, elemConj(e));
             }
@@ -956,11 +956,11 @@ Representation* symmetricProduct(Representation* V) {
                 for (int a = 0; a < n; a++) {
                     for (int b = a; b < n; b++) {
                         int row = symIdx(a, b, n);
-                        MatrixElement Aai = getEntry(A, a, i);
-                        MatrixElement Aaj = getEntry(A, a, j);
-                        MatrixElement Abi = getEntry(A, b, i);
-                        MatrixElement Abj = getEntry(A, b, j);
-                        MatrixElement val;
+                        FieldElement Aai = getEntry(A, a, i);
+                        FieldElement Aaj = getEntry(A, a, j);
+                        FieldElement Abi = getEntry(A, b, i);
+                        FieldElement Abj = getEntry(A, b, j);
+                        FieldElement val;
                         if (a == b) {
                             val = elemMul(Aai, Aaj);
                         } else {
@@ -1020,11 +1020,11 @@ Representation* wedgeProduct(Representation* V) {
                 for (int a = 0; a < n; a++) {
                     for (int b = a + 1; b < n; b++) {
                         int row = wedgeIdx(a, b, n);
-                        MatrixElement Aai = getEntry(A, a, i);
-                        MatrixElement Aaj = getEntry(A, a, j);
-                        MatrixElement Abi = getEntry(A, b, i);
-                        MatrixElement Abj = getEntry(A, b, j);
-                        MatrixElement val = elemSub(elemMul(Aai, Abj), elemMul(Abi, Aaj));
+                        FieldElement Aai = getEntry(A, a, i);
+                        FieldElement Aaj = getEntry(A, a, j);
+                        FieldElement Abi = getEntry(A, b, i);
+                        FieldElement Abj = getEntry(A, b, j);
+                        FieldElement val = elemSub(elemMul(Aai, Abj), elemMul(Abi, Aaj));
                         if (!elemIsZero(val, 1e-15))
                             setEntry(M, row, col, val);
                     }
@@ -1195,7 +1195,7 @@ Representation* inducedRepresentation(Representation* V, SubGroup* H) {
             Matrix* B = V->images[kLocal];
             for (int r = 0; r < dV; r++) {
                 for (int c = 0; c < dV; c++) {
-                    MatrixElement v = getEntry(B, r, c);
+                    FieldElement v = getEntry(B, r, c);
                     if (!elemIsZero(v, 1e-15))
                         setEntry(M, b * dV + r, a * dV + c, v);
                 }
@@ -1532,9 +1532,9 @@ Character** allIrreducibleCharacters(Group* G, int* count) {
         for (int i = 1; i < r; i++) {
             for (int row = 0; row < r; row++) {
                 for (int col = 0; col < r; col++) {
-                    MatrixElement cur = getEntry(M_total, row, col);
-                    MatrixElement mrc = getEntry(M[i], row, col);
-                    MatrixElement add = elemMul(elemFromReal(alpha[i]), mrc);
+                    FieldElement cur = getEntry(M_total, row, col);
+                    FieldElement mrc = getEntry(M[i], row, col);
+                    FieldElement add = elemMul(elemFromReal(alpha[i]), mrc);
                     setEntry(M_total, row, col, elemAdd(cur, add));
                 }
             }

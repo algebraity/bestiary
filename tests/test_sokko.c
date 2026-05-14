@@ -34,22 +34,23 @@ static bool approx(long double a, long double b, long double tol) {
     return fabsl(a - b) <= tol;
 }
 
-// Approximate equality between a MatrixElement and an expected (re, im) pair
-static bool approxElem(MatrixElement e, long double re, long double im, long double tol) {
-    long double actualRe = e.isComplex ? e.value.complex.real : e.value.real;
-    long double actualIm = e.isComplex ? e.value.complex.imag : 0.0;
+// Approximate equality between a FieldElement and an expected (re, im) pair
+static bool approxElem(FieldElement e, long double re, long double im, long double tol) {
+    ComplexNumber z = elemToComplex(e);
+    long double actualRe = z.real;
+    long double actualIm = z.imag;
     if (isnan(actualRe) && isnan(re)) return true;
     return fabsl(actualRe - re) <= tol && fabsl(actualIm - im) <= tol;
 }
 
-// Approximate equality between a MatrixElement and an expected real value
-static bool approxReal(MatrixElement e, long double expected, long double tol) {
+// Approximate equality between a FieldElement and an expected real value
+static bool approxReal(FieldElement e, long double expected, long double tol) {
     return approxElem(e, expected, 0.0, tol);
 }
 
-// Shorthands for building MatrixElements in tests
-static MatrixElement R(long double x) { return elemFromReal(x); }
-static MatrixElement C(long double re, long double im) {
+// Shorthands for building FieldElements in tests
+static FieldElement R(long double x) { return elemFromReal(x); }
+static FieldElement C(long double re, long double im) {
     ComplexNumber c = {re, im};
     return elemFromComplex(c);
 }
@@ -57,7 +58,7 @@ static MatrixElement C(long double re, long double im) {
 // Build a matrix from a plain long double array for readability
 static Matrix* makeRealMatrix(int rows, int cols, const long double* data) {
     int n = rows * cols;
-    MatrixElement* buf = malloc(n * sizeof(MatrixElement));
+    FieldElement* buf = malloc(n * sizeof(FieldElement));
     for (int i = 0; i < n; i++) buf[i] = R(data[i]);
     Matrix* m = constructMatrixFromArray(rows, cols, buf, n);
     free(buf);
@@ -153,8 +154,8 @@ void testGetSetEntry() {
 
     // Complex entries
     setEntry(m, 0, 1, C(1, -2));
-    MatrixElement got = getEntry(m, 0, 1);
-    CHECK(got.isComplex, "complex entry stays complex");
+    FieldElement got = getEntry(m, 0, 1);
+    CHECK(elemIsComplex(got), "complex entry stays complex");
     CHECK(approxElem(got, 1.0, -2.0, 1e-12), "complex entry value preserved");
 
     // setEntry should invalidate cache
@@ -252,21 +253,21 @@ void testComplexArith() {
     CHECK(!complexEq((ComplexNumber){1, 2}, (ComplexNumber){1, 3}, 1e-12), "complexEq beyond tol");
 }
 
-/* ---------- MatrixElement operation tests ---------- */
+/* ---------- FieldElement operation tests ---------- */
 
-void testMatrixElementOps() {
-    SECTION("MatrixElement operations");
+void testFieldElementOps() {
+    SECTION("FieldElement operations");
 
-    MatrixElement r = elemFromReal(2.5);
-    CHECK(!r.isComplex, "elemFromReal stays real");
+    FieldElement r = elemFromReal(2.5);
+    CHECK(!elemIsComplex(r), "elemFromReal stays real");
     CHECK(r.value.real == 2.5, "elemFromReal value");
 
-    MatrixElement rFromC = elemFromComplex((ComplexNumber){3, 0});
-    CHECK(!rFromC.isComplex, "elemFromComplex collapses imag=0 to real");
+    FieldElement rFromC = elemFromComplex((ComplexNumber){3, 0});
+    CHECK(!elemIsComplex(rFromC), "elemFromComplex collapses imag=0 to real");
     CHECK(rFromC.value.real == 3.0, "collapsed value correct");
 
-    MatrixElement c = elemFromComplex((ComplexNumber){1, 2});
-    CHECK(c.isComplex, "elemFromComplex keeps complex when imag != 0");
+    FieldElement c = elemFromComplex((ComplexNumber){1, 2});
+    CHECK(elemIsComplex(c), "elemFromComplex keeps complex when imag != 0");
     CHECK(approxElem(c, 1, 2, 0), "complex value preserved");
 
     ComplexNumber rToC = elemToComplex(R(5));
@@ -275,44 +276,44 @@ void testMatrixElementOps() {
     CHECK(cToC.real == 1.0 && cToC.imag == -1.0, "complex -> complex");
 
     // Arithmetic with two reals stays real (cheap path)
-    MatrixElement rr = elemAdd(R(2), R(3));
-    CHECK(!rr.isComplex && rr.value.real == 5.0, "real + real stays real");
-    CHECK(!elemSub(R(2), R(3)).isComplex, "real - real stays real");
-    CHECK(!elemMul(R(2), R(3)).isComplex, "real * real stays real");
-    CHECK(!elemDiv(R(6), R(3)).isComplex, "real / real stays real");
-    CHECK(!elemNeg(R(5)).isComplex, "neg of real stays real");
+    FieldElement rr = elemAdd(R(2), R(3));
+    CHECK(!elemIsComplex(rr) && rr.value.real == 5.0, "real + real stays real");
+    CHECK(!elemIsComplex(elemSub(R(2), R(3))), "real - real stays real");
+    CHECK(!elemIsComplex(elemMul(R(2), R(3))), "real * real stays real");
+    CHECK(!elemIsComplex(elemDiv(R(6), R(3))), "real / real stays real");
+    CHECK(!elemIsComplex(elemNeg(R(5))), "neg of real stays real");
 
     // Mixed arithmetic promotes to complex when needed
-    MatrixElement rc = elemAdd(R(1), C(0, 1));
-    CHECK(rc.isComplex, "real + complex -> complex");
+    FieldElement rc = elemAdd(R(1), C(0, 1));
+    CHECK(elemIsComplex(rc), "real + complex -> complex");
     CHECK(approxElem(rc, 1, 1, 1e-12), "1 + i value");
 
     // i * i = -1 should collapse back to real
-    MatrixElement ii = elemMul(C(0, 1), C(0, 1));
-    CHECK(!ii.isComplex, "i*i collapses to real");
+    FieldElement ii = elemMul(C(0, 1), C(0, 1));
+    CHECK(!elemIsComplex(ii), "i*i collapses to real");
     CHECK(approxReal(ii, -1, 1e-12), "i*i = -1");
 
     // (1+i) + (1-i) = 2 should collapse
-    MatrixElement conjSum = elemAdd(C(1, 1), C(1, -1));
-    CHECK(!conjSum.isComplex, "conjugate pair sum collapses");
+    FieldElement conjSum = elemAdd(C(1, 1), C(1, -1));
+    CHECK(!elemIsComplex(conjSum), "conjugate pair sum collapses");
     CHECK(approxReal(conjSum, 2.0, 1e-12), "conjugate pair sum = 2*real");
 
     // (1+i) * (1-i) = 1 - i^2 = 2 should collapse
-    MatrixElement conjProd = elemMul(C(1, 1), C(1, -1));
-    CHECK(!conjProd.isComplex, "|a|^2 style product collapses");
+    FieldElement conjProd = elemMul(C(1, 1), C(1, -1));
+    CHECK(!elemIsComplex(conjProd), "|a|^2 style product collapses");
     CHECK(approxReal(conjProd, 2.0, 1e-12), "(1+i)(1-i) = 2");
 
     // Division by complex denominator
-    MatrixElement div = elemDiv(C(1, 0), C(0, 1));  // 1/i = -i
-    CHECK(div.isComplex, "1/i is complex");
+    FieldElement div = elemDiv(C(1, 0), C(0, 1));  // 1/i = -i
+    CHECK(elemIsComplex(div), "1/i is complex");
     CHECK(approxElem(div, 0, -1, 1e-12), "1/i = -i");
 
     CHECK(approxElem(elemNeg(C(3, -4)), -3, 4, 1e-12), "neg of complex");
 
-    CHECK(elemConj(R(5)).isComplex == false, "conj of real is real");
+    CHECK(elemIsComplex(elemConj(R(5))) == false, "conj of real is real");
     CHECK(approxReal(elemConj(R(5)), 5, 0), "conj of real is itself");
-    MatrixElement conj = elemConj(C(1, -2));
-    CHECK(conj.isComplex, "conj of complex is complex");
+    FieldElement conj = elemConj(C(1, -2));
+    CHECK(elemIsComplex(conj), "conj of complex is complex");
     CHECK(approxElem(conj, 1, 2, 1e-12), "conj(1-2i) = 1+2i");
 
     CHECK(elemAbs(R(-3)) == 3.0, "|−3| = 3");
@@ -372,7 +373,7 @@ void testLuDecompose() {
     freeMatrix(m);
 
     // Complex-entry matrix can be decomposed
-    MatrixElement cd[4] = { C(1, 1), R(2), R(-1), C(2, -1) };
+    FieldElement cd[4] = { C(1, 1), R(2), R(-1), C(2, -1) };
     Matrix* cm = constructMatrixFromArray(2, 2, cd, 4);
     LU* luc = luDecompose(cm);
     CHECK(luc != NULL, "complex matrix decomposes");
@@ -396,7 +397,7 @@ void testLuDet() {
     freeMatrix(m);
 
     // Determinant of a complex matrix: diag(1+i, 2) has det = 2(1+i) = 2 + 2i
-    MatrixElement dcd[4] = { C(1, 1), R(0), R(0), R(2) };
+    FieldElement dcd[4] = { C(1, 1), R(0), R(0), R(2) };
     Matrix* dcm = constructMatrixFromArray(2, 2, dcd, 4);
     LU* lu3 = luDecompose(dcm);
     CHECK(approxElem(luDet(lu3), 2.0, 2.0, 1e-10), "complex det = 2+2i");
@@ -438,9 +439,9 @@ void testConstructMatrix() {
 
 void testConstructMatrixFromMatrix() {
     SECTION("constructMatrixFromMatrix");
-    MatrixElement row0[] = {R(1), R(2), R(3)};
-    MatrixElement row1[] = {R(4), R(5), R(6)};
-    MatrixElement* rows[] = {row0, row1};
+    FieldElement row0[] = {R(1), R(2), R(3)};
+    FieldElement row1[] = {R(4), R(5), R(6)};
+    FieldElement* rows[] = {row0, row1};
 
     CHECK(constructMatrixFromMatrix(2, 3, rows, 3, 3) == NULL, "lenData mismatch");
     CHECK(constructMatrixFromMatrix(2, 3, rows, 2, 4) == NULL, "colLenData mismatch");
@@ -451,19 +452,19 @@ void testConstructMatrixFromMatrix() {
     freeMatrix(m);
 
     // Constructing with mixed real/complex entries
-    MatrixElement mrow0[] = { R(1), C(0, 1) };
-    MatrixElement mrow1[] = { C(2, -1), R(3) };
-    MatrixElement* mrows[] = {mrow0, mrow1};
+    FieldElement mrow0[] = { R(1), C(0, 1) };
+    FieldElement mrow1[] = { C(2, -1), R(3) };
+    FieldElement* mrows[] = {mrow0, mrow1};
     Matrix* mc = constructMatrixFromMatrix(2, 2, mrows, 2, 2);
-    CHECK(!getEntry(mc, 0, 0).isComplex, "real stored real");
-    CHECK(getEntry(mc, 0, 1).isComplex, "complex stored complex");
+    CHECK(!elemIsComplex(getEntry(mc, 0, 0)), "real stored real");
+    CHECK(elemIsComplex(getEntry(mc, 0, 1)), "complex stored complex");
     CHECK(approxElem(getEntry(mc, 1, 0), 2, -1, 0), "(2-i) preserved");
     freeMatrix(mc);
 }
 
 void testConstructMatrixFromArray() {
     SECTION("constructMatrixFromArray");
-    MatrixElement arr[] = {R(1), R(2), R(3), R(4), R(5), R(6)};
+    FieldElement arr[] = {R(1), R(2), R(3), R(4), R(5), R(6)};
 
     CHECK(constructMatrixFromArray(2, 3, arr, 5) == NULL, "wrong lenData");
     CHECK(constructMatrixFromArray(2, 3, arr, 7) == NULL, "wrong lenData 2");
@@ -477,9 +478,9 @@ void testConstructMatrixFromArray() {
     freeMatrix(m);
 
     // With complex entries
-    MatrixElement carr[] = { C(1, 1), R(2), C(0, -1), R(4) };
+    FieldElement carr[] = { C(1, 1), R(2), C(0, -1), R(4) };
     Matrix* mc = constructMatrixFromArray(2, 2, carr, 4);
-    CHECK(getEntry(mc, 0, 0).isComplex, "complex at (0,0)");
+    CHECK(elemIsComplex(getEntry(mc, 0, 0)), "complex at (0,0)");
     CHECK(approxElem(getEntry(mc, 0, 0), 1, 1, 0), "1+i at (0,0)");
     CHECK(approxElem(getEntry(mc, 1, 0), 0, -1, 0), "-i at (1,0)");
     freeMatrix(mc);
@@ -495,7 +496,7 @@ void testPrintMatrix() {
     freeMatrix(m);
 
     // Complex printing
-    MatrixElement cd[] = { C(1, 1), C(2, -3), R(0), C(0, 1) };
+    FieldElement cd[] = { C(1, 1), C(2, -3), R(0), C(0, 1) };
     Matrix* cm = constructMatrixFromArray(2, 2, cd, 4);
     printf("  Visual check complex (should see 1+1i, 2-3i / 0, 0+1i):\n");
     printMatrix(cm);
@@ -524,11 +525,11 @@ void testCopyMatrix() {
     freeMatrix(c);
 
     // Copying a complex matrix preserves complex entries
-    MatrixElement cd[] = { C(1, 1), R(2), R(3), C(-1, 1) };
+    FieldElement cd[] = { C(1, 1), R(2), R(3), C(-1, 1) };
     Matrix* cm = constructMatrixFromArray(2, 2, cd, 4);
     Matrix* cc = copyMatrix(cm);
     CHECK(matrixComp(cm, cc, 1e-12), "complex copy equal");
-    CHECK(getEntry(cc, 0, 0).isComplex, "complex flag preserved");
+    CHECK(elemIsComplex(getEntry(cc, 0, 0)), "complex flag preserved");
     freeMatrix(cm);
     freeMatrix(cc);
 }
@@ -578,18 +579,18 @@ void testIdMatrix() {
 
 void testSimpleDotProduct() {
     SECTION("simpleDotProduct");
-    MatrixElement v[] = {R(1), R(2), R(3)};
-    MatrixElement w[] = {R(4), R(5), R(6)};
+    FieldElement v[] = {R(1), R(2), R(3)};
+    FieldElement w[] = {R(4), R(5), R(6)};
     CHECK(elemIsNan(simpleDotProduct(v, w, 3, 4)), "length mismatch NAN");
     CHECK(approxReal(simpleDotProduct(v, w, 3, 3), 32.0, 1e-10), "1*4+2*5+3*6 = 32");
 
-    MatrixElement zero[] = {R(0), R(0), R(0)};
+    FieldElement zero[] = {R(0), R(0), R(0)};
     CHECK(approxReal(simpleDotProduct(v, zero, 3, 3), 0.0, 0), "dot with zero");
 
     // Complex entries: (1+i)(1-i) + (i)(i) = 2 + (-1) = 1
-    MatrixElement cv[] = { C(1, 1), C(0, 1) };
-    MatrixElement cw[] = { C(1, -1), C(0, 1) };
-    MatrixElement result = simpleDotProduct(cv, cw, 2, 2);
+    FieldElement cv[] = { C(1, 1), C(0, 1) };
+    FieldElement cw[] = { C(1, -1), C(0, 1) };
+    FieldElement result = simpleDotProduct(cv, cw, 2, 2);
     CHECK(approxReal(result, 1.0, 1e-10), "complex dot = 1 (collapses to real)");
 }
 
@@ -629,7 +630,7 @@ void testMultByConstant() {
 
     // Multiplying a real matrix by i gives a fully complex matrix
     Matrix* ir = multByConstant(m, C(0, 1));
-    CHECK(getEntry(ir, 0, 0).isComplex, "mult by i makes entries complex");
+    CHECK(elemIsComplex(getEntry(ir, 0, 0)), "mult by i makes entries complex");
     CHECK(approxElem(getEntry(ir, 0, 0), 0, 1, 1e-12), "1*i = i");
     CHECK(approxElem(getEntry(ir, 1, 1), 0, 4, 1e-12), "4*i = 4i");
     freeMatrix(ir);
@@ -656,10 +657,10 @@ void testAddMatrices() {
     CHECK(approxReal(getEntry(S, 0, 0), 6, 0) && approxReal(getEntry(S, 1, 1), 12, 0), "addition correct");
 
     // Complex + real = complex
-    MatrixElement cd[] = { C(1, 1), R(0), R(0), C(0, 1) };
+    FieldElement cd[] = { C(1, 1), R(0), R(0), C(0, 1) };
     Matrix* Cmat = constructMatrixFromArray(2, 2, cd, 4);
     Matrix* SC = addMatrices(A, Cmat);
-    CHECK(getEntry(SC, 0, 0).isComplex, "real+complex -> complex");
+    CHECK(elemIsComplex(getEntry(SC, 0, 0)), "real+complex -> complex");
     CHECK(approxElem(getEntry(SC, 0, 0), 2, 1, 1e-12), "1 + (1+i) = 2+i");
     freeMatrix(Cmat);
     freeMatrix(SC);
@@ -723,7 +724,7 @@ void testMultiplyMatrices() {
     CHECK(approxReal(getEntry(P, 1, 1), 154, 0), "(1,1) = 4*8+5*10+6*12");
 
     // Complex multiplication: [[i, 0], [0, i]] * [[i, 0], [0, i]] = -I
-    MatrixElement iI_d[] = { C(0, 1), R(0), R(0), C(0, 1) };
+    FieldElement iI_d[] = { C(0, 1), R(0), R(0), C(0, 1) };
     Matrix* iI = constructMatrixFromArray(2, 2, iI_d, 4);
     Matrix* negI = multiplyMatrices(iI, iI);
     CHECK(approxReal(getEntry(negI, 0, 0), -1, 1e-12), "(iI)^2 (0,0) = -1");
@@ -802,7 +803,7 @@ void testAdjoint() {
     freeMatrix(Rm); freeMatrix(Rt); freeMatrix(Ra);
 
     // Complex matrix: conjugate transpose
-    MatrixElement cd[] = { C(1, 2), C(3, -4), R(5), C(-2, 1) };
+    FieldElement cd[] = { C(1, 2), C(3, -4), R(5), C(-2, 1) };
     Matrix* Cm = constructMatrixFromArray(2, 2, cd, 4);
     Matrix* Ca = adjoint(Cm);
     CHECK(approxElem(getEntry(Ca, 0, 0), 1.0, -2.0, 1e-12), "(0,0) conjugated");
@@ -916,7 +917,7 @@ void testDeterminant() {
     freeMatrix(id);
 
     // Complex 2x2 det: [[i, 1], [0, i]] det = i*i - 0 = -1
-    MatrixElement cd[] = { C(0, 1), R(1), R(0), C(0, 1) };
+    FieldElement cd[] = { C(0, 1), R(1), R(0), C(0, 1) };
     Matrix* cm = constructMatrixFromArray(2, 2, cd, 4);
     CHECK(approxReal(determinant(cm), -1.0, 1e-10), "det([[i,1],[0,i]]) = -1");
     freeMatrix(cm);
@@ -1043,9 +1044,9 @@ void testApplyMatrix() {
     freeMatrix(nsA); freeMatrix(v3); freeMatrix(r3);
 
     // Complex A and complex v: A = [[i, 0], [0, 1]], v = [1, i] → Av = [i, i]
-    MatrixElement Ad[] = { C(0, 1), R(0), R(0), R(1) };
+    FieldElement Ad[] = { C(0, 1), R(0), R(0), R(1) };
     Matrix* cA = constructMatrixFromArray(2, 2, Ad, 4);
-    MatrixElement vd2[] = { R(1), C(0, 1) };
+    FieldElement vd2[] = { R(1), C(0, 1) };
     Matrix* cv = constructMatrixFromArray(2, 1, vd2, 2);
     Matrix* cr = applyMatrix(cA, cv);
     CHECK(approxElem(getEntry(cr, 0, 0), 0, 1, 1e-12), "complex Av[0] = i");
@@ -1126,7 +1127,7 @@ void testIsSymmetric() {
     freeMatrix(zero);
 
     // Complex symmetric (A = A^T, not Hermitian)
-    MatrixElement cd[] = { C(1, 1), C(2, 0), C(2, 0), C(3, -1) };
+    FieldElement cd[] = { C(1, 1), C(2, 0), C(2, 0), C(3, -1) };
     Matrix* Cs = constructMatrixFromArray(2, 2, cd, 4);
     CHECK(isSymmetric(Cs) == true, "complex symmetric detected");
     freeMatrix(Cs);
@@ -1216,13 +1217,13 @@ void testIsUnitary() {
     freeMatrix(R45);
 
     // Complex diagonal with unit-modulus entries is unitary
-    MatrixElement ud[] = { C(0, 1), R(0), R(0), C(0, -1) };
+    FieldElement ud[] = { C(0, 1), R(0), R(0), C(0, -1) };
     Matrix* U = constructMatrixFromArray(2, 2, ud, 4);
     CHECK(isUnitary(U) == true, "diag(i,-i) is unitary");
     freeMatrix(U);
 
     // Non-unit-modulus entry breaks unitarity
-    MatrixElement nd[] = { C(2, 0), R(0), R(0), R(1) };
+    FieldElement nd[] = { C(2, 0), R(0), R(0), R(1) };
     Matrix* N = constructMatrixFromArray(2, 2, nd, 4);
     CHECK(isUnitary(N) == false, "diag(2,1) is not unitary");
     freeMatrix(N);
@@ -1230,7 +1231,7 @@ void testIsUnitary() {
 
 void testRank() {
     SECTION("rank");
-    CHECK(rank(NULL) == -1, "NULL returns -1");
+    CHECK(rank(NULL) == (size_t)-1, "NULL returns sentinel");
 
     Matrix* id3 = idMatrix(3);
     CHECK(rank(id3) == 3, "rank(I_3) = 3");
@@ -1265,7 +1266,7 @@ void testRank() {
     freeMatrix(RN);
 
     // Complex full-rank 2x2 (det = 1, non-zero)
-    MatrixElement cd[] = { C(1, 1), R(0), R(0), R(1) };
+    FieldElement cd[] = { C(1, 1), R(0), R(0), R(1) };
     Matrix* Cm = constructMatrixFromArray(2, 2, cd, 4);
     CHECK(rank(Cm) == 2, "complex full rank 2");
     freeMatrix(Cm);
@@ -1273,7 +1274,7 @@ void testRank() {
 
 void testNullity() {
     SECTION("nullity");
-    CHECK(nullity(NULL) == -1, "NULL returns -1");
+    CHECK(nullity(NULL) == (size_t)-1, "NULL returns sentinel");
 
     Matrix* id3 = idMatrix(3);
     CHECK(nullity(id3) == 0, "nullity(I_3) = 0");
@@ -1322,15 +1323,15 @@ void testTrace() {
     // Trace equals sum of eigenvalues (2x2 check)
     long double ed[] = {3, 1, 0, 5};
     Matrix* E = makeRealMatrix(2, 2, ed);
-    MatrixElement* eigs = eigenvalues2x2(E);
-    MatrixElement eigsum = elemAdd(eigs[0], eigs[1]);
+    FieldElement* eigs = eigenvalues2x2(E);
+    FieldElement eigsum = elemAdd(eigs[0], eigs[1]);
     CHECK(elemEq(trace(E), eigsum, 1e-9), "trace = sum of eigenvalues");
     freeMatrix(E); free(eigs);
 
     // Trace of complex matrix
-    MatrixElement cd[] = { C(1, 1), R(0), R(0), C(2, -1) };
+    FieldElement cd[] = { C(1, 1), R(0), R(0), C(2, -1) };
     Matrix* Cm = constructMatrixFromArray(2, 2, cd, 4);
-    MatrixElement ct = trace(Cm);
+    FieldElement ct = trace(Cm);
     CHECK(approxReal(ct, 3.0, 1e-12), "complex diag sum collapses to 3");
     freeMatrix(Cm);
 }
@@ -1360,7 +1361,7 @@ void testFrobeniusNorm() {
     freeMatrix(V);
 
     // Complex matrix: 2x2 with entries 1+i, 0, 0, 1-i → sum |a|^2 = 2+0+0+2 = 4 → norm = 2
-    MatrixElement cd[] = { C(1, 1), R(0), R(0), C(1, -1) };
+    FieldElement cd[] = { C(1, 1), R(0), R(0), C(1, -1) };
     Matrix* Cm = constructMatrixFromArray(2, 2, cd, 4);
     CHECK(approx(frobeniusNorm(Cm), 2.0, 1e-10), "complex Frobenius uses |a|^2");
     freeMatrix(Cm);
@@ -1376,7 +1377,7 @@ void testEigenvalues2x2() {
 
     // Identity: both eigenvalues = 1
     Matrix* id = idMatrix(2);
-    MatrixElement* eig_id = eigenvalues2x2(id);
+    FieldElement* eig_id = eigenvalues2x2(id);
     CHECK(approxReal(eig_id[0], 1.0, 1e-10) &&
           approxReal(eig_id[1], 1.0, 1e-10), "eigs(I_2) = {1, 1}");
     freeMatrix(id); free(eig_id);
@@ -1384,7 +1385,7 @@ void testEigenvalues2x2() {
     // Diagonal [[3,0],[0,2]]: eigs = {3, 2}
     long double dd[] = {3, 0, 0, 2};
     Matrix* D = makeRealMatrix(2, 2, dd);
-    MatrixElement* eig_d = eigenvalues2x2(D);
+    FieldElement* eig_d = eigenvalues2x2(D);
     CHECK(approxReal(eig_d[0], 3.0, 1e-10) &&
           approxReal(eig_d[1], 2.0, 1e-10), "eigs(diag(3,2)) = {3, 2}");
     free(eig_d);
@@ -1392,9 +1393,9 @@ void testEigenvalues2x2() {
     // [[5,2],[2,5]]: eigs = {7, 3}; verify via trace/det
     long double sd[] = {5, 2, 2, 5};
     Matrix* S = makeRealMatrix(2, 2, sd);
-    MatrixElement* eig_s = eigenvalues2x2(S);
-    MatrixElement esum = elemAdd(eig_s[0], eig_s[1]);
-    MatrixElement eprod = elemMul(eig_s[0], eig_s[1]);
+    FieldElement* eig_s = eigenvalues2x2(S);
+    FieldElement esum = elemAdd(eig_s[0], eig_s[1]);
+    FieldElement eprod = elemMul(eig_s[0], eig_s[1]);
     CHECK(elemEq(esum, trace(S), 1e-9), "sum of eigs = trace");
     CHECK(elemEq(eprod, determinant(S), 1e-9), "product of eigs = det");
     freeMatrix(S); free(eig_s);
@@ -1403,25 +1404,25 @@ void testEigenvalues2x2() {
     // Complex eigenvalues: [[0,-1],[1,0]] (rotation 90 deg)  →  eigs = ±i
     long double cd[] = {0, -1, 1, 0};
     Matrix* Cr = makeRealMatrix(2, 2, cd);
-    MatrixElement* eig_c = eigenvalues2x2(Cr);
-    CHECK(eig_c[0].isComplex && eig_c[1].isComplex, "eigs are complex");
+    FieldElement* eig_c = eigenvalues2x2(Cr);
+    CHECK(elemIsComplex(eig_c[0]) && elemIsComplex(eig_c[1]), "eigs are complex");
     // Eigenvalues are pure imaginary ±i
     CHECK(approxElem(eig_c[0], 0.0, 1.0, 1e-9) || approxElem(eig_c[0], 0.0, -1.0, 1e-9),
           "eig0 is +/- i");
     CHECK(approxElem(eig_c[1], 0.0, 1.0, 1e-9) || approxElem(eig_c[1], 0.0, -1.0, 1e-9),
           "eig1 is +/- i");
     // Eigs are complex conjugates: imag parts sum to 0
-    ComplexNumber e0 = eig_c[0].value.complex;
-    ComplexNumber e1 = eig_c[1].value.complex;
+    ComplexNumber e0 = eig_c[0].value.z;
+    ComplexNumber e1 = eig_c[1].value.z;
     CHECK(approx(e0.imag + e1.imag, 0.0, 1e-9), "complex eigs are conjugates");
     freeMatrix(Cr); free(eig_c);
 
     // Verify each eigenvalue (real or complex) satisfies det(A - lambda*I) = 0
     long double vd[] = {4, 1, 2, 3};
     Matrix* V = makeRealMatrix(2, 2, vd);
-    MatrixElement* eig_v = eigenvalues2x2(V);
+    FieldElement* eig_v = eigenvalues2x2(V);
     for (int k = 0; k < 2; k++) {
-        MatrixElement lam = eig_v[k];
+        FieldElement lam = eig_v[k];
         Matrix* I = idMatrix(2);
         Matrix* lI = multByConstant(I, lam);
         Matrix* AmL = subtractMatrices(V, lI);
@@ -1431,9 +1432,9 @@ void testEigenvalues2x2() {
     freeMatrix(V); free(eig_v);
 
     // Complex-entry 2x2: diag(1+i, 2) eigs = {1+i, 2}
-    MatrixElement cmd[] = { C(1, 1), R(0), R(0), R(2) };
+    FieldElement cmd[] = { C(1, 1), R(0), R(0), R(2) };
     Matrix* Cm = constructMatrixFromArray(2, 2, cmd, 4);
-    MatrixElement* eig_m = eigenvalues2x2(Cm);
+    FieldElement* eig_m = eigenvalues2x2(Cm);
     bool found_1i = approxElem(eig_m[0], 1, 1, 1e-9) || approxElem(eig_m[1], 1, 1, 1e-9);
     bool found_2  = approxReal(eig_m[0], 2, 1e-9) || approxReal(eig_m[1], 2, 1e-9);
     CHECK(found_1i, "complex diag yields 1+i eigenvalue");
@@ -1451,7 +1452,7 @@ void testEigenvalues3x3() {
 
     // Identity: all eigs = 1
     Matrix* id = idMatrix(3);
-    MatrixElement* eig_id = eigenvalues3x3(id);
+    FieldElement* eig_id = eigenvalues3x3(id);
     CHECK(approxReal(eig_id[0], 1.0, 1e-9) &&
           approxReal(eig_id[1], 1.0, 1e-9) &&
           approxReal(eig_id[2], 1.0, 1e-9), "eigs(I_3) = {1,1,1}");
@@ -1460,7 +1461,7 @@ void testEigenvalues3x3() {
     // Triple root: 2*I_3, all eigs = 2
     long double tid[] = {2,0,0, 0,2,0, 0,0,2};
     Matrix* T = makeRealMatrix(3, 3, tid);
-    MatrixElement* eig_t = eigenvalues3x3(T);
+    FieldElement* eig_t = eigenvalues3x3(T);
     CHECK(approxReal(eig_t[0], 2.0, 1e-9) &&
           approxReal(eig_t[1], 2.0, 1e-9) &&
           approxReal(eig_t[2], 2.0, 1e-9), "triple root 2*I eigs = {2,2,2}");
@@ -1469,17 +1470,17 @@ void testEigenvalues3x3() {
     // Diagonal [[1,0,0],[0,2,0],[0,0,3]]
     long double dd[] = {1,0,0, 0,2,0, 0,0,3};
     Matrix* D = makeRealMatrix(3, 3, dd);
-    MatrixElement* eig_d = eigenvalues3x3(D);
-    MatrixElement esum = elemAdd(elemAdd(eig_d[0], eig_d[1]), eig_d[2]);
-    MatrixElement eprod = elemMul(elemMul(eig_d[0], eig_d[1]), eig_d[2]);
+    FieldElement* eig_d = eigenvalues3x3(D);
+    FieldElement esum = elemAdd(elemAdd(eig_d[0], eig_d[1]), eig_d[2]);
+    FieldElement eprod = elemMul(elemMul(eig_d[0], eig_d[1]), eig_d[2]);
     CHECK(elemEq(esum, trace(D), 1e-9), "sum of eigs = trace(diag)");
     CHECK(elemEq(eprod, determinant(D), 1e-9), "product of eigs = det(diag)");
     // All eigs should be real (Cardano cleanup)
-    CHECK(!eig_d[0].isComplex && !eig_d[1].isComplex && !eig_d[2].isComplex,
+    CHECK(!elemIsComplex(eig_d[0]) && !elemIsComplex(eig_d[1]) && !elemIsComplex(eig_d[2]),
           "real inputs yield real eigs for 3-real-root case");
     // Verify each satisfies det(A - lambda*I) = 0
     for (int k = 0; k < 3; k++) {
-        MatrixElement lam = eig_d[k];
+        FieldElement lam = eig_d[k];
         Matrix* I = idMatrix(3);
         Matrix* lI = multByConstant(I, lam);
         Matrix* AmL = subtractMatrices(D, lI);
@@ -1491,7 +1492,7 @@ void testEigenvalues3x3() {
     // One real + two complex: [[1,-1,0],[1,1,0],[0,0,2]] — real root = 2, complex = 1±i
     long double cd[] = {1,-1,0, 1,1,0, 0,0,2};
     Matrix* Cr = makeRealMatrix(3, 3, cd);
-    MatrixElement* eig_c = eigenvalues3x3(Cr);
+    FieldElement* eig_c = eigenvalues3x3(Cr);
     // One eigenvalue must be 2
     bool found_2 = false, found_1pi = false, found_1mi = false;
     for (int k = 0; k < 3; k++) {
@@ -1513,7 +1514,7 @@ static void freeEvects(Matrix** evects, int n) {
 }
 
 // Check Av = lambda*v for a non-NULL eigenvector; handles complex lambdas
-static bool checkEigenvector(Matrix* A, MatrixElement lambda, Matrix* v) {
+static bool checkEigenvector(Matrix* A, FieldElement lambda, Matrix* v) {
     if (!v) return false;
     Matrix* Av = applyMatrix(A, v);
     Matrix* lv = multByConstant(v, lambda);
@@ -1533,7 +1534,7 @@ void testEigenvectors2x2() {
 
     // Identity: eigenvalue = 1 (repeated), A-I = 0, evect = [1,0]
     Matrix* id = idMatrix(2);
-    MatrixElement* eigs_id = eigenvalues2x2(id);
+    FieldElement* eigs_id = eigenvalues2x2(id);
     Matrix** ev_id = eigenvectors2x2(id);
     CHECK(ev_id != NULL, "identity evects allocated");
     for (int k = 0; k < 2; k++)
@@ -1543,7 +1544,7 @@ void testEigenvectors2x2() {
     // Diagonal [[3,0],[0,2]]: distinct eigenvalues, axis-aligned eigenvectors
     long double dd[] = {3, 0, 0, 2};
     Matrix* D = makeRealMatrix(2, 2, dd);
-    MatrixElement* eigs_d = eigenvalues2x2(D);
+    FieldElement* eigs_d = eigenvalues2x2(D);
     Matrix** ev_d = eigenvectors2x2(D);
     CHECK(ev_d != NULL, "diagonal evects allocated");
     CHECK(ev_d[0] != NULL && ev_d[1] != NULL, "both slots non-NULL");
@@ -1554,7 +1555,7 @@ void testEigenvectors2x2() {
     // Symmetric [[5,2],[2,5]]: eigenvalues 7 and 3, evects along [1,1] and [1,-1]
     long double sd[] = {5, 2, 2, 5};
     Matrix* S = makeRealMatrix(2, 2, sd);
-    MatrixElement* eigs_s = eigenvalues2x2(S);
+    FieldElement* eigs_s = eigenvalues2x2(S);
     Matrix** ev_s = eigenvectors2x2(S);
     CHECK(ev_s != NULL && ev_s[0] != NULL && ev_s[1] != NULL, "symmetric evects non-NULL");
     CHECK(checkEigenvector(S, eigs_s[0], ev_s[0]), "sym ev0: Av = lambda*v");
@@ -1564,7 +1565,7 @@ void testEigenvectors2x2() {
     // Upper triangular [[3,1],[0,2]]
     long double td[] = {3, 1, 0, 2};
     Matrix* T = makeRealMatrix(2, 2, td);
-    MatrixElement* eigs_t = eigenvalues2x2(T);
+    FieldElement* eigs_t = eigenvalues2x2(T);
     Matrix** ev_t = eigenvectors2x2(T);
     CHECK(checkEigenvector(T, eigs_t[0], ev_t[0]), "triangular ev0: Av = lambda*v");
     CHECK(checkEigenvector(T, eigs_t[1], ev_t[1]), "triangular ev1: Av = lambda*v");
@@ -1573,15 +1574,15 @@ void testEigenvectors2x2() {
     // Complex eigenvalues: eigenvectors are also complex
     long double cd[] = {0, -1, 1, 0};
     Matrix* Cr = makeRealMatrix(2, 2, cd);
-    MatrixElement* eigs_c = eigenvalues2x2(Cr);
+    FieldElement* eigs_c = eigenvalues2x2(Cr);
     Matrix** ev_c = eigenvectors2x2(Cr);
     CHECK(ev_c != NULL, "complex: array allocated");
     CHECK(ev_c[0] != NULL && ev_c[1] != NULL, "complex evects non-NULL");
     CHECK(checkEigenvector(Cr, eigs_c[0], ev_c[0]), "complex ev0: Av = lambda*v");
     CHECK(checkEigenvector(Cr, eigs_c[1], ev_c[1]), "complex ev1: Av = lambda*v");
     // Each eigenvector should have at least one complex entry (since eig is complex)
-    bool ev0_hascx = getEntry(ev_c[0], 0, 0).isComplex || getEntry(ev_c[0], 1, 0).isComplex;
-    bool ev1_hascx = getEntry(ev_c[1], 0, 0).isComplex || getEntry(ev_c[1], 1, 0).isComplex;
+    bool ev0_hascx = elemIsComplex(getEntry(ev_c[0], 0, 0)) || elemIsComplex(getEntry(ev_c[0], 1, 0));
+    bool ev1_hascx = elemIsComplex(getEntry(ev_c[1], 0, 0)) || elemIsComplex(getEntry(ev_c[1], 1, 0));
     CHECK(ev0_hascx && ev1_hascx, "complex evects contain complex entries");
     free(eigs_c); freeEvects(ev_c, 2); freeMatrix(Cr);
 }
@@ -1596,7 +1597,7 @@ void testEigenvectors3x3() {
 
     // Identity: triple eigenvalue 1, A-I = 0, falls back to [1,0,0]
     Matrix* id = idMatrix(3);
-    MatrixElement* eigs_id = eigenvalues3x3(id);
+    FieldElement* eigs_id = eigenvalues3x3(id);
     Matrix** ev_id = eigenvectors3x3(id);
     CHECK(ev_id != NULL, "identity evects allocated");
     for (int k = 0; k < 3; k++)
@@ -1606,7 +1607,7 @@ void testEigenvectors3x3() {
     // Diagonal [[1,0,0],[0,2,0],[0,0,3]]: axis-aligned eigenvectors
     long double dd[] = {1,0,0, 0,2,0, 0,0,3};
     Matrix* D = makeRealMatrix(3, 3, dd);
-    MatrixElement* eigs_d = eigenvalues3x3(D);
+    FieldElement* eigs_d = eigenvalues3x3(D);
     Matrix** ev_d = eigenvectors3x3(D);
     CHECK(ev_d != NULL, "diagonal evects allocated");
     CHECK(ev_d[0] != NULL && ev_d[1] != NULL && ev_d[2] != NULL, "all slots non-NULL");
@@ -1618,7 +1619,7 @@ void testEigenvectors3x3() {
     // Symmetric [[4,1,0],[1,4,1],[0,1,4]]: three real eigenvalues
     long double sym[] = {4,1,0, 1,4,1, 0,1,4};
     Matrix* Sym = makeRealMatrix(3, 3, sym);
-    MatrixElement* eigs_sym = eigenvalues3x3(Sym);
+    FieldElement* eigs_sym = eigenvalues3x3(Sym);
     Matrix** ev_sym = eigenvectors3x3(Sym);
     CHECK(ev_sym != NULL, "symmetric evects allocated");
     for (int k = 0; k < 3; k++) {
@@ -1629,7 +1630,7 @@ void testEigenvectors3x3() {
     // Upper triangular [[2,1,3],[0,4,2],[0,0,6]]: eigenvalues on diagonal
     long double tri[] = {2,1,3, 0,4,2, 0,0,6};
     Matrix* Tri = makeRealMatrix(3, 3, tri);
-    MatrixElement* eigs_tri = eigenvalues3x3(Tri);
+    FieldElement* eigs_tri = eigenvalues3x3(Tri);
     Matrix** ev_tri = eigenvectors3x3(Tri);
     CHECK(ev_tri != NULL, "triangular evects allocated");
     for (int k = 0; k < 3; k++) {
@@ -1640,7 +1641,7 @@ void testEigenvectors3x3() {
     // One real + two complex: real eigenvector valid, complex eigenvectors also populated
     long double cd[] = {1,-1,0, 1,1,0, 0,0,2};
     Matrix* Cr = makeRealMatrix(3, 3, cd);
-    MatrixElement* eigs_c = eigenvalues3x3(Cr);
+    FieldElement* eigs_c = eigenvalues3x3(Cr);
     Matrix** ev_c = eigenvectors3x3(Cr);
     CHECK(ev_c != NULL, "complex: array allocated");
     for (int k = 0; k < 3; k++) {
@@ -1680,7 +1681,7 @@ void testConstructVector() {
 
 void testConstructVectorFromArray() {
     SECTION("constructVectorFromArray");
-    MatrixElement data[] = {R(1.5), R(-2.5), R(3.5)};
+    FieldElement data[] = {R(1.5), R(-2.5), R(3.5)};
     CHECK(constructVectorFromArray(0, data, 0) == NULL, "dim 0 NULL");
     CHECK(constructVectorFromArray(3, NULL, 3) == NULL, "NULL data NULL");
     CHECK(constructVectorFromArray(3, data, 2) == NULL, "dataLen mismatch NULL");
@@ -1695,10 +1696,10 @@ void testConstructVectorFromArray() {
     freeVector(v);
 
     // Complex entry vector
-    MatrixElement cdata[] = { C(1, 1), R(2), C(0, -1) };
+    FieldElement cdata[] = { C(1, 1), R(2), C(0, -1) };
     Vector* cv = constructVectorFromArray(3, cdata, 3);
     CHECK(cv != NULL, "complex vector constructed");
-    CHECK(getEntry(cv, 0, 0).isComplex, "complex entry preserved");
+    CHECK(elemIsComplex(getEntry(cv, 0, 0)), "complex entry preserved");
     CHECK(approxElem(getEntry(cv, 2, 0), 0, -1, 0), "-i preserved");
     freeVector(cv);
 }
@@ -1717,7 +1718,7 @@ void testConstructVector2() {
     // Complex-valued vector2
     Vector* cv = constructVector2(C(1, 1), C(0, -1));
     CHECK(cv != NULL, "complex construct");
-    CHECK(getEntry(cv, 0, 0).isComplex, "(0,0) complex");
+    CHECK(elemIsComplex(getEntry(cv, 0, 0)), "(0,0) complex");
     freeVector(cv);
 }
 
@@ -1816,8 +1817,8 @@ void testHermitianDotProduct() {
 
     // <v,v> should be real and nonnegative
     Vector* v = constructVector2(C(0, 1), R(1));
-    MatrixElement vv = hermitianDotProduct(v, v);
-    CHECK(!vv.isComplex, "<v,v> collapses to real");
+    FieldElement vv = hermitianDotProduct(v, v);
+    CHECK(!elemIsComplex(vv), "<v,v> collapses to real");
     CHECK(approxReal(vv, 2.0, 1e-12), "<v,v> = |i|^2 + |1|^2 = 2");
 
     // Contrast with bilinear dot used elsewhere
@@ -1826,8 +1827,8 @@ void testHermitianDotProduct() {
     // Conjugate symmetry: <x,y> = conj(<y,x>)
     Vector* x = constructVector2(C(1, 2), C(-1, 1));
     Vector* y = constructVector2(C(3, -1), C(2, 4));
-    MatrixElement xy = hermitianDotProduct(x, y);
-    MatrixElement yx = hermitianDotProduct(y, x);
+    FieldElement xy = hermitianDotProduct(x, y);
+    FieldElement yx = hermitianDotProduct(y, x);
     CHECK(elemEq(xy, elemConj(yx), 1e-10), "conjugate symmetry");
 
     freeVector(v);
@@ -1972,7 +1973,7 @@ void testScaleVector() {
 
     // Complex scalar: v * i where v is real
     Vector* iv = scaleVector(v, C(0, 1));
-    CHECK(getEntry(iv, 0, 0).isComplex, "scaling real by i yields complex");
+    CHECK(elemIsComplex(getEntry(iv, 0, 0)), "scaling real by i yields complex");
     CHECK(approxElem(getEntry(iv, 0, 0), 0, 1, 1e-12), "1 * i = i");
     CHECK(approxElem(getEntry(iv, 2, 0), 0, 3, 1e-12), "3 * i = 3i");
     freeVector(iv);
@@ -2182,10 +2183,10 @@ void testComplexMatrixIntegration() {
     SECTION("complex matrix end-to-end");
 
     // A = [[1+i, 2], [3, 1-i]], det = (1+i)(1-i) - 2*3 = 2 - 6 = -4 (real)
-    MatrixElement ad[] = { C(1, 1), R(2), R(3), C(1, -1) };
+    FieldElement ad[] = { C(1, 1), R(2), R(3), C(1, -1) };
     Matrix* A = constructMatrixFromArray(2, 2, ad, 4);
 
-    MatrixElement det = determinant(A);
+    FieldElement det = determinant(A);
     CHECK(approxReal(det, -4.0, 1e-10), "complex matrix det = -4");
 
     // A * inv(A) = I
@@ -2197,7 +2198,7 @@ void testComplexMatrixIntegration() {
     freeMatrix(prod); freeMatrix(I);
 
     // Solve Ax = b where b is complex
-    MatrixElement bd[] = { C(1, 1), R(0) };
+    FieldElement bd[] = { C(1, 1), R(0) };
     Matrix* b = constructMatrixFromArray(2, 1, bd, 2);
     Matrix* x = solveLinEq(A, b);
     CHECK(x != NULL, "complex solve produces x");
@@ -2206,8 +2207,8 @@ void testComplexMatrixIntegration() {
     freeMatrix(b); freeMatrix(x); freeMatrix(check);
 
     // Trace of A = (1+i) + (1-i) = 2 (collapses to real)
-    MatrixElement tr = trace(A);
-    CHECK(!tr.isComplex, "trace of conjugate-pair diagonal collapses to real");
+    FieldElement tr = trace(A);
+    CHECK(!elemIsComplex(tr), "trace of conjugate-pair diagonal collapses to real");
     CHECK(approxReal(tr, 2.0, 1e-12), "tr(A) = 2");
 
     // matrixPow A^2
@@ -2334,8 +2335,8 @@ void testColumnSpace() {
         for (size_t c = 0; c < A->numCols && !matched; c++) {
             bool eq = true;
             for (size_t i = 0; i < A->numRows; i++) {
-                MatrixElement b = getEntry(basis[k], i, 0);
-                MatrixElement a = getEntry(A, i, c);
+                FieldElement b = getEntry(basis[k], i, 0);
+                FieldElement a = getEntry(A, i, c);
                 if (!elemEq(a, b, 1e-12)) { eq = false; break; }
             }
             if (eq) matched = true;
@@ -2348,8 +2349,8 @@ void testColumnSpace() {
     Vector* sum = addVectors(basis[0], basis[1]);
     bool depMatches = true;
     for (int i = 0; i < 3; i++) {
-        MatrixElement s = getEntry(sum, i, 0);
-        MatrixElement c2 = getEntry(A, i, 2);
+        FieldElement s = getEntry(sum, i, 0);
+        FieldElement c2 = getEntry(A, i, 2);
         if (!elemEq(s, c2, 1e-9)) depMatches = false;
     }
     CHECK(depMatches, "basis[0] + basis[1] = column 2 of A");
@@ -2433,6 +2434,84 @@ void testRowSpace() {
     freeMatrix(A);
 }
 
+void testGenericMatrixHelpers() {
+    printf("\n[testGenericMatrixHelpers]\n");
+
+    long double d1[] = { 1, 2, 3 };
+    long double d2[] = { 4, 5, 6 };
+    Vector* c0 = makeRealVector(3, d1);
+    Vector* c1 = makeRealVector(3, d2);
+    Vector* cols[] = { c0, c1 };
+
+    Matrix* A = matrixFromColumns(cols, 2);
+    CHECK(A != NULL && A->numRows == 3 && A->numCols == 2, "matrixFromColumns shape");
+    CHECK(approxReal(getEntry(A, 2, 1), 6.0, 1e-12), "matrixFromColumns copies entries");
+
+    Vector* replacement = constructVector2(C(0, 1), C(2, -1));
+    Matrix* B = constructMatrixOverField(sokkoComplexField(), 2, 2);
+    CHECK(setMatrixColumn(B, 1, replacement), "setMatrixColumn accepts complex vector");
+    CHECK(approxElem(getEntry(B, 0, 1), 0.0, 1.0, 1e-12), "setMatrixColumn stores complex entry");
+
+    FieldElement blockData[] = { C(1, 1), R(2), R(3), C(4, -1) };
+    Matrix* block = constructMatrixFromArray(2, 2, blockData, 4);
+    Matrix* target = constructMatrixOverField(sokkoComplexField(), 3, 2);
+    CHECK(setMatrixRowBlock(target, 1, block), "setMatrixRowBlock accepts complex block");
+    CHECK(approxElem(getEntry(target, 2, 1), 4.0, -1.0, 1e-12), "setMatrixRowBlock stores block entry");
+
+    Vector** basis = malloc(2 * sizeof(Vector*));
+    basis[0] = copyMatrix(c0);
+    basis[1] = copyMatrix(c1);
+    freeVectorBasis(basis, 2);
+    CHECK(true, "freeVectorBasis releases vector arrays");
+
+    freeMatrix(A);
+    freeVector(c0);
+    freeVector(c1);
+    freeVector(replacement);
+    freeMatrix(B);
+    freeMatrix(block);
+    freeMatrix(target);
+}
+
+void testNullSpace() {
+    printf("\n[testNullSpace]\n");
+
+    size_t count = 0;
+    CHECK(nullSpace(NULL, &count) == NULL && count == 0, "NULL matrix");
+
+    long double d[] = { 1, 2, 3,
+                   2, 4, 6 };
+    Matrix* A = makeRealMatrix(2, 3, d);
+    Vector** basis = nullSpace(A, &count);
+    CHECK(basis != NULL && count == 2, "rank one 2x3 has nullity two");
+
+    bool annihilates = true;
+    for (size_t k = 0; k < count; k++) {
+        Matrix* product = applyMatrix(A, basis[k]);
+        for (size_t i = 0; i < product->numRows; i++) {
+            FieldElement entry = getEntry(product, i, 0);
+            if (!elemIsZero(entry, 1e-12)) annihilates = false;
+            freeFieldElement(&entry);
+        }
+        freeMatrix(product);
+    }
+    CHECK(annihilates, "nullSpace basis vectors satisfy Av = 0");
+    freeVectorBasis(basis, count);
+    freeMatrix(A);
+
+    Matrix* I = idMatrix(3);
+    basis = nullSpace(I, &count);
+    CHECK(basis == NULL && count == 0, "identity has trivial nullspace");
+    freeMatrix(I);
+
+    FieldElement cd[] = { C(1, 1), C(2, 2) };
+    Matrix* Cmat = constructMatrixFromArray(1, 2, cd, 2);
+    basis = nullSpace(Cmat, &count);
+    CHECK(basis != NULL && count == 1, "complex row has one-dimensional nullspace");
+    if (basis != NULL) freeVectorBasis(basis, count);
+    freeMatrix(Cmat);
+}
+
 /* ---------- Main ---------- */
 
 int main(void) {
@@ -2445,7 +2524,7 @@ int main(void) {
     testResetEntryCache();
     testGetSetEntry();
     testComplexArith();
-    testMatrixElementOps();
+    testFieldElementOps();
     testLuDecompose();
     testLuDet();
     testCacheLU();
@@ -2504,6 +2583,8 @@ int main(void) {
     testComplexMatrixIntegration();
     testReduceRows();
     testReduceColumns();
+    testGenericMatrixHelpers();
+    testNullSpace();
     testColumnSpace();
     testRowSpace();
 

@@ -4,6 +4,7 @@
 #include<stdbool.h>
 #include<stddef.h>
 #include "hebi.h"
+#include "quaternionic.h"
 
 /* ---------- BEAST opaque pointer forward-decls ---------- */
 typedef struct Matrix Matrix;
@@ -30,6 +31,49 @@ typedef struct NekoExpr NekoExpr;
 typedef struct ProbabilityDistribution ProbabilityDistribution;
 typedef struct RandomVariable RandomVariable;
 
+/* ---------- Owned algebra wrappers ---------- */
+
+typedef struct ValueField ValueField;
+
+struct ValueField {
+    Field field;
+    ValueField* base;
+};
+
+typedef struct {
+    ValueField* field;
+    FieldElement element;
+} ValueFieldElement;
+
+typedef struct {
+    ValueField* field;
+    CDAlgebra algebra;
+} ValueCDAlgebra;
+
+typedef struct {
+    ValueField* field;
+    CDAlgebra algebra;
+    CDElement element;
+} ValueCDElement;
+
+typedef struct {
+    ValueField* field;
+    CDAlgebra algebra;
+    CDIdeal ideal;
+} ValueCDIdeal;
+
+typedef struct {
+    ValueField* field;
+    CDAlgebra algebra;
+    CDSubalgebra subalgebra;
+} ValueCDSubalgebra;
+
+typedef struct {
+    ValueField* field;
+    CDAlgebra algebra;
+    QuaternionMatrixRep rep;
+} ValueQuaternionMatrixRep;
+
 /* ---------- Value kinds ---------- */
 
 typedef enum {
@@ -44,6 +88,13 @@ typedef enum {
     VAL_SYMBOL,          // unresolved identifier
     VAL_LIST,            // tuple / variadic payload
     VAL_NEKO_EXPR,       // owned Neko symbolic expression
+    VAL_FIELD,           // owned HEBI Field wrapper
+    VAL_FIELD_ELEMENT,   // owned HEBI FieldElement wrapper
+    VAL_CD_ALGEBRA,      // owned Cayley-Dickson algebra wrapper
+    VAL_CD_ELEMENT,      // owned Cayley-Dickson element wrapper
+    VAL_CD_IDEAL,        // owned Cayley-Dickson ideal wrapper
+    VAL_CD_SUBALGEBRA,   // owned Cayley-Dickson subalgebra wrapper
+    VAL_QUATERNION_MATRIX_REP, // owned Quaternion matrix representation wrapper
 
     /* BEAST opaque pointer kinds -- add more as you wire up functions. */
     VAL_MATRIX,
@@ -105,21 +156,29 @@ Value valComplex(ComplexNumber c);
 Value valString(const char* s);
 Value valSymbol(const char* name);
 Value valList(Value* items, size_t n);            // takes ownership of items[]
+Value valField(Field field);
+Value valFieldElement(FieldElement element);
+Value valCDAlgebra(CDAlgebra algebra);
+Value valCDElement(CDElement element);
+Value valCDIdeal(CDIdeal ideal);
+Value valCDSubalgebra(CDSubalgebra subalgebra);
+Value valQuaternionMatrixRep(QuaternionMatrixRep rep);
 Value valPtr(ValueKind kind, void* p);            // generic opaque-pointer ctor
 
 /* ---------- Free, clone, introspection ---------- */
 
 // Free the Value payload; strings/lists are owned directly, and matrices,
-// vectors, CombSets, TORA conjugacy classes, TORA representations, and TORA
-// character tables, probability distributions, and random variables are also
-// owned and released here; other opaque BEAST pointers are still treated as
-// borrowed until their wrappers define ownership
+// vectors, CombSets, fields, field elements, Cayley-Dickson objects, TORA
+// conjugacy classes, TORA representations, and TORA character tables,
+// probability distributions, and random variables are also owned and released
+// here; other opaque BEAST pointers are still treated as borrowed until their
+// wrappers define ownership
 void valFree(Value v);
 
 // Produce an independently-freeable duplicate; strings, lists, matrices,
-// vectors, conjugacy classes, representations, character tables, probability
-// distributions, and random variables are deep-copied; other opaque pointers
-// remain shallow
+// vectors, fields, field elements, Cayley-Dickson objects, conjugacy classes,
+// representations, character tables, probability distributions, and random
+// variables are deep-copied; other opaque pointers remain shallow
 Value valClone(Value v);
 
 const char* valKindName(ValueKind k);

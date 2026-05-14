@@ -157,6 +157,7 @@ RingElement* ringTimes(RingElement* x, int k);
 RingElement* ringExp(RingElement* x, int k);
 GroupElement* groupElementConjugate(GroupElement* g, GroupElement* h);
 GroupElement* groupCommutator(GroupElement* g, GroupElement* h);
+GroupElement* groupAssociator(GroupElement* g, GroupElement* h, GroupElement* k);
 Group* trivialGroup(void);
 Ring* trivialRing(void);
 
@@ -228,6 +229,8 @@ Ring* quotientRing(Ring* R, Ideal* I);
 RingHomomorphism* constructRingHomomorphism(Ring* domain, Ring* codomain, int* indicesMapping, int indicesMappingSize);
 Ideal* ringHomomorphismKernel(RingHomomorphism* homo);
 RingElement* ringElementImage(RingHomomorphism* homo, RingElement* x);
+RingElement* ringCommutator(RingElement* x, RingElement* y);
+RingElement* ringAssociator(RingElement* x, RingElement* y, RingElement* z);
 Ring* ringHomomorphismImage(RingHomomorphism* homo);
 bool isRingIsomorphism(RingHomomorphism* homo);
 

@@ -5,6 +5,7 @@
 #include<math.h>
 #include<limits.h>
 #include<stdarg.h>
+#include<stdint.h>
 #include "eval.h"
 #include "kuma.h"
 #include "lexer.h"
@@ -13,6 +14,7 @@
 #include "ookami.h"
 #include "parser.h"
 #include "poni.h"
+#include "quaternionic.h"
 #include "script.h"
 #include "sokko.h"
 #include "tora.h"
@@ -137,9 +139,18 @@ static const BuiltinDoc BUILTIN_DOCS[] = {
     { "help", "Displays command usage, accepted value types, and return type.", "zero arguments to list commands, or one command name as a Symbol or String", "String" },
     { "run", "Runs a text file as a Bestiary script, evaluating each nonblank line in the current context.", "String filename, or an unquoted filename in braces such as \\run{script.bsy}", "String summary, or Error if the file cannot be opened" },
     { "list", "Constructs a dynamic Bestiary list.", "zero or more values", "List" },
-    { "copy", "Creates an independently owned copy of a supported value.", "scalar, String, Symbol, List, Matrix, Vector, CombSet, NEKO expression, KUMA distribution, KUMA random variable, or supported TORA value", "same kind as input" },
+    { "copy", "Creates an independently owned copy of a supported value.", "scalar, String, Symbol, List, Matrix, Vector, CombSet, Field, FieldElement, CD algebra, CD element, NEKO expression, KUMA distribution, KUMA random variable, or supported TORA value", "same kind as input" },
     { "sort", "Sorts a List of numeric values in ascending order.", "List containing only Int, Fraction, and Decimal values", "List" },
     { "sortedCopy", "Creates a sorted copy of a numeric List without mutating the original.", "List containing only Int, Fraction, and Decimal values", "List" },
+    { "shuffle", "Randomly shuffles a List in place using HEBI's PRG.", "List", "List" },
+    { "randInt", "Generates a random integer in an inclusive range using HEBI's PRG.", "Int lower and Int upper", "Int" },
+    { "randFrac", "Generates a random fraction with numerator and denominator in inclusive integer ranges using HEBI's PRG.", "Int numLower, Int numUpper, Int denomLower, Int denomUpper", "Fraction" },
+    { "randReal", "Generates a random real number in an inclusive range using HEBI's PRG.", "real numeric lower and upper", "Decimal" },
+    { "randComplexComp", "Generates a random complex number from inclusive real and imaginary ranges using HEBI's PRG.", "real lower, real upper, imaginary lower, imaginary upper", "Complex" },
+    { "randComplexMod", "Generates a random complex number whose modulus lies in an inclusive range using HEBI's PRG.", "nonnegative real modulus lower and upper", "Complex" },
+    { "solveQuadratic", "Solves a quadratic equation over the complex numbers.", "polynomial in x, List of coefficients, or coefficients a,b,c for a*x^2+b*x+c", "List of Decimal or Complex roots" },
+    { "solveCubic", "Solves a cubic equation over the complex numbers.", "polynomial in x, List of coefficients, or coefficients a,b,c,d for a*x^3+b*x^2+c*x+d", "List of Decimal or Complex roots" },
+    { "solveQuartic", "Solves a quartic equation over the complex numbers.", "polynomial in x, List of coefficients, or coefficients a,b,c,d,e for a*x^4+b*x^3+c*x^2+d*x+e", "List of Decimal or Complex roots" },
     { "if", "Evaluates the result branch when a condition is true, otherwise evaluates the optional else branch.", "Bool or truthy condition, result expression, and optional else expression", "selected branch value or none" },
     { "while", "Evaluates a body repeatedly while a condition remains true.", "truthy condition expression and loop body", "last body value or none" },
     { "for", "Evaluates an init, condition, and step header around a repeated body.", "header block of init; condition; step and loop body", "last body value or none" },
@@ -148,25 +159,78 @@ static const BuiltinDoc BUILTIN_DOCS[] = {
     { "def", "Defines a user function with local-only variables.", "function name, parameter list, and body", "None" },
     { "return", "Ends the current user function and returns a value.", "single value", "the returned value" },
     { "print", "Prints a value to stdout, using raw text and $name interpolation for strings.", "any single value", "None" },
-    { "+", "Adds compatible values.", "Int/Fraction/Decimal/Complex with numeric; Matrix with same-size Matrix; Vector with same-dimension Vector; CombSet with Int for translation; CombSet with CombSet for sumset; RingElement with RingElement from the same Ring; Ideal with Ideal from the same Ring and side; Symbol/NEKO expression/numeric for symbolic addition", "same family as the operands, or numeric/symbolic result" },
-    { "-", "Subtracts compatible values.", "Int/Fraction/Decimal/Complex with numeric; Matrix with same-size Matrix; Vector with same-dimension Vector; CombSet with CombSet for difference set; RingElement with RingElement from the same Ring; Symbol/NEKO expression/numeric for symbolic subtraction", "same family as the operands, or numeric/symbolic result" },
-    { "*", "Multiplies compatible values.", "numeric with numeric; Matrix with compatible Matrix; Matrix with compatible Vector; Vector with Vector for dot product; Vector/Matrix with numeric scalar; CombSet with CombSet for product set; CombSet with Int for dilation; Int with CombSet for repeated sum/difference set; GroupElement with GroupElement from the same Group; RingElement with RingElement from the same Ring; RingElement with Int; Ideal with Ideal from the same Ring and side; Symbol/NEKO expression/numeric for symbolic multiplication", "same family as the operation, numeric scalar for dot products, or symbolic expression" },
-    { "/", "Divides compatible values.", "numeric numerator and nonzero numeric denominator; Group by normal SubGroup for quotient group; Ring by Ideal for quotient ring; GroupElement by GroupElement from the same Group; RingElement by invertible RingElement from the same Ring; Symbol/NEKO expression/numeric for symbolic quotient", "numeric, Group, Ring, GroupElement, RingElement, or NEKO expression" },
+    { "+", "Adds compatible values.", "Int/Fraction/Decimal/Complex with numeric; FieldElement with compatible scalar or FieldElement; CD element with CD element from the same algebra; CD ideal with CD ideal from the same algebra; Matrix with same-size Matrix; Vector with same-dimension Vector; CombSet with Int for translation; CombSet with CombSet for sumset; RingElement with RingElement from the same Ring; Ideal with Ideal from the same Ring and side; Symbol/NEKO expression/numeric for symbolic addition", "same family as the operands, or numeric/symbolic result" },
+    { "-", "Subtracts compatible values.", "Int/Fraction/Decimal/Complex with numeric; FieldElement with compatible scalar or FieldElement; CD element with CD element from the same algebra; CD ideal with CD ideal from the same algebra; Matrix with same-size Matrix; Vector with same-dimension Vector; CombSet with CombSet for difference set; RingElement with RingElement from the same Ring; Symbol/NEKO expression/numeric for symbolic subtraction", "same family as the operands, or numeric/symbolic result" },
+    { "*", "Multiplies compatible values.", "numeric with numeric; FieldElement with compatible scalar or FieldElement; CD element with CD element from the same algebra; CD ideal with compatible scalar or CD element on either side; Matrix with compatible Matrix; Matrix with compatible Vector; Vector with Vector for dot product; Vector/Matrix with numeric scalar; CombSet with CombSet for product set; CombSet with Int for dilation; Int with CombSet for repeated sum/difference set; GroupElement with GroupElement from the same Group; RingElement with RingElement from the same Ring; RingElement with Int; Ideal with Ideal from the same Ring and side; Symbol/NEKO expression/numeric for symbolic multiplication", "same family as the operation, numeric scalar for dot products, or symbolic expression" },
+    { "/", "Divides compatible values.", "numeric numerator and nonzero numeric denominator; FieldElement by compatible scalar or FieldElement; CD element by CD element as x*y^{-1}; Group by normal SubGroup for quotient group; Ring by Ideal for quotient ring; GroupElement by GroupElement from the same Group; RingElement by invertible RingElement from the same Ring; Symbol/NEKO expression/numeric for symbolic quotient", "numeric, FieldElement, CD element, Group, Ring, GroupElement, RingElement, or NEKO expression" },
     { "%", "Computes integer remainder.", "two Int values with nonzero divisor", "Int" },
     { "==", "Tests two Bestiary values for equality.", "two values of comparable Bestiary kinds", "Bool" },
+    { "in", "Tests whether a CD element lies in a CD ideal or subalgebra.", "CD element and CD ideal or CD subalgebra", "Bool" },
     { "<", "Tests whether one real numeric value is less than another.", "two real numeric values", "Bool" },
     { ">", "Tests whether one real numeric value is greater than another.", "two real numeric values", "Bool" },
     { "u-", "Negates one value.", "numeric value, Vector, RingElement, CombSet, Symbol, or NEKO expression", "same kind as the input, or NEKO expression" },
     { "u+", "Returns one value unchanged.", "any single Bestiary value", "same value kind as the input" },
-    { "^", "Raises a supported base to a power or applies a matrix superscript.", "numeric base with numeric exponent; Matrix with Int exponent or Symbol T/t; CombSet with positive Int exponent; GroupElement with Int exponent; RingElement with Int exponent; Symbol/NEKO expression/numeric for symbolic power", "numeric, Matrix, CombSet, GroupElement, RingElement, or NEKO expression" },
+    { "^", "Raises a supported base to a power or applies a matrix superscript.", "numeric base with numeric exponent; FieldElement or CD element with exponent -1; Matrix with Int exponent or Symbol T/t; CombSet with positive Int exponent; GroupElement with Int exponent; RingElement with Int exponent; Symbol/NEKO expression/numeric for symbolic power", "numeric, FieldElement, CD element, Matrix, CombSet, GroupElement, RingElement, or NEKO expression" },
     { "pi", "Returns the mathematical constant pi.", "no values", "Decimal" },
     { "e", "Returns Euler's number.", "no values", "Decimal" },
     { "phi", "Returns the golden ratio.", "no values", "Decimal" },
     { "frac", "Constructs an exact rational fraction.", "Int numerator and Int denominator", "Fraction, or Int when normalized elsewhere" },
+    { "QQ", "Constructs the rational field.", "no values", "Field" },
+    { "RR", "Constructs the real field.", "no values", "Field" },
+    { "CC", "Constructs the complex field.", "no values", "Field" },
+    { "HH", "Constructs the standard Hamilton quaternion algebra over RR.", "no values", "CD algebra" },
+    { "OO", "Constructs the standard octonion algebra over RR.", "no values", "CD algebra" },
+    { "mathbb", "Maps LaTeX blackboard-bold names Q, R, C, H, and O to their Bestiary commands.", "one Symbol or String among Q, R, C, H, O", "Field or CD algebra" },
+    { "GF", "Constructs a prime finite field.", "prime Int p", "Field" },
+    { "fieldElement", "Constructs an element of a field.", "Field and compatible scalar", "FieldElement" },
+    { "zero", "Returns the additive identity of a field.", "Field", "FieldElement" },
+    { "one", "Returns the multiplicative identity of a field.", "Field", "FieldElement" },
+    { "quadraticExtension", "Constructs a quadratic field extension.", "Field and compatible radicand", "Field" },
+    { "quadExt", "Alias for quadraticExtension.", "Field and compatible radicand", "Field" },
+    { "cdAlgebra", "Constructs a Cayley-Dickson algebra over a field.", "Field followed by one or more doubling parameters", "CD algebra" },
+    { "cdElement", "Constructs a Cayley-Dickson element.", "CD algebra followed by dim(A) coefficients", "CD element" },
+    { "quaternionAlgebra", "Constructs a quaternion algebra.", "Field and two doubling parameters", "CD algebra" },
+    { "quaternion", "Constructs a quaternion element.", "Quaternion algebra and four coefficients", "CD element" },
+    { "octonionAlgebra", "Constructs an octonion algebra.", "Field and three doubling parameters", "CD algebra" },
+    { "octonion", "Constructs an octonion element.", "Octonion algebra and eight coefficients", "CD element" },
+    { "cdAdd", "Adds two Cayley-Dickson elements.", "two CD elements from the same algebra", "CD element" },
+    { "cdSub", "Subtracts two Cayley-Dickson elements.", "two CD elements from the same algebra", "CD element" },
+    { "cdMul", "Multiplies two Cayley-Dickson elements.", "two CD elements from the same algebra", "CD element" },
+    { "cdConj", "Computes Cayley-Dickson conjugation.", "CD element", "CD element" },
+    { "cdNorm", "Computes the Cayley-Dickson norm.", "CD element", "FieldElement" },
+    { "cdInv", "Computes the Cayley-Dickson inverse.", "invertible CD element", "CD element" },
+    { "cdCommutator", "Computes xy - yx.", "two CD elements from the same algebra", "CD element" },
+    { "cdAssociator", "Computes (xy)z - x(yz).", "three CD elements from the same algebra", "CD element" },
+    { "cdLeftDivide", "Computes y^{-1}x in a Cayley-Dickson algebra.", "CD algebra A and two elements x, y of A", "CD element" },
+    { "cdRightDivide", "Computes xy^{-1} in a Cayley-Dickson algebra.", "CD algebra A and two elements x, y of A", "CD element" },
+    { "cdLeftMatrix", "Computes the left multiplication matrix of a CD element.", "CD element", "Matrix" },
+    { "cdRightMatrix", "Computes the right multiplication matrix of a CD element.", "CD element", "Matrix" },
+    { "cdToVector", "Converts a CD element to its coefficient vector.", "CD element", "Vector" },
+    { "cdFromVector", "Converts a coefficient vector to a CD element.", "CD algebra and Vector", "CD element" },
+    { "cdSpanBasis", "Computes a basis for the span of CD elements.", "one or more CD elements from the same algebra, or a List of them", "List of CD elements" },
+    { "cdInSpan", "Tests whether a CD element lies in the span of generators.", "CD element followed by span generators or a List of them", "Bool" },
+    { "cdBasisElement", "Returns a standard basis element by zero-based index.", "CD algebra and nonnegative Int index", "CD element" },
+    { "cdStandardBasis", "Returns the standard basis of a CD algebra.", "CD algebra", "List of CD elements" },
+    { "quaternionMatrixRep", "Constructs the standard 2x2 matrix representation data for a quaternion algebra.", "Quaternion algebra", "Quaternion matrix representation" },
+    { "quaternionToMatrix", "Converts a quaternion to its standard 2x2 matrix representation.", "Quaternion element and optional Quaternion matrix representation", "Matrix" },
+    { "cdLeftIdeal", "Constructs the left ideal generated by CD elements.", "one or more CD elements from the same algebra, or a List of them", "CD ideal" },
+    { "cdRightIdeal", "Constructs the right ideal generated by CD elements.", "one or more CD elements from the same algebra, or a List of them", "CD ideal" },
+    { "cdTwoSidedIdeal", "Constructs the two-sided ideal generated by CD elements.", "one or more CD elements from the same algebra, or a List of them", "CD ideal" },
+    { "cdSubalgebra", "Constructs the unital subalgebra generated by CD elements.", "one or more CD elements from the same algebra, or a List of them", "CD subalgebra" },
+    { "cdCommutatorMatrix", "Computes the matrix of y -> xy - yx.", "CD element", "Matrix" },
+    { "cdAssociatorMatrix", "Computes the matrix of z -> (xy)z - x(yz).", "two CD elements", "Matrix" },
+    { "cdLeftAnnihilator", "Computes the left annihilator of a CD element.", "CD element", "CD ideal" },
+    { "cdRightAnnihilator", "Computes the right annihilator of a CD element.", "CD element", "CD ideal" },
+    { "center", "Computes the center of a CD algebra.", "CD algebra", "CD subalgebra" },
+    { "nucleus", "Computes the nucleus of a CD algebra.", "CD algebra", "CD subalgebra" },
+    { "commutator", "Computes the commutator for CD, group, or ring elements.", "two compatible CD, GroupElement, or RingElement values", "same algebraic element family" },
+    { "associator", "Computes the associator for CD, group, or ring elements.", "three compatible CD, GroupElement, or RingElement values", "same algebraic element family" },
+    { "isLeftZeroDivisor", "Tests whether a CD or ring element is a left zero divisor.", "CD element or RingElement", "Bool" },
+    { "isRightZeroDivisor", "Tests whether a CD or ring element is a right zero divisor.", "CD element or RingElement", "Bool" },
     { "sqrt", "Computes or constructs a principal square root.", "Int, Fraction, Decimal, Complex, Symbol, or NEKO expression", "Int/Fraction when exact, Decimal or Complex when numeric, or NEKO expression" },
     { "cbrt", "Computes a principal cube root.", "Int, Fraction, Decimal, or Complex", "Decimal or Complex" },
-    { "conj", "Computes complex conjugation.", "Int, Fraction, Decimal, or Complex", "same scalar family, or Complex" },
-    { "abs", "Computes an absolute value or constructs abs(x).", "Int, Fraction, Decimal, Complex, Symbol, or NEKO expression", "Int/Fraction for exact real input, Decimal for numeric magnitude, or NEKO expression" },
+    { "conj", "Computes complex or Cayley-Dickson conjugation.", "Int, Fraction, Decimal, Complex, or CD element", "same scalar family, Complex, or CD element" },
+    { "abs", "Computes an absolute value, CD norm, or constructs abs(x).", "Int, Fraction, Decimal, Complex, CD element, Symbol, or NEKO expression", "Int/Fraction for exact real input, Decimal for numeric magnitude, FieldElement for CD input, or NEKO expression" },
     { "arg", "Computes the principal complex argument.", "Int, Fraction, Decimal, or Complex", "Decimal" },
     { "re", "Extracts the real part of a scalar.", "Int, Fraction, Decimal, or Complex", "same scalar family for real input, Decimal for Complex input" },
     { "im", "Extracts the imaginary part of a scalar.", "Int, Fraction, Decimal, or Complex", "Int 0 for real input, Decimal for Complex input" },
@@ -213,7 +277,7 @@ static const BuiltinDoc BUILTIN_DOCS[] = {
     { "det", "Computes the determinant of a square matrix.", "square Matrix", "Int, Decimal, Fraction, or Complex scalar" },
     { "transpose", "Computes the transpose of a matrix.", "Matrix", "Matrix" },
     { "adjoint", "Computes the conjugate transpose of a matrix.", "Matrix", "Matrix" },
-    { "inverse", "Computes the inverse of an invertible square matrix.", "invertible square Matrix", "Matrix" },
+    { "inverse", "Computes an inverse.", "invertible square Matrix, FieldElement, or CD element", "Matrix, FieldElement, or CD element" },
     { "rref", "Computes the row-reduced echelon form of a matrix.", "Matrix", "Matrix" },
     { "eigenvalues", "Computes eigenvalues of a supported square matrix.", "square Matrix", "List of numeric or Complex values" },
     { "eigenvectors", "Computes eigenvectors of a supported square matrix.", "square Matrix", "List of Vector values or none entries" },
@@ -231,7 +295,8 @@ static const BuiltinDoc BUILTIN_DOCS[] = {
     { "charIP", "Computes an inner product for characters, representations, or vectors.", "two Characters, two Representations, or two same-dimension Vectors", "Int, Decimal, Fraction, or Complex scalar" },
     { "times", "Computes a cross product or direct product.", "two 3D Vectors, two Groups, or two Rings", "Vector for Vectors, Group for Groups, Ring for Rings" },
     { "otimes", "Computes the tensor product of two matrices.", "Matrix and Matrix", "Matrix" },
-    { "cap", "Computes the intersection of two finite integer sets.", "CombSet and CombSet", "CombSet" },
+    { "cap", "Computes the intersection of two compatible objects.", "two CombSets, two CD ideals, or two CD subalgebras", "CombSet, CD ideal, or CD subalgebra" },
+    { "intersect", "Alias for cap.", "two CombSets, two CD ideals, or two CD subalgebras", "CombSet, CD ideal, or CD subalgebra" },
     { "cup", "Computes the union of two finite integer sets.", "CombSet and CombSet", "CombSet" },
     { "isSubset", "Tests whether the first finite integer set is a subset of the second.", "CombSet candidate subset and CombSet candidate superset", "Bool" },
     { "diameter", "Computes max(A)-min(A) for a nonempty finite integer set.", "nonempty CombSet", "Int" },
@@ -414,8 +479,8 @@ static const BuiltinDoc BUILTIN_DOCS[] = {
     { "kProductGroup", "Constructs the k-fold direct product of a group.", "Group and positive Int k", "Group" },
     { "kProductRing", "Constructs the k-fold direct product of a ring.", "Ring and positive Int k", "Ring" },
     { "subring", "Constructs the subring generated by ring elements.", "RingElement or List of RingElement values from the same Ring", "SubRing" },
-    { "leftIdeal", "Constructs the left ideal generated by ring elements.", "RingElement or List of RingElement values from the same Ring", "Ideal" },
-    { "rightIdeal", "Constructs the right ideal generated by ring elements.", "RingElement or List of RingElement values from the same Ring", "Ideal" },
+    { "leftIdeal", "Constructs the left ideal generated by ring or CD elements.", "RingElement values from the same Ring, or CD element generators from the same algebra", "Ideal or CD ideal" },
+    { "rightIdeal", "Constructs the right ideal generated by ring or CD elements.", "RingElement values from the same Ring, or CD element generators from the same algebra", "Ideal or CD ideal" },
     { "isTrivialSubring", "Tests whether a subring is trivial.", "SubRing", "Bool" },
     { "subgroupGeneratedBy", "Constructs the subgroup generated by one or more group elements.", "Group and GroupElement or List of GroupElement values from that Group", "SubGroup" },
     { "subgroupAsGroup", "Converts a subgroup into a standalone group.", "SubGroup", "Group" },
@@ -703,7 +768,7 @@ static AstNode* firstLogicalCallArg(AstNode* call) {
     return first;
 }
 
-static int valueToMatrixElement(Value v, MatrixElement* out) {
+static int valueToFieldElement(Value v, FieldElement* out) {
     if (v.kind == VAL_COMPLEX) {
         *out = elemFromComplex(v.as.cplx);
         return 1;
@@ -715,14 +780,150 @@ static int valueToMatrixElement(Value v, MatrixElement* out) {
     return 0;
 }
 
+static int valueIsField(Value v) {
+    return v.kind == VAL_FIELD && v.as.ptr != NULL;
+}
+
+static int valueIsFieldElement(Value v) {
+    return v.kind == VAL_FIELD_ELEMENT && v.as.ptr != NULL;
+}
+
+static int valueIsCDAlgebra(Value v) {
+    return v.kind == VAL_CD_ALGEBRA && v.as.ptr != NULL;
+}
+
+static int valueIsCDElement(Value v) {
+    return v.kind == VAL_CD_ELEMENT && v.as.ptr != NULL;
+}
+
+static int valueIsCDIdeal(Value v) {
+    return v.kind == VAL_CD_IDEAL && v.as.ptr != NULL;
+}
+
+static int valueIsCDSubalgebra(Value v) {
+    return v.kind == VAL_CD_SUBALGEBRA && v.as.ptr != NULL;
+}
+
+static int valueIsQuaternionMatrixRep(Value v) {
+    return v.kind == VAL_QUATERNION_MATRIX_REP && v.as.ptr != NULL;
+}
+
+static Field* valueFieldPtr(Value v) {
+    return valueIsField(v) ? &((ValueField*)v.as.ptr)->field : NULL;
+}
+
+static FieldElement* valueFieldElementPtr(Value v) {
+    return valueIsFieldElement(v) ? &((ValueFieldElement*)v.as.ptr)->element : NULL;
+}
+
+static CDAlgebra* valueCDAlgebraPtr(Value v) {
+    return valueIsCDAlgebra(v) ? &((ValueCDAlgebra*)v.as.ptr)->algebra : NULL;
+}
+
+static CDElement* valueCDElementPtr(Value v) {
+    return valueIsCDElement(v) ? &((ValueCDElement*)v.as.ptr)->element : NULL;
+}
+
+static CDIdeal* valueCDIdealPtr(Value v) {
+    return valueIsCDIdeal(v) ? &((ValueCDIdeal*)v.as.ptr)->ideal : NULL;
+}
+
+static CDSubalgebra* valueCDSubalgebraPtr(Value v) {
+    return valueIsCDSubalgebra(v) ? &((ValueCDSubalgebra*)v.as.ptr)->subalgebra : NULL;
+}
+
+static QuaternionMatrixRep* valueQuaternionMatrixRepPtr(Value v) {
+    return valueIsQuaternionMatrixRep(v) ? &((ValueQuaternionMatrixRep*)v.as.ptr)->rep : NULL;
+}
+
+static int valueToFieldElementOverField(Field* field, Value v, FieldElement* out) {
+    if (!field || !out) return 0;
+    if (valueIsFieldElement(v)) {
+        FieldElement* element = valueFieldElementPtr(v);
+        if (!element || !fieldEq(field, element->field)) return 0;
+        *out = copyFieldElementToField(field, *element);
+        return fieldElementIsValid(out);
+    }
+    if (v.kind == VAL_INT) {
+        *out = fieldElementFromInt(field, v.as.i);
+        return fieldElementIsValid(out);
+    }
+    if (v.kind == VAL_FRACTION) {
+        *out = fieldElementFromFraction(field, v.as.frac);
+        return fieldElementIsValid(out);
+    }
+    if (v.kind == VAL_DECIMAL) {
+        *out = fieldElementFromDouble(field, v.as.d);
+        return fieldElementIsValid(out);
+    }
+    if (v.kind == VAL_COMPLEX) {
+        *out = fieldElementFromComplex(field, v.as.cplx);
+        return fieldElementIsValid(out);
+    }
+    return 0;
+}
+
+static int cdAlgebraIsStandardHamilton(CDAlgebra* algebra) {
+    if (!cdAlgebraIsValid(algebra) || algebra->degree != 2 || algebra->field->type != RR) {
+        return 0;
+    }
+    FieldElement minusOne = fieldElementFromInt(algebra->field, -1);
+    int ok = eqFieldElements(algebra->params[0], minusOne)
+        && eqFieldElements(algebra->params[1], minusOne);
+    freeFieldElement(&minusOne);
+    return ok;
+}
+
+static int valueToCDElementOverAlgebra(CDAlgebra* algebra, Value value, CDElement* out) {
+    FieldElement* coeffs;
+    if (!cdAlgebraIsValid(algebra) || !out) return 0;
+    if (valueIsCDElement(value)) {
+        CDElement* element = valueCDElementPtr(value);
+        if (!element || !cdAlgebraEq(algebra, element->algebra)) return 0;
+        *out = copyCDElement(element);
+        return cdElementIsValid(out);
+    }
+
+    // Promote complex a+bi to a+b*e1 only for the standard Hamilton algebra
+    if (value.kind == VAL_COMPLEX && cdAlgebraIsStandardHamilton(algebra)) {
+        coeffs = calloc(algebra->dimension, sizeof(FieldElement));
+        if (!coeffs) return 0;
+        for (size_t i = 0; i < algebra->dimension; i++) coeffs[i] = zeroFieldElement(algebra->field);
+        freeFieldElement(&coeffs[0]);
+        freeFieldElement(&coeffs[1]);
+        coeffs[0] = fieldElementFromDouble(algebra->field, value.as.cplx.real);
+        coeffs[1] = fieldElementFromDouble(algebra->field, value.as.cplx.imag);
+        *out = constructCDElement(algebra, coeffs);
+        for (size_t i = 0; i < algebra->dimension; i++) freeFieldElement(&coeffs[i]);
+        free(coeffs);
+        return cdElementIsValid(out);
+    }
+
+    // Promote base-field scalars to scalar Cayley-Dickson elements
+    FieldElement scalar = {0};
+    if (!valueToFieldElementOverField(algebra->field, value, &scalar)) return 0;
+    coeffs = calloc(algebra->dimension, sizeof(FieldElement));
+    if (!coeffs) {
+        freeFieldElement(&scalar);
+        return 0;
+    }
+    for (size_t i = 0; i < algebra->dimension; i++) coeffs[i] = zeroFieldElement(algebra->field);
+    freeFieldElement(&coeffs[0]);
+    coeffs[0] = scalar;
+    *out = constructCDElement(algebra, coeffs);
+    for (size_t i = 0; i < algebra->dimension; i++) freeFieldElement(&coeffs[i]);
+    free(coeffs);
+    return cdElementIsValid(out);
+}
+
 static Value matrixOpError(const char* msg, Value lhs, Value rhs) {
     valFree(lhs);
     valFree(rhs);
     return valError(msg);
 }
 
-static int valueToScalarElement(Value v, MatrixElement* out) {
-    return valueToMatrixElement(v, out);
+static int valueToScalarElement(Value v, FieldElement* out) {
+    return valueToFieldElement(v, out);
 }
 
 static int intSqrtExact(long long n, long long* root) {
@@ -1001,12 +1202,14 @@ static int valueToUsagiIntVector(Value v, int** outVals, int* outCount) {
     if (!vals) return 0;
 
     for (int i = 0; i < count; i++) {
-        MatrixElement elem = getEntry((Matrix*)vector, i, 0);
-        if (elem.isComplex || !doubleIsInt(elem.value.real)) {
+        FieldElement elem = getEntry((Matrix*)vector, i, 0);
+        ComplexNumber z = elemToComplex(elem);
+        freeFieldElement(&elem);
+        if (z.imag != 0.0L || !doubleIsInt(z.real)) {
             free(vals);
             return 0;
         }
-        vals[i] = (int)elem.value.real;
+        vals[i] = (int)z.real;
     }
 
     *outVals = vals;
@@ -1541,16 +1744,90 @@ static int valueIsComplexNumeric(Value v) {
     return v.kind == VAL_COMPLEX || valIsNumeric(v);
 }
 
-static Value valueFromMatrixElement(MatrixElement elem) {
-    if (elemIsNan(elem)) return valError("matrix operation returned NaN");
-    if (elem.isComplex) {
-        ComplexNumber c = elem.value.complex;
-        if (!isfinite(c.real) || !isfinite(c.imag)) return valError("matrix operation overflowed or returned a non-finite value");
-        if (c.imag == 0.0) return valDecimal(c.real);
-        return valComplex(c);
+static Value valueFromOwnedFieldElement(FieldElement elem);
+static Value mathbbValueForName(const char* name);
+
+static Value valueFromFieldElement(FieldElement elem) {
+    if (!fieldElementIsValid(&elem)) {
+        freeFieldElement(&elem);
+        return valError("matrix operation returned an invalid field element");
     }
-    if (!isfinite(elem.value.real)) return valError("matrix operation overflowed or returned a non-finite value");
-    return valDecimal(elem.value.real);
+    ComplexNumber c = elemToComplex(elem);
+    if (!isfinite(c.real) || !isfinite(c.imag)) return valueFromOwnedFieldElement(elem);
+    freeFieldElement(&elem);
+    if (c.imag == 0.0) return valDecimal(c.real);
+    return valComplex(c);
+}
+
+static Value valueFromOwnedFieldElement(FieldElement elem) {
+    Value out = valFieldElement(elem);
+    freeFieldElement(&elem);
+    return out;
+}
+
+static Value valueFromOwnedCDAlgebra(CDAlgebra algebra) {
+    Value out = valCDAlgebra(algebra);
+    freeCDAlgebra(&algebra);
+    return out;
+}
+
+static Value valueFromOwnedCDElement(CDElement element) {
+    Value out = valCDElement(element);
+    freeCDElement(&element);
+    return out;
+}
+
+static Value valueFromOwnedCDIdeal(CDIdeal ideal) {
+    Value out = valCDIdeal(ideal);
+    freeCDIdeal(&ideal);
+    return out;
+}
+
+static Value valueFromOwnedCDSubalgebra(CDSubalgebra subalgebra) {
+    Value out = valCDSubalgebra(subalgebra);
+    freeCDSubalgebra(&subalgebra);
+    return out;
+}
+
+static Value valueFromOwnedQuaternionMatrixRep(QuaternionMatrixRep rep) {
+    Value out = valQuaternionMatrixRep(rep);
+    freeQuaternionMatrixRep(&rep);
+    return out;
+}
+
+static Value standardHamiltonAlgebraValue(void) {
+    Field field = constructRRField();
+    FieldElement a = fieldElementFromInt(&field, -1);
+    FieldElement b = fieldElementFromInt(&field, -1);
+    CDAlgebra algebra = constructQuaternionAlgebra(&field, a, b);
+    freeFieldElement(&a);
+    freeFieldElement(&b);
+    return valueFromOwnedCDAlgebra(algebra);
+}
+
+static Value standardOctonionAlgebraValue(void) {
+    Field field = constructRRField();
+    FieldElement a = fieldElementFromInt(&field, -1);
+    FieldElement b = fieldElementFromInt(&field, -1);
+    FieldElement c = fieldElementFromInt(&field, -1);
+    CDAlgebra algebra = constructOctonionAlgebra(&field, a, b, c);
+    freeFieldElement(&a);
+    freeFieldElement(&b);
+    freeFieldElement(&c);
+    return valueFromOwnedCDAlgebra(algebra);
+}
+
+static Value standardHamiltonBasisValue(size_t index) {
+    Field field = constructRRField();
+    FieldElement a = fieldElementFromInt(&field, -1);
+    FieldElement b = fieldElementFromInt(&field, -1);
+    CDAlgebra algebra = constructQuaternionAlgebra(&field, a, b);
+    CDElement element = cdBasisElement(&algebra, index);
+    freeFieldElement(&a);
+    freeFieldElement(&b);
+    Value out = valueFromOwnedCDElement(element);
+    freeCDAlgebra(&algebra);
+    return out;
 }
 
 static Value matrixUnaryError(const char* msg, Value arg) {
@@ -1855,6 +2132,12 @@ static int valueSupportsDeepCopy(Value value) {
         case VAL_SYMBOL:
         case VAL_LIST:
         case VAL_NEKO_EXPR:
+        case VAL_FIELD:
+        case VAL_FIELD_ELEMENT:
+        case VAL_CD_ALGEBRA:
+        case VAL_CD_ELEMENT:
+        case VAL_CD_IDEAL:
+        case VAL_CD_SUBALGEBRA:
         case VAL_MATRIX:
         case VAL_VECTOR:
         case VAL_COMBSET:
@@ -2248,6 +2531,12 @@ Value eval(EvalContext* ctx, AstNode* node) {
             if (strcmp(node->as.ident, "i") == 0) {
                 return valComplex((ComplexNumber){ .real = 0.0, .imag = 1.0 });
             }
+            if (strcmp(node->as.ident, "j") == 0) {
+                return standardHamiltonBasisValue(2);
+            }
+            if (strcmp(node->as.ident, "k") == 0) {
+                return standardHamiltonBasisValue(3);
+            }
             // Unbound -> carry as a symbol; commands may consume it
             return valSymbol(node->as.ident);
         }
@@ -2314,6 +2603,12 @@ Value eval(EvalContext* ctx, AstNode* node) {
             if (strcmp(node->as.call.name, "while") == 0) return evalWhileCall(ctx, node);
             if (strcmp(node->as.call.name, "for") == 0) return evalForCall(ctx, node);
             if (strcmp(node->as.call.name, "def") == 0) return defineUserFunction(ctx, node);
+            if (strcmp(node->as.call.name, "mathbb") == 0) {
+                if (node->as.call.nargs != 1) return valError("\\mathbb expects one argument");
+                AstNode* arg = firstLogicalCallArg(node);
+                if (arg && arg->kind == AST_IDENT) return mathbbValueForName(arg->as.ident);
+                if (arg && arg->kind == AST_STRING) return mathbbValueForName(arg->as.ident);
+            }
 
             UserFunction* fn = lookupUserFunction(ctx, node->as.call.name);
             if (fn) return evalUserFunctionCall(ctx, fn, node);
@@ -2328,7 +2623,8 @@ Value eval(EvalContext* ctx, AstNode* node) {
                     && firstLogicalCallArg(node)->kind == AST_IDENT
                     && (strcmp(node->as.call.name, "append") == 0
                         || strcmp(node->as.call.name, "remove") == 0
-                        || strcmp(node->as.call.name, "sort") == 0)) {
+                        || strcmp(node->as.call.name, "sort") == 0
+                        || strcmp(node->as.call.name, "shuffle") == 0)) {
                 envSet(ctx->env, firstLogicalCallArg(node)->as.ident, valClone(result));
             }
             return result;
@@ -2406,14 +2702,14 @@ Value eval(EvalContext* ctx, AstNode* node) {
             size_t total = 0;
             for (size_t r = 0; r < nrows; r++) total += node->as.matrix.rowlens[r];
 
-            MatrixElement* elems = calloc(total, sizeof(MatrixElement));
+            FieldElement* elems = calloc(total, sizeof(FieldElement));
             if (!elems) return valError("failed to allocate matrix entries");
 
             size_t k = 0;
             for (size_t r = 0; r < nrows; r++) {
                 for (size_t c = 0; c < ncols; c++) {
                     Value cell = eval(ctx, node->as.matrix.flat[k]);
-                    if (!valueToMatrixElement(cell, &elems[k])) {
+                    if (!valueToFieldElement(cell, &elems[k])) {
                         char buf[160];
                         snprintf(buf, sizeof(buf),
                                  "matrix entry at row %zu, col %zu is %s; expected numeric value",
@@ -2564,6 +2860,129 @@ static Value bi_sortedCopy(EvalContext* c, Value* a, size_t n) {
     return sortListValue(a[0], "sortedCopy");
 }
 
+static Value bi_shuffle(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (a[0].kind != VAL_LIST) {
+        valFree(a[0]);
+        return valError("\\shuffle expects a List");
+    }
+    if (a[0].as.list.n > (size_t)LLONG_MAX) {
+        valFree(a[0]);
+        return valError("\\shuffle list is too large");
+    }
+
+    // Apply Fisher-Yates using HEBI's inclusive random integer primitive
+    for (size_t i = a[0].as.list.n; i > 1; i--) {
+        long long jRaw = randomInt(0, (long long)i - 1);
+        size_t j = (size_t)jRaw;
+        Value tmp = a[0].as.list.items[i - 1];
+        a[0].as.list.items[i - 1] = a[0].as.list.items[j];
+        a[0].as.list.items[j] = tmp;
+    }
+    return a[0];
+}
+
+static Value bi_randInt(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (a[0].kind != VAL_INT || a[1].kind != VAL_INT) {
+        valFree(a[0]);
+        valFree(a[1]);
+        return valError("\\randInt expects two integer bounds");
+    }
+    if (a[0].as.i > a[1].as.i) {
+        valFree(a[0]);
+        valFree(a[1]);
+        return valError("\\randInt lower bound must be <= upper bound");
+    }
+    long long out = randomInt(a[0].as.i, a[1].as.i);
+    valFree(a[0]);
+    valFree(a[1]);
+    return valInt(out);
+}
+
+static Value bi_randFrac(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    for (size_t i = 0; i < n; i++) {
+        if (a[i].kind != VAL_INT) {
+            for (size_t j = 0; j < n; j++) valFree(a[j]);
+            return valError("\\randFrac expects four integer bounds");
+        }
+    }
+    if (a[0].as.i > a[1].as.i || a[2].as.i > a[3].as.i) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\randFrac lower bounds must be <= upper bounds");
+    }
+    if (a[2].as.i == 0 && a[3].as.i == 0) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\randFrac denominator range cannot contain only zero");
+    }
+    Fraction out = randomFraction(a[0].as.i, a[1].as.i, a[2].as.i, a[3].as.i);
+    for (size_t i = 0; i < n; i++) valFree(a[i]);
+    return out.denom == 0 ? valError("\\randFrac failed") : valFraction(out);
+}
+
+static Value bi_randReal(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    long double lower;
+    long double upper;
+    if (!valueToComparableReal(a[0], &lower) || !valueToComparableReal(a[1], &upper)) {
+        valFree(a[0]);
+        valFree(a[1]);
+        return valError("\\randReal expects two real numeric bounds");
+    }
+    if (lower > upper) {
+        valFree(a[0]);
+        valFree(a[1]);
+        return valError("\\randReal lower bound must be <= upper bound");
+    }
+    long double out = randomReal(lower, upper);
+    valFree(a[0]);
+    valFree(a[1]);
+    return valDecimal(out);
+}
+
+static Value bi_randComplexComp(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    long double rlower;
+    long double rupper;
+    long double ilower;
+    long double iupper;
+    if (!valueToComparableReal(a[0], &rlower)
+            || !valueToComparableReal(a[1], &rupper)
+            || !valueToComparableReal(a[2], &ilower)
+            || !valueToComparableReal(a[3], &iupper)) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\randComplexComp expects four real numeric bounds");
+    }
+    if (rlower > rupper || ilower > iupper) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\randComplexComp lower bounds must be <= upper bounds");
+    }
+    ComplexNumber out = randomComplexComp(rlower, rupper, ilower, iupper);
+    for (size_t i = 0; i < n; i++) valFree(a[i]);
+    return valueFromComplexNumber(out);
+}
+
+static Value bi_randComplexMod(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    long double lower;
+    long double upper;
+    if (!valueToComparableReal(a[0], &lower) || !valueToComparableReal(a[1], &upper)) {
+        valFree(a[0]);
+        valFree(a[1]);
+        return valError("\\randComplexMod expects two real numeric bounds");
+    }
+    if (lower < 0.0L || lower > upper) {
+        valFree(a[0]);
+        valFree(a[1]);
+        return valError("\\randComplexMod expects 0 <= lower <= upper");
+    }
+    ComplexNumber out = randomComplexMod(lower, upper);
+    valFree(a[0]);
+    valFree(a[1]);
+    return valueFromComplexNumber(out);
+}
+
 static Value bi_if(EvalContext* c, Value* a, size_t n) {
     (void)c;
     for (size_t i = 0; i < n; i++) valFree(a[i]);
@@ -2668,10 +3087,68 @@ static Value bi_print(EvalContext* c, Value* a, size_t n) {
 
 static Value bi_index(EvalContext* c, Value* a, size_t n) {
     (void)c; (void)n;
-    if (a[0].kind != VAL_LIST || a[1].kind != VAL_INT) {
+    if (a[1].kind != VAL_INT) {
         valFree(a[0]);
         valFree(a[1]);
-        return valError("list indexing expects a List and an integer index");
+        return valError("indexing expects an integer index");
+    }
+
+    if (a[0].kind == VAL_MATRIX) {
+        Matrix* matrix = (Matrix*)a[0].as.ptr;
+        size_t row = 0;
+        size_t ncols;
+        if (!matrix || !normalizeListIndex(a[1].as.i, matrix->numRows, &row)) {
+            valFree(a[0]);
+            valFree(a[1]);
+            return valError("matrix row index out of range");
+        }
+        ncols = matrix->numCols;
+
+        // Return a row as a list so A[i][j] naturally selects the jth column
+        Value* items = calloc(ncols, sizeof(Value));
+        if (!items && ncols > 0) {
+            valFree(a[0]);
+            valFree(a[1]);
+            return valError("out of memory while indexing matrix row");
+        }
+        for (size_t col = 0; col < ncols; col++) {
+            FieldElement entry = getEntry(matrix, row, col);
+            items[col] = valueFromFieldElement(entry);
+            if (items[col].kind == VAL_ERROR) {
+                for (size_t k = 0; k < col; k++) valFree(items[k]);
+                free(items);
+                valFree(a[0]);
+                valFree(a[1]);
+                return valError("matrix entry could not be converted to a Bestiary value");
+            }
+        }
+
+        valFree(a[0]);
+        valFree(a[1]);
+        return valList(items, ncols);
+    }
+
+    if (a[0].kind == VAL_VECTOR) {
+        Vector* vector = (Vector*)a[0].as.ptr;
+        size_t at = 0;
+        if (!vector || !normalizeListIndex(a[1].as.i, vector->numRows, &at)) {
+            valFree(a[0]);
+            valFree(a[1]);
+            return valError("vector index out of range");
+        }
+
+        // Convert the selected FieldElement into the ordinary scalar value layer
+        FieldElement entry = getEntry((Matrix*)vector, at, 0);
+        Value out = valueFromFieldElement(entry);
+        valFree(a[0]);
+        valFree(a[1]);
+        return out;
+    }
+
+    if (a[0].kind != VAL_LIST) {
+        valFree(a[0]);
+        valFree(a[1]);
+        return valError("indexing expects a List, Matrix, or Vector");
     }
 
     size_t at = 0;
@@ -2778,9 +3255,139 @@ static Value numericBinop(Value a, Value b, char op) {
     return valError(buf);
 }
 
+static Value fieldElementBinop(Value lhs, Value rhs,
+                               FieldElement (*op)(FieldElement, FieldElement),
+                               const char* msg) {
+    Field* field = NULL;
+    FieldElement x = {0};
+    FieldElement y = {0};
+    FieldElement result = {0};
+    if (valueIsFieldElement(lhs)) field = valueFieldElementPtr(lhs)->field;
+    else if (valueIsFieldElement(rhs)) field = valueFieldElementPtr(rhs)->field;
+    if (!field || !valueToFieldElementOverField(field, lhs, &x)
+            || !valueToFieldElementOverField(field, rhs, &y)) {
+        freeFieldElement(&x);
+        freeFieldElement(&y);
+        valFree(lhs);
+        valFree(rhs);
+        return valError(msg);
+    }
+
+    // Run the HEBI field operation and wrap the owned result
+    result = op(x, y);
+    freeFieldElement(&x);
+    freeFieldElement(&y);
+    Value out = valueFromOwnedFieldElement(result);
+    valFree(lhs);
+    valFree(rhs);
+    return out;
+}
+
+static Value cdElementBinop(Value lhs, Value rhs,
+                            CDElement (*op)(CDElement*, CDElement*),
+                            const char* msg) {
+    CDAlgebra* algebra = NULL;
+    CDElement x = {0};
+    CDElement y = {0};
+    if (valueIsCDElement(lhs)) algebra = valueCDElementPtr(lhs)->algebra;
+    else if (valueIsCDElement(rhs)) algebra = valueCDElementPtr(rhs)->algebra;
+    if (!algebra || !valueToCDElementOverAlgebra(algebra, lhs, &x)
+            || !valueToCDElementOverAlgebra(algebra, rhs, &y)) {
+        freeCDElement(&x);
+        freeCDElement(&y);
+        valFree(lhs);
+        valFree(rhs);
+        return valError(msg);
+    }
+
+    // Run the Quaternionic operation and wrap the owned result
+    CDElement result = op(&x, &y);
+    freeCDElement(&x);
+    freeCDElement(&y);
+    Value out = valueFromOwnedCDElement(result);
+    valFree(lhs);
+    valFree(rhs);
+    return out;
+}
+
+static Value cdIdealBinop(Value lhs, Value rhs,
+                          CDIdeal (*op)(CDIdeal*, CDIdeal*),
+                          const char* msg) {
+    if (!valueIsCDIdeal(lhs) || !valueIsCDIdeal(rhs)) {
+        valFree(lhs);
+        valFree(rhs);
+        return valError(msg);
+    }
+
+    // Run the Quaternionic ideal operation and wrap the owned result
+    CDIdeal result = op(valueCDIdealPtr(lhs), valueCDIdealPtr(rhs));
+    Value out = valueFromOwnedCDIdeal(result);
+    valFree(lhs);
+    valFree(rhs);
+    return out;
+}
+
+static Value cdIdealProduct(Value lhs, Value rhs) {
+    if (valueIsCDElement(lhs) && valueIsCDIdeal(rhs)) {
+        CDIdeal result = cdIdealLeftMult(valueCDIdealPtr(rhs), valueCDElementPtr(lhs));
+        Value out = valueFromOwnedCDIdeal(result);
+        valFree(lhs);
+        valFree(rhs);
+        return out;
+    }
+    if (valueIsCDIdeal(lhs) && valueIsCDElement(rhs)) {
+        CDIdeal result = cdIdealRightMult(valueCDIdealPtr(lhs), valueCDElementPtr(rhs));
+        Value out = valueFromOwnedCDIdeal(result);
+        valFree(lhs);
+        valFree(rhs);
+        return out;
+    }
+    if (valueIsCDIdeal(lhs)) {
+        FieldElement scalar = {0};
+        if (!valueToFieldElementOverField(valueCDIdealPtr(lhs)->algebra->field, rhs, &scalar)) {
+            valFree(lhs);
+            valFree(rhs);
+            return valError("CD ideal '*' expects an ideal and a compatible scalar or CD element");
+        }
+        CDIdeal result = cdIdealScalarMult(valueCDIdealPtr(lhs), scalar);
+        freeFieldElement(&scalar);
+        Value out = valueFromOwnedCDIdeal(result);
+        valFree(lhs);
+        valFree(rhs);
+        return out;
+    }
+    if (valueIsCDIdeal(rhs)) {
+        FieldElement scalar = {0};
+        if (!valueToFieldElementOverField(valueCDIdealPtr(rhs)->algebra->field, lhs, &scalar)) {
+            valFree(lhs);
+            valFree(rhs);
+            return valError("CD ideal '*' expects an ideal and a compatible scalar or CD element");
+        }
+        CDIdeal result = cdIdealScalarMult(valueCDIdealPtr(rhs), scalar);
+        freeFieldElement(&scalar);
+        Value out = valueFromOwnedCDIdeal(result);
+        valFree(lhs);
+        valFree(rhs);
+        return out;
+    }
+    valFree(lhs);
+    valFree(rhs);
+    return valError("CD ideal '*' expects an ideal and a compatible scalar or CD element");
+}
+
 // a + b
 static Value bi_add(EvalContext* c, Value* a, size_t n) {
     (void)c; (void)n;
+    if (valueIsCDIdeal(a[0]) || valueIsCDIdeal(a[1])) {
+        return cdIdealBinop(a[0], a[1], cdIdealAdd,
+                "CD ideal '+' requires two ideals from the same Cayley-Dickson algebra");
+    }
+    if (valueIsCDElement(a[0]) || valueIsCDElement(a[1])) {
+        return cdElementBinop(a[0], a[1], cdAdd, "CD '+' requires two elements from the same Cayley-Dickson algebra");
+    }
+    if (valueIsFieldElement(a[0]) || valueIsFieldElement(a[1])) {
+        return fieldElementBinop(a[0], a[1], addFieldElements, "field '+' requires compatible field elements or scalars");
+    }
     if (valueIsIdeal(a[0]) && valueIsIdeal(a[1])) {
         Ideal* sum = addIdeals((Ideal*)a[0].as.ptr, (Ideal*)a[1].as.ptr);
         if (!sum) return vectorBinaryError("ideal '+' requires two ideals of the same ring and side", a[0], a[1]);
@@ -2832,6 +3439,16 @@ static Value bi_add(EvalContext* c, Value* a, size_t n) {
 // a - b
 static Value bi_sub(EvalContext* c, Value* a, size_t n) {
     (void)c; (void)n;
+    if (valueIsCDIdeal(a[0]) || valueIsCDIdeal(a[1])) {
+        return cdIdealBinop(a[0], a[1], cdIdealSubtract,
+                "CD ideal '-' requires two ideals from the same Cayley-Dickson algebra");
+    }
+    if (valueIsCDElement(a[0]) || valueIsCDElement(a[1])) {
+        return cdElementBinop(a[0], a[1], cdSubtract, "CD '-' requires two elements from the same Cayley-Dickson algebra");
+    }
+    if (valueIsFieldElement(a[0]) || valueIsFieldElement(a[1])) {
+        return fieldElementBinop(a[0], a[1], subtractFieldElements, "field '-' requires compatible field elements or scalars");
+    }
     if (valueIsRingElement(a[0]) && valueIsRingElement(a[1])) {
         RingElement* rhsInv = ringAddInverse((RingElement*)a[1].as.ptr);
         RingElement* diff = rhsInv ? ringAdd((RingElement*)a[0].as.ptr, rhsInv) : NULL;
@@ -2872,6 +3489,15 @@ static Value bi_sub(EvalContext* c, Value* a, size_t n) {
 // a * b
 static Value bi_mul(EvalContext* c, Value* a, size_t n) {
     (void)c; (void)n;
+    if (valueIsCDIdeal(a[0]) || valueIsCDIdeal(a[1])) {
+        return cdIdealProduct(a[0], a[1]);
+    }
+    if (valueIsCDElement(a[0]) || valueIsCDElement(a[1])) {
+        return cdElementBinop(a[0], a[1], cdMult, "CD '*' requires two elements from the same Cayley-Dickson algebra");
+    }
+    if (valueIsFieldElement(a[0]) || valueIsFieldElement(a[1])) {
+        return fieldElementBinop(a[0], a[1], multiplyFieldElements, "field '*' requires compatible field elements or scalars");
+    }
     if (valueIsIdeal(a[0]) && valueIsIdeal(a[1])) {
         Ideal* prod = multIdeals((Ideal*)a[0].as.ptr, (Ideal*)a[1].as.ptr);
         if (!prod) return vectorBinaryError("ideal '*' requires two ideals of the same ring and side", a[0], a[1]);
@@ -2940,7 +3566,7 @@ static Value bi_mul(EvalContext* c, Value* a, size_t n) {
         return wrapCombSetResult(prod, "CombSet '*' produced an unsupported empty result", a[0], a[1]);
     }
     if (valueIsVector(a[0]) && valueIsVector(a[1])) {
-        Value dot = valueFromMatrixElement(vectorDotProduct((Vector*)a[0].as.ptr, (Vector*)a[1].as.ptr));
+        Value dot = valueFromFieldElement(vectorDotProduct((Vector*)a[0].as.ptr, (Vector*)a[1].as.ptr));
         if (dot.kind == VAL_ERROR) return vectorBinaryError("vector '*' requires same dimension vectors", a[0], a[1]);
         valFree(a[0]);
         valFree(a[1]);
@@ -2961,7 +3587,7 @@ static Value bi_mul(EvalContext* c, Value* a, size_t n) {
         return valPtr(VAL_MATRIX, prod);
     }
     if (valueIsVector(a[0])) {
-        MatrixElement scalar;
+        FieldElement scalar;
         if (valueToScalarElement(a[1], &scalar)) {
             Vector* prod = scaleVector((Vector*)a[0].as.ptr, scalar);
             if (!prod) return vectorBinaryError("vector '*' failed during scalar multiplication", a[0], a[1]);
@@ -2971,7 +3597,7 @@ static Value bi_mul(EvalContext* c, Value* a, size_t n) {
         }
     }
     if (valueIsVector(a[1])) {
-        MatrixElement scalar;
+        FieldElement scalar;
         if (valueToScalarElement(a[0], &scalar)) {
             Vector* prod = scaleVector((Vector*)a[1].as.ptr, scalar);
             if (!prod) return vectorBinaryError("vector '*' failed during scalar multiplication", a[0], a[1]);
@@ -2981,7 +3607,7 @@ static Value bi_mul(EvalContext* c, Value* a, size_t n) {
         }
     }
     if (a[0].kind == VAL_MATRIX) {
-        MatrixElement scalar;
+        FieldElement scalar;
         if (valueToScalarElement(a[1], &scalar)) {
             Matrix* prod = multByConstant((Matrix*)a[0].as.ptr, scalar);
             if (!prod) return matrixOpError("matrix '*' failed during scalar multiplication", a[0], a[1]);
@@ -2991,7 +3617,7 @@ static Value bi_mul(EvalContext* c, Value* a, size_t n) {
         }
     }
     if (a[1].kind == VAL_MATRIX) {
-        MatrixElement scalar;
+        FieldElement scalar;
         if (valueToScalarElement(a[0], &scalar)) {
             Matrix* prod = multByConstant((Matrix*)a[1].as.ptr, scalar);
             if (!prod) return matrixOpError("matrix '*' failed during scalar multiplication", a[0], a[1]);
@@ -3033,7 +3659,7 @@ static Value bi_otimes(EvalContext* c, Value* a, size_t n) {
 static Value bi_cdot(EvalContext* c, Value* a, size_t n) {
     (void)c; (void)n;
     if (valueIsVector(a[0]) && valueIsVector(a[1])) {
-        Value dot = valueFromMatrixElement(vectorDotProduct((Vector*)a[0].as.ptr, (Vector*)a[1].as.ptr));
+        Value dot = valueFromFieldElement(vectorDotProduct((Vector*)a[0].as.ptr, (Vector*)a[1].as.ptr));
         if (dot.kind == VAL_ERROR) return vectorBinaryError("\\cdot requires same dimension vectors", a[0], a[1]);
         valFree(a[0]);
         valFree(a[1]);
@@ -3072,6 +3698,12 @@ static Value bi_times(EvalContext* c, Value* a, size_t n) {
 // a / b
 static Value bi_div(EvalContext* c, Value* a, size_t n) {
     (void)c; (void)n;
+    if (valueIsCDElement(a[0]) || valueIsCDElement(a[1])) {
+        return cdElementBinop(a[0], a[1], cdRightDivide, "CD '/' requires two elements from the same Cayley-Dickson algebra and an invertible divisor");
+    }
+    if (valueIsFieldElement(a[0]) || valueIsFieldElement(a[1])) {
+        return fieldElementBinop(a[0], a[1], divideFieldElements, "field '/' requires compatible field elements or scalars and an invertible divisor");
+    }
     if (valueIsGroup(a[0]) && valueIsSubgroup(a[1])) {
         Group* quot = quotientGroup((Group*)a[0].as.ptr, (SubGroup*)a[1].as.ptr);
         if (!quot) return vectorBinaryError("group '/' requires a normal subgroup of the given group", a[0], a[1]);
@@ -3115,7 +3747,18 @@ static Value bi_neg(EvalContext* c, Value* a, size_t n) {
     (void)c; (void)n;
     Value v = a[0];
     Value r;
-    if      (valueIsVector(v))       {
+    if      (valueIsCDElement(v))    {
+        CDElement* x = valueCDElementPtr(v);
+        FieldElement minusOne = fieldElementFromInt(x->algebra->field, -1);
+        CDElement neg = cdScalarMult(x, minusOne);
+        freeFieldElement(&minusOne);
+        r = valueFromOwnedCDElement(neg);
+    }
+    else if (valueIsFieldElement(v)) {
+        FieldElement neg = negateFieldElement(*valueFieldElementPtr(v));
+        r = valueFromOwnedFieldElement(neg);
+    }
+    else if (valueIsVector(v))       {
         Vector* neg = negativeVector((Vector*)v.as.ptr);
         r = neg ? valPtr(VAL_VECTOR, neg) : valError("unary '-' on invalid vector");
     }
@@ -3163,7 +3806,21 @@ static Value bi_pow(EvalContext* c, Value* a, size_t n) {
     (void)c; (void)n;
     Value b = a[0], e = a[1];
     Value r;
-    if (valueIsCombSet(b)) {
+    if (valueIsCDElement(b)) {
+        if (e.kind == VAL_INT && e.as.i == -1) {
+            CDElement inverse = cdInverse(valueCDElementPtr(b));
+            r = valueFromOwnedCDElement(inverse);
+        } else {
+            r = valError("CD '^' currently supports only exponent -1");
+        }
+    } else if (valueIsFieldElement(b)) {
+        if (e.kind == VAL_INT && e.as.i == -1) {
+            FieldElement inverse = invertFieldElement(*valueFieldElementPtr(b));
+            r = valueFromOwnedFieldElement(inverse);
+        } else {
+            r = valError("field '^' currently supports only exponent -1");
+        }
+    } else if (valueIsCombSet(b)) {
         int exponent;
         if (e.kind != VAL_INT || e.as.i < 1 || !valueToBoundedInt(e, &exponent)) {
             r = valError("CombSet '^' expects a positive integer exponent");
@@ -3263,6 +3920,849 @@ static Value bi_frac(EvalContext* c, Value* a, size_t n) {
     return r;
 }
 
+static void freeFieldElementArgs(FieldElement* elems, size_t count) {
+    if (!elems) return;
+    for (size_t i = 0; i < count; i++) freeFieldElement(&elems[i]);
+    free(elems);
+}
+
+static size_t valueArgCount(Value* args, size_t start, size_t n) {
+    if (n == start + 1 && args[start].kind == VAL_LIST) return args[start].as.list.n;
+    return n > start ? n - start : 0;
+}
+
+static Value valueArgAt(Value* args, size_t start, size_t index) {
+    if (args[start].kind == VAL_LIST) return args[start].as.list.items[index];
+    return args[start + index];
+}
+
+static int collectFieldElementArgs(Field* field, Value* args, size_t start, size_t n,
+                                   size_t expected, FieldElement** out) {
+    size_t count = valueArgCount(args, start, n);
+    FieldElement* elems;
+    if (expected != SIZE_MAX && count != expected) return 0;
+    elems = calloc(count, sizeof(FieldElement));
+    if (!elems && count > 0) return 0;
+
+    // Convert each value into the requested field
+    for (size_t i = 0; i < count; i++) {
+        if (!valueToFieldElementOverField(field, valueArgAt(args, start, i), &elems[i])) {
+            freeFieldElementArgs(elems, i + 1);
+            return 0;
+        }
+    }
+    *out = elems;
+    return 1;
+}
+
+static void freeCDElementArgs(CDElement* elems, size_t count) {
+    if (!elems) return;
+    for (size_t i = 0; i < count; i++) freeCDElement(&elems[i]);
+    free(elems);
+}
+
+static int collectCDElementArgs(Value* args, size_t start, size_t n, CDElement** out,
+                                size_t* outCount) {
+    size_t count = valueArgCount(args, start, n);
+    CDElement* elems;
+    CDAlgebra* algebra;
+    if (!out || !outCount || count == 0) return 0;
+
+    // Use the first generator's algebra to coerce every generator consistently
+    Value first = valueArgAt(args, start, 0);
+    if (!valueIsCDElement(first)) return 0;
+    algebra = valueCDElementPtr(first)->algebra;
+    elems = calloc(count, sizeof(CDElement));
+    if (!elems) return 0;
+    for (size_t i = 0; i < count; i++) {
+        if (!valueToCDElementOverAlgebra(algebra, valueArgAt(args, start, i), &elems[i])) {
+            freeCDElementArgs(elems, i + 1);
+            return 0;
+        }
+    }
+    *out = elems;
+    *outCount = count;
+    return 1;
+}
+
+static Value bi_QQ(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)a; (void)n;
+    Field field = constructQQField();
+    return valField(field);
+}
+
+static Value bi_RR(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)a; (void)n;
+    Field field = constructRRField();
+    return valField(field);
+}
+
+static Value bi_CC(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)a; (void)n;
+    Field field = constructCCField();
+    return valField(field);
+}
+
+static Value bi_HH(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)a; (void)n;
+    return standardHamiltonAlgebraValue();
+}
+
+static Value bi_OO(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)a; (void)n;
+    return standardOctonionAlgebraValue();
+}
+
+static Value mathbbValueForName(const char* name) {
+    if (!name || !*name) return valError("\\mathbb expects Q, R, C, H, or O");
+    if (strcmp(name, "Q") == 0) {
+        Field field = constructQQField();
+        return valField(field);
+    }
+    if (strcmp(name, "R") == 0) {
+        Field field = constructRRField();
+        return valField(field);
+    }
+    if (strcmp(name, "C") == 0) {
+        Field field = constructCCField();
+        return valField(field);
+    }
+    if (strcmp(name, "H") == 0) return standardHamiltonAlgebraValue();
+    if (strcmp(name, "O") == 0) return standardOctonionAlgebraValue();
+    return valError("\\mathbb only supports Q, R, C, H, and O");
+}
+
+static Value bi_mathbb(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    const char* name = NULL;
+    if (a[0].kind == VAL_SYMBOL || a[0].kind == VAL_STRING) name = a[0].as.str;
+    Value out = mathbbValueForName(name);
+    valFree(a[0]);
+    return out;
+}
+
+static Value bi_GF(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (a[0].kind != VAL_INT) {
+        valFree(a[0]);
+        return valError("\\GF expects one prime integer");
+    }
+    Field field = constructFFField(a[0].as.i, 1, NULL);
+    valFree(a[0]);
+    Value out = valField(field);
+    freeField(&field);
+    return out;
+}
+
+static Value bi_fieldElement(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    Field* field = valueFieldPtr(a[0]);
+    FieldElement element = {0};
+    if (!field || !valueToFieldElementOverField(field, a[1], &element)) {
+        valFree(a[0]);
+        valFree(a[1]);
+        return valError("\\fieldElement expects a Field and a compatible scalar");
+    }
+    Value out = valueFromOwnedFieldElement(element);
+    valFree(a[0]);
+    valFree(a[1]);
+    return out;
+}
+
+static Value bi_zero(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    Field* field = valueFieldPtr(a[0]);
+    if (!field) {
+        valFree(a[0]);
+        return valError("\\zero expects one Field");
+    }
+    FieldElement zero = zeroFieldElement(field);
+    Value out = valueFromOwnedFieldElement(zero);
+    valFree(a[0]);
+    return out;
+}
+
+static Value bi_one(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    Field* field = valueFieldPtr(a[0]);
+    if (!field) {
+        valFree(a[0]);
+        return valError("\\one expects one Field");
+    }
+    FieldElement one = oneFieldElement(field);
+    Value out = valueFromOwnedFieldElement(one);
+    valFree(a[0]);
+    return out;
+}
+
+static Value bi_quadraticExtension(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    Field* base = valueFieldPtr(a[0]);
+    FieldElement radicand = {0};
+    if (!base || !valueToFieldElementOverField(base, a[1], &radicand)) {
+        valFree(a[0]);
+        valFree(a[1]);
+        return valError("\\quadraticExtension expects a Field and a compatible radicand");
+    }
+    Field extension = constructQuadraticExtensionField(base, radicand, "u");
+    freeFieldElement(&radicand);
+    Value out = valField(extension);
+    valFree(a[0]);
+    valFree(a[1]);
+    freeField(&extension);
+    return out;
+}
+
+static Value bi_cdAlgebra(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    if (n < 2 || !valueIsField(a[0])) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\cdAlgebra expects a Field followed by one or more parameters");
+    }
+    Field* field = valueFieldPtr(a[0]);
+    size_t degree = valueArgCount(a, 1, n);
+    FieldElement* params = NULL;
+    if (!collectFieldElementArgs(field, a, 1, n, SIZE_MAX, &params) || degree == 0) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        freeFieldElementArgs(params, degree);
+        return valError("\\cdAlgebra expects parameters compatible with its Field");
+    }
+    CDAlgebra algebra = constructCDAlgebra(field, degree, params);
+    freeFieldElementArgs(params, degree);
+    Value out = valueFromOwnedCDAlgebra(algebra);
+    for (size_t i = 0; i < n; i++) valFree(a[i]);
+    return out;
+}
+
+static Value bi_cdElement(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    if (n < 2 || !valueIsCDAlgebra(a[0])) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\cdElement expects a Cayley-Dickson algebra followed by coefficients");
+    }
+    CDAlgebra* algebra = valueCDAlgebraPtr(a[0]);
+    FieldElement* coeffs = NULL;
+    if (!collectFieldElementArgs(algebra->field, a, 1, n, algebra->dimension, &coeffs)) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\cdElement expects exactly dim(A) coefficients compatible with A");
+    }
+    CDElement element = constructCDElement(algebra, coeffs);
+    Value out = valueFromOwnedCDElement(element);
+    freeFieldElementArgs(coeffs, algebra->dimension);
+    for (size_t i = 0; i < n; i++) valFree(a[i]);
+    return out;
+}
+
+static Value bi_quaternionAlgebra(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (!valueIsField(a[0])) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\quaternionAlgebra expects a Field and two parameters");
+    }
+    Field* field = valueFieldPtr(a[0]);
+    FieldElement params[2] = {0};
+    if (!valueToFieldElementOverField(field, a[1], &params[0])
+            || !valueToFieldElementOverField(field, a[2], &params[1])) {
+        freeFieldElement(&params[0]);
+        freeFieldElement(&params[1]);
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\quaternionAlgebra expects parameters compatible with its Field");
+    }
+    QuaternionAlgebra algebra = constructQuaternionAlgebra(field, params[0], params[1]);
+    freeFieldElement(&params[0]);
+    freeFieldElement(&params[1]);
+    Value out = valueFromOwnedCDAlgebra(algebra);
+    for (size_t i = 0; i < n; i++) valFree(a[i]);
+    return out;
+}
+
+static Value bi_quaternion(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    if (n < 5 || !valueIsCDAlgebra(a[0]) || valueCDAlgebraPtr(a[0])->degree != 2) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\quaternion expects a QuaternionAlgebra and four coefficients");
+    }
+    CDAlgebra* algebra = valueCDAlgebraPtr(a[0]);
+    FieldElement* coeffs = NULL;
+    if (!collectFieldElementArgs(algebra->field, a, 1, n, 4, &coeffs)) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\quaternion expects four coefficients compatible with its algebra");
+    }
+    Quaternion q = constructQuaternion(algebra, coeffs[0], coeffs[1], coeffs[2], coeffs[3]);
+    Value out = valueFromOwnedCDElement(q);
+    freeFieldElementArgs(coeffs, 4);
+    for (size_t i = 0; i < n; i++) valFree(a[i]);
+    return out;
+}
+
+static Value bi_octonionAlgebra(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (!valueIsField(a[0])) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\octonionAlgebra expects a Field and three parameters");
+    }
+    Field* field = valueFieldPtr(a[0]);
+    FieldElement params[3] = {0};
+    for (size_t i = 0; i < 3; i++) {
+        if (!valueToFieldElementOverField(field, a[i + 1], &params[i])) {
+            for (size_t j = 0; j <= i; j++) freeFieldElement(&params[j]);
+            for (size_t j = 0; j < n; j++) valFree(a[j]);
+            return valError("\\octonionAlgebra expects parameters compatible with its Field");
+        }
+    }
+    OctonionAlgebra algebra = constructOctonionAlgebra(field, params[0], params[1], params[2]);
+    for (size_t i = 0; i < 3; i++) freeFieldElement(&params[i]);
+    Value out = valueFromOwnedCDAlgebra(algebra);
+    for (size_t i = 0; i < n; i++) valFree(a[i]);
+    return out;
+}
+
+static Value bi_octonion(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    if (n < 9 || !valueIsCDAlgebra(a[0]) || valueCDAlgebraPtr(a[0])->degree != 3) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\octonion expects an OctonionAlgebra and eight coefficients");
+    }
+    CDAlgebra* algebra = valueCDAlgebraPtr(a[0]);
+    FieldElement* coeffs = NULL;
+    if (!collectFieldElementArgs(algebra->field, a, 1, n, 8, &coeffs)) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\octonion expects eight coefficients compatible with its algebra");
+    }
+    Octonion x = constructOctonion(algebra, coeffs[0], coeffs[1], coeffs[2], coeffs[3],
+            coeffs[4], coeffs[5], coeffs[6], coeffs[7]);
+    Value out = valueFromOwnedCDElement(x);
+    freeFieldElementArgs(coeffs, 8);
+    for (size_t i = 0; i < n; i++) valFree(a[i]);
+    return out;
+}
+
+static Value bi_cdAdd_cmd(EvalContext* c, Value* a, size_t n) {
+    return bi_add(c, a, n);
+}
+
+static Value bi_cdSub_cmd(EvalContext* c, Value* a, size_t n) {
+    return bi_sub(c, a, n);
+}
+
+static Value bi_cdMul_cmd(EvalContext* c, Value* a, size_t n) {
+    return bi_mul(c, a, n);
+}
+
+static Value bi_cdConj_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (!valueIsCDElement(a[0])) {
+        valFree(a[0]);
+        return valError("\\cdConj expects one Cayley-Dickson element");
+    }
+    CDElement conjugate = cdConjugate(valueCDElementPtr(a[0]));
+    Value out = valueFromOwnedCDElement(conjugate);
+    valFree(a[0]);
+    return out;
+}
+
+static Value bi_cdNorm_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (!valueIsCDElement(a[0])) {
+        valFree(a[0]);
+        return valError("\\cdNorm expects one Cayley-Dickson element");
+    }
+    FieldElement norm = cdNorm(valueCDElementPtr(a[0]));
+    Value out = valueFromOwnedFieldElement(norm);
+    valFree(a[0]);
+    return out;
+}
+
+static Value bi_cdInv_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (!valueIsCDElement(a[0])) {
+        valFree(a[0]);
+        return valError("\\cdInv expects one Cayley-Dickson element");
+    }
+    CDElement inverse = cdInverse(valueCDElementPtr(a[0]));
+    Value out = valueFromOwnedCDElement(inverse);
+    valFree(a[0]);
+    return out;
+}
+
+static Value bi_cdCommutator_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    return cdElementBinop(a[0], a[1], cdCommutator,
+            "\\cdCommutator expects two elements from the same Cayley-Dickson algebra");
+}
+
+static Value bi_cdAssociator_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (!valueIsCDElement(a[0]) || !valueIsCDElement(a[1]) || !valueIsCDElement(a[2])
+            || !sameCDAlgebra(valueCDElementPtr(a[0]), valueCDElementPtr(a[1]))
+            || !sameCDAlgebra(valueCDElementPtr(a[0]), valueCDElementPtr(a[2]))) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\cdAssociator expects three elements from the same Cayley-Dickson algebra");
+    }
+    CDElement associator = cdAssociator(valueCDElementPtr(a[0]), valueCDElementPtr(a[1]),
+            valueCDElementPtr(a[2]));
+    Value out = valueFromOwnedCDElement(associator);
+    for (size_t i = 0; i < n; i++) valFree(a[i]);
+    return out;
+}
+
+static Value bi_cdDivide_cmd(EvalContext* c, Value* a, size_t n,
+                             CDElement (*divide)(CDElement*, CDElement*),
+                             const char* name) {
+    (void)c; (void)n;
+    CDAlgebra* algebra = valueCDAlgebraPtr(a[0]);
+    CDElement* x = valueCDElementPtr(a[1]);
+    CDElement* y = valueCDElementPtr(a[2]);
+    if (!algebra || !x || !y || !cdAlgebraEq(algebra, x->algebra)
+            || !cdAlgebraEq(algebra, y->algebra)) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        char buf[160];
+        snprintf(buf, sizeof(buf), "\\%s expects an algebra and two elements from that algebra", name);
+        return valError(buf);
+    }
+    CDElement quotient = divide(x, y);
+    Value out = valueFromOwnedCDElement(quotient);
+    for (size_t i = 0; i < n; i++) valFree(a[i]);
+    return out;
+}
+
+static Value bi_cdLeftDivide_cmd(EvalContext* c, Value* a, size_t n) {
+    return bi_cdDivide_cmd(c, a, n, cdLeftDivide, "cdLeftDivide");
+}
+
+static Value bi_cdRightDivide_cmd(EvalContext* c, Value* a, size_t n) {
+    return bi_cdDivide_cmd(c, a, n, cdRightDivide, "cdRightDivide");
+}
+
+static Value bi_cdLeftMatrix_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (!valueIsCDElement(a[0])) {
+        valFree(a[0]);
+        return valError("\\cdLeftMatrix expects one Cayley-Dickson element");
+    }
+    Matrix* matrix = cdLeftMultMatrix(valueCDElementPtr(a[0]));
+    valFree(a[0]);
+    return matrix ? valPtr(VAL_MATRIX, matrix) : valError("\\cdLeftMatrix failed");
+}
+
+static Value bi_cdRightMatrix_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (!valueIsCDElement(a[0])) {
+        valFree(a[0]);
+        return valError("\\cdRightMatrix expects one Cayley-Dickson element");
+    }
+    Matrix* matrix = cdRightMultMatrix(valueCDElementPtr(a[0]));
+    valFree(a[0]);
+    return matrix ? valPtr(VAL_MATRIX, matrix) : valError("\\cdRightMatrix failed");
+}
+
+static Value listFromOwnedCDElementArray(CDElement* elements, size_t count) {
+    Value* items = calloc(count, sizeof(Value));
+    if (!items && count > 0) {
+        freeCDElementArgs(elements, count);
+        return valError("failed to allocate Cayley-Dickson element list");
+    }
+    for (size_t i = 0; i < count; i++) items[i] = valCDElement(elements[i]);
+    freeCDElementArgs(elements, count);
+    return valList(items, count);
+}
+
+static Value bi_cdToVector_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (!valueIsCDElement(a[0])) {
+        valFree(a[0]);
+        return valError("\\cdToVector expects one Cayley-Dickson element");
+    }
+    Vector* vector = cdToVector(valueCDElementPtr(a[0]));
+    valFree(a[0]);
+    return vector ? valPtr(VAL_VECTOR, vector) : valError("\\cdToVector failed");
+}
+
+static Value bi_cdFromVector_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (!valueIsCDAlgebra(a[0]) || (a[1].kind != VAL_VECTOR && a[1].kind != VAL_MATRIX)) {
+        valFree(a[0]);
+        valFree(a[1]);
+        return valError("\\cdFromVector expects a Cayley-Dickson algebra and a vector");
+    }
+    CDElement element = cdFromVector(valueCDAlgebraPtr(a[0]), (Vector*)a[1].as.ptr);
+    Value out = valueFromOwnedCDElement(element);
+    valFree(a[0]);
+    valFree(a[1]);
+    return out;
+}
+
+static Value bi_cdSpanBasis_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    CDElement* elements = NULL;
+    CDElement* basis = NULL;
+    size_t count = 0;
+    size_t basisCount = 0;
+    if (!collectCDElementArgs(a, 0, n, &elements, &count)) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\cdSpanBasis expects Cayley-Dickson elements or a list of them");
+    }
+    basis = cdSpanBasis(elements, count, &basisCount);
+    freeCDElementArgs(elements, count);
+    Value out = listFromOwnedCDElementArray(basis, basisCount);
+    for (size_t i = 0; i < n; i++) valFree(a[i]);
+    return out;
+}
+
+static Value bi_cdInSpan_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    CDElement* basis = NULL;
+    size_t count = 0;
+    bool result;
+    if (n < 2 || !valueIsCDElement(a[0])
+            || !collectCDElementArgs(a, 1, n, &basis, &count)) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\cdInSpan expects one Cayley-Dickson element and span generators");
+    }
+    result = cdElementInSpan(valueCDElementPtr(a[0]), basis, count);
+    freeCDElementArgs(basis, count);
+    for (size_t i = 0; i < n; i++) valFree(a[i]);
+    return valBool(result);
+}
+
+static Value bi_cdBasisElement_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (!valueIsCDAlgebra(a[0]) || a[1].kind != VAL_INT || a[1].as.i < 0) {
+        valFree(a[0]);
+        valFree(a[1]);
+        return valError("\\cdBasisElement expects a Cayley-Dickson algebra and a nonnegative index");
+    }
+    CDAlgebra* algebra = valueCDAlgebraPtr(a[0]);
+    size_t index = (size_t)a[1].as.i;
+    if (index >= algebra->dimension) {
+        valFree(a[0]);
+        valFree(a[1]);
+        return valError("\\cdBasisElement index is outside the standard basis");
+    }
+    CDElement element = cdBasisElement(algebra, index);
+    Value out = valueFromOwnedCDElement(element);
+    valFree(a[0]);
+    valFree(a[1]);
+    return out;
+}
+
+static Value bi_cdStandardBasis_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (!valueIsCDAlgebra(a[0])) {
+        valFree(a[0]);
+        return valError("\\cdStandardBasis expects one Cayley-Dickson algebra");
+    }
+    CDAlgebra* algebra = valueCDAlgebraPtr(a[0]);
+    CDElement* basis = cdStandardBasis(algebra);
+    Value out = listFromOwnedCDElementArray(basis, algebra->dimension);
+    valFree(a[0]);
+    return out;
+}
+
+static Value bi_quaternionMatrixRep_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (!valueIsCDAlgebra(a[0]) || valueCDAlgebraPtr(a[0])->degree != 2) {
+        valFree(a[0]);
+        return valError("\\quaternionMatrixRep expects one Quaternion algebra");
+    }
+    QuaternionMatrixRep rep = constructQuaternionMatrixRep(valueCDAlgebraPtr(a[0]));
+    Value out = valueFromOwnedQuaternionMatrixRep(rep);
+    valFree(a[0]);
+    return out;
+}
+
+static Value bi_quaternionToMatrix_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    if (n < 1 || n > 2 || !valueIsCDElement(a[0])
+            || valueCDElementPtr(a[0])->algebra->degree != 2) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\quaternionToMatrix expects a Quaternion element and optional matrix representation");
+    }
+    QuaternionMatrixRep tempRep = {0};
+    QuaternionMatrixRep* rep = NULL;
+    if (n == 2) {
+        rep = valueQuaternionMatrixRepPtr(a[1]);
+        if (!rep) {
+            for (size_t i = 0; i < n; i++) valFree(a[i]);
+            return valError("\\quaternionToMatrix optional second argument must be a Quaternion matrix representation");
+        }
+    } else {
+        tempRep = constructQuaternionMatrixRep(valueCDElementPtr(a[0])->algebra);
+        rep = &tempRep;
+    }
+    Matrix* matrix = quaternionToMatrix(valueCDElementPtr(a[0]), rep);
+    if (n == 1) freeQuaternionMatrixRep(&tempRep);
+    for (size_t i = 0; i < n; i++) valFree(a[i]);
+    return matrix ? valPtr(VAL_MATRIX, matrix) : valError("\\quaternionToMatrix failed");
+}
+
+static Value bi_cdIdealWithType_cmd(EvalContext* c, Value* a, size_t n,
+                                    IdealType type, const char* name) {
+    (void)c;
+    CDElement* generators = NULL;
+    size_t count = 0;
+    if (!collectCDElementArgs(a, 0, n, &generators, &count)) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        char buf[160];
+        snprintf(buf, sizeof(buf), "\\%s expects one or more Cayley-Dickson element generators", name);
+        return valError(buf);
+    }
+    CDIdeal ideal;
+    if (type == LEFT_IDEAL) ideal = cdConstructLeftIdeal(generators, count);
+    else if (type == RIGHT_IDEAL) ideal = cdConstructRightIdeal(generators, count);
+    else ideal = cdConstructTwoSidedIdeal(generators, count);
+    freeCDElementArgs(generators, count);
+    Value out = valueFromOwnedCDIdeal(ideal);
+    for (size_t i = 0; i < n; i++) valFree(a[i]);
+    return out;
+}
+
+static Value bi_cdLeftIdeal_cmd(EvalContext* c, Value* a, size_t n) {
+    return bi_cdIdealWithType_cmd(c, a, n, LEFT_IDEAL, "cdLeftIdeal");
+}
+
+static Value bi_cdRightIdeal_cmd(EvalContext* c, Value* a, size_t n) {
+    return bi_cdIdealWithType_cmd(c, a, n, RIGHT_IDEAL, "cdRightIdeal");
+}
+
+static Value bi_cdTwoSidedIdeal_cmd(EvalContext* c, Value* a, size_t n) {
+    return bi_cdIdealWithType_cmd(c, a, n, TWO_SIDED_IDEAL, "cdTwoSidedIdeal");
+}
+
+static Value bi_cdSubalgebra_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    CDElement* generators = NULL;
+    size_t count = 0;
+    if (!collectCDElementArgs(a, 0, n, &generators, &count)) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\cdSubalgebra expects one or more Cayley-Dickson element generators");
+    }
+    CDSubalgebra subalgebra = cdConstructSubalgebra(generators, count);
+    freeCDElementArgs(generators, count);
+    Value out = valueFromOwnedCDSubalgebra(subalgebra);
+    for (size_t i = 0; i < n; i++) valFree(a[i]);
+    return out;
+}
+
+static Value bi_cdCommutatorMatrix_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (!valueIsCDElement(a[0])) {
+        valFree(a[0]);
+        return valError("\\cdCommutatorMatrix expects one Cayley-Dickson element");
+    }
+    Matrix* matrix = cdCommutatorMatrix(valueCDElementPtr(a[0]));
+    valFree(a[0]);
+    return matrix ? valPtr(VAL_MATRIX, matrix) : valError("\\cdCommutatorMatrix failed");
+}
+
+static Value bi_cdAssociatorMatrix_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (!valueIsCDElement(a[0]) || !valueIsCDElement(a[1])
+            || !sameCDAlgebra(valueCDElementPtr(a[0]), valueCDElementPtr(a[1]))) {
+        valFree(a[0]);
+        valFree(a[1]);
+        return valError("\\cdAssociatorMatrix expects two elements from the same Cayley-Dickson algebra");
+    }
+    Matrix* matrix = cdAssociatorMatrix(valueCDElementPtr(a[0]), valueCDElementPtr(a[1]));
+    valFree(a[0]);
+    valFree(a[1]);
+    return matrix ? valPtr(VAL_MATRIX, matrix) : valError("\\cdAssociatorMatrix failed");
+}
+
+static Value bi_cdAnnihilator_cmd(Value* a, size_t n, IdealType type) {
+    if (!valueIsCDElement(a[0])) {
+        valFree(a[0]);
+        return valError(type == LEFT_IDEAL
+                ? "\\cdLeftAnnihilator expects one Cayley-Dickson element"
+                : "\\cdRightAnnihilator expects one Cayley-Dickson element");
+    }
+    size_t count = 0;
+    CDElement* basis = type == LEFT_IDEAL
+        ? cdLeftAnnihilator(valueCDElementPtr(a[0]), &count)
+        : cdRightAnnihilator(valueCDElementPtr(a[0]), &count);
+    CDIdeal ideal = {
+        .algebra = valueCDElementPtr(a[0])->algebra,
+        .basis = basis,
+        .count = count,
+        .type = type
+    };
+    Value out;
+    if (cdIdealIsValid(&ideal)) {
+        out = valueFromOwnedCDIdeal(ideal);
+    } else {
+        freeCDElementArgs(basis, count);
+        out = valError("CD annihilator computation failed");
+    }
+    valFree(a[0]);
+    (void)n;
+    return out;
+}
+
+static Value bi_cdLeftAnnihilator_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    return bi_cdAnnihilator_cmd(a, n, LEFT_IDEAL);
+}
+
+static Value bi_cdRightAnnihilator_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    return bi_cdAnnihilator_cmd(a, n, RIGHT_IDEAL);
+}
+
+static Value bi_center_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (!valueIsCDAlgebra(a[0])) {
+        valFree(a[0]);
+        return valError("\\center expects one Cayley-Dickson algebra");
+    }
+    size_t count = 0;
+    CDElement* basis = cdCenter(valueCDAlgebraPtr(a[0]), &count);
+    CDSubalgebra subalgebra = {
+        .cdAlgebra = valueCDAlgebraPtr(a[0]),
+        .basis = basis,
+        .count = count
+    };
+    Value out;
+    if (cdSubalgebraIsValid(&subalgebra)) {
+        out = valueFromOwnedCDSubalgebra(subalgebra);
+    } else {
+        freeCDElementArgs(basis, count);
+        out = valError("\\center failed");
+    }
+    valFree(a[0]);
+    return out;
+}
+
+static Value bi_nucleus_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (!valueIsCDAlgebra(a[0])) {
+        valFree(a[0]);
+        return valError("\\nucleus expects one Cayley-Dickson algebra");
+    }
+    size_t count = 0;
+    CDElement* basis = cdNucleus(valueCDAlgebraPtr(a[0]), &count);
+    CDSubalgebra subalgebra = {
+        .cdAlgebra = valueCDAlgebraPtr(a[0]),
+        .basis = basis,
+        .count = count
+    };
+    Value out;
+    if (cdSubalgebraIsValid(&subalgebra)) {
+        out = valueFromOwnedCDSubalgebra(subalgebra);
+    } else {
+        freeCDElementArgs(basis, count);
+        out = valError("\\nucleus failed");
+    }
+    valFree(a[0]);
+    return out;
+}
+
+static Value bi_commutator_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (valueIsCDElement(a[0]) || valueIsCDElement(a[1])) {
+        return cdElementBinop(a[0], a[1], cdCommutator,
+                "\\commutator expects compatible Cayley-Dickson elements");
+    }
+    if (valueIsGroupElement(a[0]) && valueIsGroupElement(a[1])) {
+        GroupElement* out = groupCommutator((GroupElement*)a[0].as.ptr, (GroupElement*)a[1].as.ptr);
+        if (!out) return vectorBinaryError("\\commutator requires two elements from the same group", a[0], a[1]);
+        valFree(a[0]);
+        valFree(a[1]);
+        return valPtr(VAL_GROUP_ELEMENT, out);
+    }
+    if (valueIsRingElement(a[0]) && valueIsRingElement(a[1])) {
+        RingElement* out = ringCommutator((RingElement*)a[0].as.ptr, (RingElement*)a[1].as.ptr);
+        if (!out) return vectorBinaryError("\\commutator requires two elements from the same ring", a[0], a[1]);
+        valFree(a[0]);
+        valFree(a[1]);
+        return valPtr(VAL_RING_ELEMENT, out);
+    }
+    return vectorBinaryError("\\commutator expects two CD, group, or ring elements", a[0], a[1]);
+}
+
+static Value bi_associator_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    if (valueIsCDElement(a[0]) || valueIsCDElement(a[1]) || valueIsCDElement(a[2])) {
+        CDAlgebra* algebra = NULL;
+        CDElement x = {0}, y = {0}, z = {0};
+        for (size_t i = 0; i < 3; i++) {
+            if (valueIsCDElement(a[i])) {
+                algebra = valueCDElementPtr(a[i])->algebra;
+                break;
+            }
+        }
+        if (!algebra || !valueToCDElementOverAlgebra(algebra, a[0], &x)
+                || !valueToCDElementOverAlgebra(algebra, a[1], &y)
+                || !valueToCDElementOverAlgebra(algebra, a[2], &z)) {
+            freeCDElement(&x);
+            freeCDElement(&y);
+            freeCDElement(&z);
+            for (size_t i = 0; i < n; i++) valFree(a[i]);
+            return valError("\\associator expects compatible Cayley-Dickson elements");
+        }
+        CDElement result = cdAssociator(&x, &y, &z);
+        freeCDElement(&x);
+        freeCDElement(&y);
+        freeCDElement(&z);
+        Value out = valueFromOwnedCDElement(result);
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return out;
+    }
+    if (valueIsGroupElement(a[0]) && valueIsGroupElement(a[1]) && valueIsGroupElement(a[2])) {
+        GroupElement* out = groupAssociator((GroupElement*)a[0].as.ptr, (GroupElement*)a[1].as.ptr,
+                (GroupElement*)a[2].as.ptr);
+        if (!out) {
+            for (size_t i = 0; i < n; i++) valFree(a[i]);
+            return valError("\\associator requires three elements from the same group");
+        }
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valPtr(VAL_GROUP_ELEMENT, out);
+    }
+    if (valueIsRingElement(a[0]) && valueIsRingElement(a[1]) && valueIsRingElement(a[2])) {
+        RingElement* out = ringAssociator((RingElement*)a[0].as.ptr, (RingElement*)a[1].as.ptr,
+                (RingElement*)a[2].as.ptr);
+        if (!out) {
+            for (size_t i = 0; i < n; i++) valFree(a[i]);
+            return valError("\\associator requires three elements from the same ring");
+        }
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valPtr(VAL_RING_ELEMENT, out);
+    }
+    for (size_t i = 0; i < n; i++) valFree(a[i]);
+    return valError("\\associator expects three CD, group, or ring elements");
+}
+
+static Value bi_isLeftZeroDivisor_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (valueIsCDElement(a[0])) {
+        bool result = cdIsLeftZeroDivisor(valueCDElementPtr(a[0]));
+        valFree(a[0]);
+        return valBool(result);
+    }
+    if (valueIsRingElement(a[0])) {
+        bool result = isZeroDivisor((RingElement*)a[0].as.ptr);
+        valFree(a[0]);
+        return valBool(result);
+    }
+    valFree(a[0]);
+    return valError("\\isLeftZeroDivisor expects a CD element or ring element");
+}
+
+static Value bi_isRightZeroDivisor_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (valueIsCDElement(a[0])) {
+        bool result = cdIsRightZeroDivisor(valueCDElementPtr(a[0]));
+        valFree(a[0]);
+        return valBool(result);
+    }
+    if (valueIsRingElement(a[0])) {
+        bool result = isZeroDivisor((RingElement*)a[0].as.ptr);
+        valFree(a[0]);
+        return valBool(result);
+    }
+    valFree(a[0]);
+    return valError("\\isRightZeroDivisor expects a CD element or ring element");
+}
+
 static Value bi_sqrt(EvalContext* c, Value* a, size_t n) {
     (void)c; (void)n;
     Value x = a[0];
@@ -3326,9 +4826,15 @@ static Value bi_cbrt_cmd(EvalContext* c, Value* a, size_t n) {
 
 static Value bi_conj_cmd(EvalContext* c, Value* a, size_t n) {
     (void)c; (void)n;
+    if (valueIsCDElement(a[0])) {
+        CDElement out = cdConjugate(valueCDElementPtr(a[0]));
+        Value value = valueFromOwnedCDElement(out);
+        valFree(a[0]);
+        return value;
+    }
     if (!valueIsComplexNumeric(a[0])) {
         valFree(a[0]);
-        return valError("\\conj expects one numeric or complex argument");
+        return valError("\\conj expects one numeric, complex, or Cayley-Dickson argument");
     }
     ComplexNumber out = complexConj(valueToComplex(a[0]));
     valFree(a[0]);
@@ -3338,6 +4844,12 @@ static Value bi_conj_cmd(EvalContext* c, Value* a, size_t n) {
 static Value bi_abs_cmd(EvalContext* c, Value* a, size_t n) {
     (void)c; (void)n;
     Value x = a[0];
+    if (valueIsCDElement(x)) {
+        FieldElement norm = cdNorm(valueCDElementPtr(x));
+        Value out = valueFromOwnedFieldElement(norm);
+        valFree(x);
+        return out;
+    }
     if (x.kind == VAL_INT) {
         long long value;
         if (!checkedAbsLongLong(x.as.i, &value)) {
@@ -3371,7 +4883,7 @@ static Value bi_abs_cmd(EvalContext* c, Value* a, size_t n) {
         return nekoUnaryResult(x, nekoAbs, &handled);
     }
     valFree(x);
-    return valError("\\abs expects a numeric, complex, or symbolic argument");
+    return valError("\\abs expects a numeric, complex, Cayley-Dickson, or symbolic argument");
 }
 
 static Value bi_arg_cmd(EvalContext* c, Value* a, size_t n) {
@@ -4883,6 +6395,111 @@ static Value polynomialRootsRealThenComplexList(const long double* coeffs, int d
     return valList(items, (size_t)total);
 }
 
+static Value complexRootsList(ComplexNumber* roots, size_t count) {
+    Value* items = calloc(count, sizeof(Value));
+    if (!items && count > 0) return valError("out of memory while building root list");
+    for (size_t i = 0; i < count; i++) items[i] = valueFromComplexNumber(roots[i]);
+    return valList(items, count);
+}
+
+static void freeCommandArgs(Value* a, size_t n) {
+    for (size_t i = 0; i < n; i++) valFree(a[i]);
+}
+
+static int solverCoeffFromValue(Value value, ComplexNumber* out) {
+    if (!out || !valueIsComplexNumeric(value)) return 0;
+    *out = valueToComplex(value);
+    return isfinite(out->real) && isfinite(out->imag);
+}
+
+static int solverCoeffsFromList(Value value, size_t expected, ComplexNumber* coeffs) {
+    if (value.kind != VAL_LIST || value.as.list.n != expected) return 0;
+    for (size_t i = 0; i < expected; i++) {
+        if (!solverCoeffFromValue(value.as.list.items[i], &coeffs[i])) return 0;
+    }
+    return 1;
+}
+
+static int solverCoeffsFromExpression(Value value, size_t expected, ComplexNumber* coeffs) {
+    NekoExpr* expr = NULL;
+    if (value.kind == VAL_STRING) {
+        expr = parsePolynomialLiteral(value.as.str);
+        if (!expr) expr = parseNekoExprLiteral(value.as.str);
+    } else {
+        expr = valueToNekoExpr(value);
+    }
+    if (!expr) return 0;
+
+    long double realCoeffs[NEKO_REPL_MAX_POLY_DEG + 1] = {0};
+    int degree = 0;
+    int ok = extractPolyCoeffs(expr, "x", realCoeffs, &degree);
+    nekoFreeExpr(expr);
+    if (!ok || degree > (int)expected - 1) return 0;
+
+    for (size_t i = 0; i < expected; i++) coeffs[i] = (ComplexNumber){0.0L, 0.0L};
+    for (int power = 0; power <= degree; power++) {
+        coeffs[expected - 1 - (size_t)power] = (ComplexNumber){realCoeffs[power], 0.0L};
+    }
+    return 1;
+}
+
+static int solverCoeffsFromArgs(Value* a, size_t n, size_t expected, ComplexNumber* coeffs) {
+    if (n == expected) {
+        for (size_t i = 0; i < expected; i++) {
+            if (!solverCoeffFromValue(a[i], &coeffs[i])) return 0;
+        }
+        return 1;
+    }
+
+    if (n == 1 && a[0].kind == VAL_LIST) return solverCoeffsFromList(a[0], expected, coeffs);
+    if (n == 1) return solverCoeffsFromExpression(a[0], expected, coeffs);
+    return 0;
+}
+
+static Value solvePolynomialCommand(Value* a, size_t n, size_t expected, const char* commandName) {
+    if (n == 0) return valInt(0);
+    if (n == 1 && (a[0].kind == VAL_NONE || valueIsEmptyCombSet(a[0]))) {
+        valFree(a[0]);
+        return valInt(0);
+    }
+
+    ComplexNumber coeffs[5] = {0};
+    if (!solverCoeffsFromArgs(a, n, expected, coeffs)) {
+        freeCommandArgs(a, n);
+        char buf[160];
+        snprintf(buf, sizeof(buf), "\\%s expects a polynomial in x or %zu numeric coefficients", commandName, expected);
+        return valError(buf);
+    }
+
+    ComplexNumber roots[4] = {0};
+    size_t count = 0;
+    if (expected == 3) {
+        count = solveQuadratic(coeffs[0], coeffs[1], coeffs[2], roots);
+    } else if (expected == 4) {
+        count = solveCubic(coeffs[0], coeffs[1], coeffs[2], coeffs[3], roots);
+    } else {
+        count = solveQuartic(coeffs[0], coeffs[1], coeffs[2], coeffs[3], coeffs[4], roots);
+    }
+
+    freeCommandArgs(a, n);
+    return complexRootsList(roots, count);
+}
+
+static Value bi_solveQuadratic(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    return solvePolynomialCommand(a, n, 3, "solveQuadratic");
+}
+
+static Value bi_solveCubic(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    return solvePolynomialCommand(a, n, 4, "solveCubic");
+}
+
+static Value bi_solveQuartic(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    return solvePolynomialCommand(a, n, 5, "solveQuartic");
+}
+
 static int complexIsNearZero(long double x) {
     return fabsl(x) < 1e-10;
 }
@@ -5856,7 +7473,7 @@ static Value bi_det(EvalContext* c, Value* a, size_t n) {
     if (a[0].kind != VAL_MATRIX) return matrixUnaryError("\\det expects one matrix", a[0]);
     Matrix* matrix = (Matrix*)a[0].as.ptr;
     if (!isSquare(matrix)) return matrixUnaryError("\\det expects a square matrix", a[0]);
-    Value r = valueFromMatrixElement(determinant(matrix));
+    Value r = valueFromFieldElement(determinant(matrix));
     valFree(a[0]);
     return r;
 }
@@ -5894,6 +7511,18 @@ static Value bi_adjoint(EvalContext* c, Value* a, size_t n) {
 
 static Value bi_inverse(EvalContext* c, Value* a, size_t n) {
     (void)c; (void)n;
+    if (valueIsCDElement(a[0])) {
+        CDElement inverse = cdInverse(valueCDElementPtr(a[0]));
+        Value out = valueFromOwnedCDElement(inverse);
+        valFree(a[0]);
+        return out;
+    }
+    if (valueIsFieldElement(a[0])) {
+        FieldElement inverse = invertFieldElement(*valueFieldElementPtr(a[0]));
+        Value out = valueFromOwnedFieldElement(inverse);
+        valFree(a[0]);
+        return out;
+    }
     if (a[0].kind != VAL_MATRIX) return matrixUnaryError("\\inverse expects one matrix", a[0]);
     Matrix* out = invertMatrix((Matrix*)a[0].as.ptr);
     if (!out) return matrixUnaryError("\\inverse expects an invertible square matrix", a[0]);
@@ -6018,6 +7647,30 @@ static Value bi_eq(EvalContext* c, Value* a, size_t n) {
         case VAL_NEKO_EXPR:
             result = nekoExprEquivalent((NekoExpr*)a[0].as.ptr, (NekoExpr*)a[1].as.ptr);
             break;
+        case VAL_FIELD:
+            result = fieldEq(&((ValueField*)a[0].as.ptr)->field,
+                             &((ValueField*)a[1].as.ptr)->field);
+            break;
+        case VAL_FIELD_ELEMENT:
+            result = eqFieldElements(((ValueFieldElement*)a[0].as.ptr)->element,
+                                     ((ValueFieldElement*)a[1].as.ptr)->element);
+            break;
+        case VAL_CD_ALGEBRA:
+            result = cdAlgebraEq(&((ValueCDAlgebra*)a[0].as.ptr)->algebra,
+                                 &((ValueCDAlgebra*)a[1].as.ptr)->algebra);
+            break;
+        case VAL_CD_ELEMENT:
+            result = cdEq(&((ValueCDElement*)a[0].as.ptr)->element,
+                          &((ValueCDElement*)a[1].as.ptr)->element);
+            break;
+        case VAL_CD_IDEAL:
+            result = cdIdealEq(&((ValueCDIdeal*)a[0].as.ptr)->ideal,
+                               &((ValueCDIdeal*)a[1].as.ptr)->ideal);
+            break;
+        case VAL_CD_SUBALGEBRA:
+            result = cdSubalgebraEq(&((ValueCDSubalgebra*)a[0].as.ptr)->subalgebra,
+                                    &((ValueCDSubalgebra*)a[1].as.ptr)->subalgebra);
+            break;
         case VAL_MATRIX:
         case VAL_VECTOR:  result = matrixComp((Matrix*)a[0].as.ptr, (Matrix*)a[1].as.ptr, 1e-9); break;
         case VAL_COMBSET: result = compCombset((CombSet*)a[0].as.ptr, (CombSet*)a[1].as.ptr); break;
@@ -6124,19 +7777,19 @@ static bool valueEqualsBorrowed(Value lhs, Value rhs) {
 static Value bi_rank(EvalContext* c, Value* a, size_t n) {
     (void)c; (void)n;
     if (a[0].kind != VAL_MATRIX) return matrixUnaryError("\\rank expects one matrix", a[0]);
-    int result = rank((Matrix*)a[0].as.ptr);
-    if (result < 0) return matrixUnaryError("\\rank failed", a[0]);
+    size_t result = rank((Matrix*)a[0].as.ptr);
+    if (result == (size_t)-1 || result > LLONG_MAX) return matrixUnaryError("\\rank failed", a[0]);
     valFree(a[0]);
-    return valInt(result);
+    return valInt((long long)result);
 }
 
 static Value bi_nullity(EvalContext* c, Value* a, size_t n) {
     (void)c; (void)n;
     if (a[0].kind != VAL_MATRIX) return matrixUnaryError("\\nullity expects one matrix", a[0]);
-    int result = nullity((Matrix*)a[0].as.ptr);
-    if (result < 0) return matrixUnaryError("\\nullity failed", a[0]);
+    size_t result = nullity((Matrix*)a[0].as.ptr);
+    if (result == (size_t)-1 || result > LLONG_MAX) return matrixUnaryError("\\nullity failed", a[0]);
     valFree(a[0]);
-    return valInt(result);
+    return valInt((long long)result);
 }
 
 static Value bi_trace(EvalContext* c, Value* a, size_t n) {
@@ -6144,7 +7797,7 @@ static Value bi_trace(EvalContext* c, Value* a, size_t n) {
     if (a[0].kind != VAL_MATRIX) return matrixUnaryError("\\trace expects one matrix", a[0]);
     Matrix* matrix = (Matrix*)a[0].as.ptr;
     if (!isSquare(matrix)) return matrixUnaryError("\\trace expects a square matrix", a[0]);
-    Value result = valueFromMatrixElement(trace(matrix));
+    Value result = valueFromFieldElement(trace(matrix));
     valFree(a[0]);
     return result;
 }
@@ -6162,7 +7815,7 @@ static Value bi_eigenvalues(EvalContext* c, Value* a, size_t n) {
     if (a[0].kind != VAL_MATRIX) return matrixUnaryError("\\eigenvalues expects one matrix", a[0]);
 
     Matrix* matrix = (Matrix*)a[0].as.ptr;
-    MatrixElement* eigs = NULL;
+    FieldElement* eigs = NULL;
     size_t count = (size_t)matrix->numRows;
 
     if (matrix->numRows != matrix->numCols) {
@@ -6178,7 +7831,7 @@ static Value bi_eigenvalues(EvalContext* c, Value* a, size_t n) {
         free(eigs);
         return matrixUnaryError("\\eigenvalues failed to allocate result list", a[0]);
     }
-    for (size_t i = 0; i < count; i++) items[i] = valueFromMatrixElement(eigs[i]);
+    for (size_t i = 0; i < count; i++) items[i] = valueFromFieldElement(eigs[i]);
 
     free(eigs);
     valFree(a[0]);
@@ -6253,12 +7906,18 @@ static Value bi_cardinality(EvalContext* c, Value* a, size_t n) {
 }
 
 static Value bi_bars(EvalContext* c, Value* a, size_t n) {
+    if (valueIsCDElement(a[0])) {
+        FieldElement norm = cdNorm(valueCDElementPtr(a[0]));
+        Value out = valueFromOwnedFieldElement(norm);
+        valFree(a[0]);
+        return out;
+    }
     if (valueIsVector(a[0])) return bi_l2norm(c, a, n);
     if (valueIsCombSet(a[0]) || valueIsGroup(a[0]) || valueIsRing(a[0])) {
         return bi_cardinality(c, a, n);
     }
     valFree(a[0]);
-    return valError("|.| expects one Vector, CombSet, Group, or Ring");
+    return valError("|.| expects one Vector, CombSet, Group, Ring, or Cayley-Dickson element");
 }
 
 static Value bi_isSubset(EvalContext* c, Value* a, size_t n) {
@@ -6277,14 +7936,48 @@ static Value bi_isSubset(EvalContext* c, Value* a, size_t n) {
 
 static Value bi_cap(EvalContext* c, Value* a, size_t n) {
     (void)c; (void)n;
+    if (valueIsCDIdeal(a[0]) && valueIsCDIdeal(a[1])) {
+        CDIdeal intersection = cdIntersectIdeals(valueCDIdealPtr(a[0]), valueCDIdealPtr(a[1]));
+        Value out = valueFromOwnedCDIdeal(intersection);
+        valFree(a[0]);
+        valFree(a[1]);
+        return out;
+    }
+    if (valueIsCDSubalgebra(a[0]) && valueIsCDSubalgebra(a[1])) {
+        CDSubalgebra intersection = cdIntersectSubalgebras(valueCDSubalgebraPtr(a[0]),
+                valueCDSubalgebraPtr(a[1]));
+        Value out = valueFromOwnedCDSubalgebra(intersection);
+        valFree(a[0]);
+        valFree(a[1]);
+        return out;
+    }
     if (!valueIsCombSet(a[0]) || !valueIsCombSet(a[1])) {
-        return combsetBinaryError("\\cap expects two CombSets", a[0], a[1]);
+        return combsetBinaryError("\\cap expects two CombSets, CD ideals, or CD subalgebras", a[0], a[1]);
     }
     if (valueIsEmptyCombSet(a[0]) || valueIsEmptyCombSet(a[1])) {
         return wrapCombSetResult(NULL, NULL, a[0], a[1]);
     }
     CombSet* out = setIntersection((CombSet*)a[0].as.ptr, (CombSet*)a[1].as.ptr);
     return wrapCombSetResult(out, NULL, a[0], a[1]);
+}
+
+static Value bi_in_cmd(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (valueIsCDElement(a[0]) && valueIsCDIdeal(a[1])) {
+        bool result = cdIdealContains(valueCDIdealPtr(a[1]), valueCDElementPtr(a[0]));
+        valFree(a[0]);
+        valFree(a[1]);
+        return valBool(result);
+    }
+    if (valueIsCDElement(a[0]) && valueIsCDSubalgebra(a[1])) {
+        bool result = cdSubalgebraContains(valueCDSubalgebraPtr(a[1]), valueCDElementPtr(a[0]));
+        valFree(a[0]);
+        valFree(a[1]);
+        return valBool(result);
+    }
+    valFree(a[0]);
+    valFree(a[1]);
+    return valError("\\in expects a CD element and a CD ideal or subalgebra");
 }
 
 static Value bi_cup(EvalContext* c, Value* a, size_t n) {
@@ -9060,7 +10753,7 @@ static Value bi_charIP_cmd(EvalContext* c, Value* a, size_t n) {
     }
 
     if (valueIsVector(a[0]) && valueIsVector(a[1])) {
-        Value dot = valueFromMatrixElement(vectorDotProduct((Vector*)a[0].as.ptr, (Vector*)a[1].as.ptr));
+        Value dot = valueFromFieldElement(vectorDotProduct((Vector*)a[0].as.ptr, (Vector*)a[1].as.ptr));
         if (dot.kind == VAL_ERROR) return vectorBinaryError("\\charIP expects same dimension vectors", a[0], a[1]);
         valFree(a[0]);
         valFree(a[1]);
@@ -9681,11 +11374,20 @@ static Value bi_subring_cmd(EvalContext* c, Value* a, size_t n) {
 
 static Value bi_leftIdeal_cmd(EvalContext* c, Value* a, size_t n) {
     (void)c; (void)n;
+    CDElement* generators = NULL;
+    size_t generatorCount = 0;
+    if (collectCDElementArgs(a, 0, n, &generators, &generatorCount)) {
+        CDIdeal ideal = cdConstructLeftIdeal(generators, generatorCount);
+        freeCDElementArgs(generators, generatorCount);
+        Value out = valueFromOwnedCDIdeal(ideal);
+        valFree(a[0]);
+        return out;
+    }
     int* indices = NULL;
     int count = 0;
     if (!collectRingElementIndices(a[0], NULL, &indices, &count)) {
         valFree(a[0]);
-        return valError("\\leftIdeal expects a ring element or a list of ring elements");
+        return valError("\\leftIdeal expects ring elements or Cayley-Dickson element generators");
     }
     Ring* ring = NULL;
     if (a[0].kind == VAL_LIST) ring = ((RingElement*)a[0].as.list.items[0].as.ptr)->ring;
@@ -9699,11 +11401,20 @@ static Value bi_leftIdeal_cmd(EvalContext* c, Value* a, size_t n) {
 
 static Value bi_rightIdeal_cmd(EvalContext* c, Value* a, size_t n) {
     (void)c; (void)n;
+    CDElement* generators = NULL;
+    size_t generatorCount = 0;
+    if (collectCDElementArgs(a, 0, n, &generators, &generatorCount)) {
+        CDIdeal ideal = cdConstructRightIdeal(generators, generatorCount);
+        freeCDElementArgs(generators, generatorCount);
+        Value out = valueFromOwnedCDIdeal(ideal);
+        valFree(a[0]);
+        return out;
+    }
     int* indices = NULL;
     int count = 0;
     if (!collectRingElementIndices(a[0], NULL, &indices, &count)) {
         valFree(a[0]);
-        return valError("\\rightIdeal expects a ring element or a list of ring elements");
+        return valError("\\rightIdeal expects ring elements or Cayley-Dickson element generators");
     }
     Ring* ring = NULL;
     if (a[0].kind == VAL_LIST) ring = ((RingElement*)a[0].as.list.items[0].as.ptr)->ring;
@@ -9925,6 +11636,15 @@ void registerBuiltins(void) {
     registerCommand("list", -1, bi_list);
     registerCommand("sort", 1, bi_sort);
     registerCommand("sortedCopy", 1, bi_sortedCopy);
+    registerCommand("shuffle", 1, bi_shuffle);
+    registerCommand("randInt", 2, bi_randInt);
+    registerCommand("randFrac", 4, bi_randFrac);
+    registerCommand("randReal", 2, bi_randReal);
+    registerCommand("randComplexComp", 4, bi_randComplexComp);
+    registerCommand("randComplexMod", 2, bi_randComplexMod);
+    registerCommand("solveQuadratic", -1, bi_solveQuadratic);
+    registerCommand("solveCubic", -1, bi_solveCubic);
+    registerCommand("solveQuartic", -1, bi_solveQuartic);
     registerCommand("if", -1, bi_if);
     registerCommand("while", 2, bi_while);
     registerCommand("for", 2, bi_for);
@@ -9947,6 +11667,8 @@ void registerBuiltins(void) {
     registerCommand("times",  2, bi_times);
     registerCommand("otimes",  2, bi_otimes);
     registerCommand("cap",  2, bi_cap);
+    registerCommand("intersect",  2, bi_cap);
+    registerCommand("in",  2, bi_in_cmd);
     registerCommand("cup",  2, bi_cup);
     registerCommand("rangeSet", -1, bi_rangeSet);
     registerCommand("AP", -1, bi_AP);
@@ -9959,6 +11681,59 @@ void registerBuiltins(void) {
     registerCommand("e",  0, bi_e);
     registerCommand("phi",  0, bi_phi);
     registerCommand("frac",  2, bi_frac);
+    registerCommand("QQ",  0, bi_QQ);
+    registerCommand("RR",  0, bi_RR);
+    registerCommand("CC",  0, bi_CC);
+    registerCommand("HH",  0, bi_HH);
+    registerCommand("OO",  0, bi_OO);
+    registerCommand("mathbb",  1, bi_mathbb);
+    registerCommand("GF",  1, bi_GF);
+    registerCommand("fieldElement",  2, bi_fieldElement);
+    registerCommand("zero",  1, bi_zero);
+    registerCommand("one",  1, bi_one);
+    registerCommand("quadraticExtension",  2, bi_quadraticExtension);
+    registerCommand("quadExt",  2, bi_quadraticExtension);
+    registerCommand("cdAlgebra", -1, bi_cdAlgebra);
+    registerCommand("cdElement", -1, bi_cdElement);
+    registerCommand("quaternionAlgebra",  3, bi_quaternionAlgebra);
+    registerCommand("quaternion", -1, bi_quaternion);
+    registerCommand("octonionAlgebra",  4, bi_octonionAlgebra);
+    registerCommand("octonion", -1, bi_octonion);
+    registerCommand("cdAdd",  2, bi_cdAdd_cmd);
+    registerCommand("cdSub",  2, bi_cdSub_cmd);
+    registerCommand("cdMul",  2, bi_cdMul_cmd);
+    registerCommand("cdConj",  1, bi_cdConj_cmd);
+    registerCommand("cdNorm",  1, bi_cdNorm_cmd);
+    registerCommand("cdInv",  1, bi_cdInv_cmd);
+    registerCommand("cdCommutator",  2, bi_cdCommutator_cmd);
+    registerCommand("cdAssociator",  3, bi_cdAssociator_cmd);
+    registerCommand("cdLeftDivide",  3, bi_cdLeftDivide_cmd);
+    registerCommand("cdRightDivide",  3, bi_cdRightDivide_cmd);
+    registerCommand("cdLeftMatrix",  1, bi_cdLeftMatrix_cmd);
+    registerCommand("cdRightMatrix",  1, bi_cdRightMatrix_cmd);
+    registerCommand("cdToVector",  1, bi_cdToVector_cmd);
+    registerCommand("cdFromVector",  2, bi_cdFromVector_cmd);
+    registerCommand("cdSpanBasis", -1, bi_cdSpanBasis_cmd);
+    registerCommand("cdInSpan", -1, bi_cdInSpan_cmd);
+    registerCommand("cdBasisElement",  2, bi_cdBasisElement_cmd);
+    registerCommand("cdStandardBasis",  1, bi_cdStandardBasis_cmd);
+    registerCommand("quaternionMatrixRep",  1, bi_quaternionMatrixRep_cmd);
+    registerCommand("quaternionToMatrix", -1, bi_quaternionToMatrix_cmd);
+    registerCommand("cdLeftIdeal", -1, bi_cdLeftIdeal_cmd);
+    registerCommand("cdLeftideal", -1, bi_cdLeftIdeal_cmd);
+    registerCommand("cdRightIdeal", -1, bi_cdRightIdeal_cmd);
+    registerCommand("cdTwoSidedIdeal", -1, bi_cdTwoSidedIdeal_cmd);
+    registerCommand("cdSubalgebra", -1, bi_cdSubalgebra_cmd);
+    registerCommand("cdCommutatorMatrix",  1, bi_cdCommutatorMatrix_cmd);
+    registerCommand("cdAssociatorMatrix",  2, bi_cdAssociatorMatrix_cmd);
+    registerCommand("cdLeftAnnihilator",  1, bi_cdLeftAnnihilator_cmd);
+    registerCommand("cdRightAnnihilator",  1, bi_cdRightAnnihilator_cmd);
+    registerCommand("center",  1, bi_center_cmd);
+    registerCommand("nucleus",  1, bi_nucleus_cmd);
+    registerCommand("commutator",  2, bi_commutator_cmd);
+    registerCommand("associator",  3, bi_associator_cmd);
+    registerCommand("isLeftZeroDivisor",  1, bi_isLeftZeroDivisor_cmd);
+    registerCommand("isRightZeroDivisor",  1, bi_isRightZeroDivisor_cmd);
     registerCommand("sqrt",  1, bi_sqrt);
     registerCommand("cbrt",  1, bi_cbrt_cmd);
     registerCommand("conj",  1, bi_conj_cmd);

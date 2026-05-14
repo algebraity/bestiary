@@ -101,6 +101,7 @@ static const InfixCmd INFIX_CMDS[] = {
     { "otimes", 20, 0 },
     { "cup",    20, 0 },
     { "cap",    20, 0 },
+    { "in",      5, 0 },
     { "oplus",  10, 0 },
     { NULL,      0, 0 }
 };
@@ -340,9 +341,11 @@ static AstNode* parsePrimary(P* p) {
 static AstNode* parsePipeGroup(P* p) {
     Token* pipe = peek(p);
     if (!match(p, TOK_PIPE)) { parseError(p, "expected '|'"); return NULL; }
+    int doublePipe = match(p, TOK_PIPE);
     NodeBuf args; nbInit(&args);
     nbPush(&args, parseExpr(p));
     if (!match(p, TOK_PIPE)) { parseError(p, "expected closing '|' "); }
+    if (doublePipe && !match(p, TOK_PIPE)) { parseError(p, "expected closing '||' "); }
     return astCall("__bars__", args.data, args.len, pipe->line, pipe->col);
 }
 

@@ -14,6 +14,7 @@ build/bin/$platform/test_hebi$exeext
 build/bin/$platform/test_kuma$exeext
 build/bin/$platform/test_ookami$exeext
 build/bin/$platform/test_sokko$exeext
+build/bin/$platform/test_quaternionic$exeext
 build/bin/$platform/test_usagi$exeext
 build/bin/$platform/test_poni$exeext
 build/bin/$platform/test_tora$exeext

@@ -1,9 +1,11 @@
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include "ast.h"
 #include "eval.h"
+#include "hebi.h"
 #include "kuma.h"
 #include "lexer.h"
 #include "parser.h"
@@ -51,6 +53,23 @@ static int envList(EvalContext* ctx, const char* name, Value* out) {
     if (!envGet(ctx->env, name, &value) || value.kind != VAL_LIST) return 0;
     if (out) *out = value;
     return 1;
+}
+
+static int valueIsRoot(Value value, long double real, long double imag) {
+    if (value.kind == VAL_COMPLEX) {
+        return fabsl(value.as.cplx.real - real) <= 1e-8L
+            && fabsl(value.as.cplx.imag - imag) <= 1e-8L;
+    }
+    if (imag != 0.0L || !valIsNumeric(value)) return 0;
+    return fabsl(valToDouble(value) - real) <= 1e-8L;
+}
+
+static int listHasRoot(Value list, long double real, long double imag) {
+    if (list.kind != VAL_LIST) return 0;
+    for (size_t i = 0; i < list.as.list.n; i++) {
+        if (valueIsRoot(list.as.list.items[i], real, imag)) return 1;
+    }
+    return 0;
 }
 
 static int printValueToBuffer(Value value, char* buf, size_t bufSize) {
@@ -169,6 +188,62 @@ static void testListIndexing(void) {
 
     out = evalLine(ctx, "x[3]");
     CHECK(out.kind == VAL_ERROR, "out-of-range index fails");
+    valFree(out);
+
+    evalCtxFree(ctx);
+}
+
+static void testMatrixIndexing(void) {
+    SECTION("matrix indexing");
+    EvalContext* ctx = evalCtxNew();
+
+    Value out = evalLine(ctx, "A = [1,2;3,4]");
+    CHECK(out.kind == VAL_NONE, "matrix assignment returns none");
+    valFree(out);
+
+    out = evalLine(ctx, "A[0]");
+    CHECK(out.kind == VAL_LIST && out.as.list.n == 2, "matrix row indexing returns row list");
+    CHECK(out.kind == VAL_LIST && out.as.list.items[0].kind == VAL_DECIMAL
+          && fabsl(out.as.list.items[0].as.d - 1.0L) < 1e-12L,
+          "matrix row list contains first row");
+    valFree(out);
+
+    out = evalLine(ctx, "A[0][1]");
+    CHECK(out.kind == VAL_DECIMAL && fabsl(out.as.d - 2.0L) < 1e-12L,
+          "matrix double index reads row 0 column 1");
+    valFree(out);
+
+    out = evalLine(ctx, "A[1][0]");
+    CHECK(out.kind == VAL_DECIMAL && fabsl(out.as.d - 3.0L) < 1e-12L,
+          "matrix double index reads row 1 column 0");
+    valFree(out);
+
+    out = evalLine(ctx, "A[-1][-1]");
+    CHECK(out.kind == VAL_DECIMAL && fabsl(out.as.d - 4.0L) < 1e-12L,
+          "matrix double index supports negative indices");
+    valFree(out);
+
+    out = evalLine(ctx, "A[2]");
+    CHECK(out.kind == VAL_ERROR, "matrix row out-of-range index fails");
+    valFree(out);
+
+    out = evalLine(ctx, "A[0][2]");
+    CHECK(out.kind == VAL_ERROR, "matrix column out-of-range index fails");
+    valFree(out);
+
+    out = evalLine(ctx, "v = [7,8,9]");
+    CHECK(out.kind == VAL_NONE, "vector assignment returns none");
+    valFree(out);
+
+    out = evalLine(ctx, "v[1]");
+    CHECK(out.kind == VAL_DECIMAL && fabsl(out.as.d - 8.0L) < 1e-12L,
+          "vector indexing returns element");
+    valFree(out);
+
+    out = evalLine(ctx, "C = [1,i;3,4]; C[0][1]");
+    CHECK(out.kind == VAL_COMPLEX && fabsl(out.as.cplx.real) < 1e-12L
+          && fabsl(out.as.cplx.imag - 1.0L) < 1e-12L,
+          "matrix indexing preserves complex entries");
     valFree(out);
 
     evalCtxFree(ctx);
@@ -330,6 +405,141 @@ static void testKumaValueOwnership(void) {
           "random variable clone remains usable");
     valFree(copiedRv);
     valFree(wrappedRv);
+}
+
+static void testRandomCommands(void) {
+    SECTION("random commands");
+    EvalContext* ctx = evalCtxNew();
+
+    seedPRG(1001ULL);
+    Value out = evalLine(ctx, "\\randInt{-3}{3}");
+    CHECK(out.kind == VAL_INT && out.as.i >= -3 && out.as.i <= 3, "randInt returns integer in range");
+    long long firstInt = out.kind == VAL_INT ? out.as.i : 0;
+    valFree(out);
+
+    seedPRG(1001ULL);
+    out = evalLine(ctx, "\\randInt{-3}{3}");
+    CHECK(out.kind == VAL_INT && out.as.i == firstInt, "randInt is deterministic after seed");
+    valFree(out);
+
+    out = evalLine(ctx, "\\randInt{4}{3}");
+    CHECK(out.kind == VAL_ERROR, "randInt rejects reversed bounds");
+    valFree(out);
+
+    seedPRG(2002ULL);
+    out = evalLine(ctx, "\\randFrac{-4}{4}{2}{5}");
+    long double fracValue = out.kind == VAL_FRACTION
+        ? (long double)out.as.frac.num / (long double)out.as.frac.denom
+        : NAN;
+    CHECK(out.kind == VAL_FRACTION && fracValue >= -2.0L && fracValue <= 2.0L, "randFrac returns fraction in numeric range");
+    valFree(out);
+
+    out = evalLine(ctx, "\\randFrac{1}{2}{0}{0}");
+    CHECK(out.kind == VAL_ERROR, "randFrac rejects zero-only denominator range");
+    valFree(out);
+
+    seedPRG(3003ULL);
+    out = evalLine(ctx, "\\randReal{-1}{2}");
+    CHECK(out.kind == VAL_DECIMAL && out.as.d >= -1.0L && out.as.d <= 2.0L, "randReal returns decimal in range");
+    valFree(out);
+
+    out = evalLine(ctx, "\\randReal{2}{-1}");
+    CHECK(out.kind == VAL_ERROR, "randReal rejects reversed bounds");
+    valFree(out);
+
+    seedPRG(4004ULL);
+    out = evalLine(ctx, "\\randComplexComp{-1}{1}{2}{4}");
+    CHECK(out.kind == VAL_COMPLEX
+          && out.as.cplx.real >= -1.0L && out.as.cplx.real <= 1.0L
+          && out.as.cplx.imag >= 2.0L && out.as.cplx.imag <= 4.0L,
+          "randComplexComp returns complex in component ranges");
+    valFree(out);
+
+    out = evalLine(ctx, "\\randComplexComp{1}{-1}{0}{1}");
+    CHECK(out.kind == VAL_ERROR, "randComplexComp rejects reversed component bounds");
+    valFree(out);
+
+    seedPRG(5005ULL);
+    out = evalLine(ctx, "\\randComplexMod{2}{5}");
+    long double mod = out.kind == VAL_COMPLEX ? complexAbs(out.as.cplx) : NAN;
+    CHECK(out.kind == VAL_COMPLEX && mod >= 2.0L && mod <= 5.0L, "randComplexMod returns complex in modulus range");
+    valFree(out);
+
+    out = evalLine(ctx, "\\randComplexMod{-1}{1}");
+    CHECK(out.kind == VAL_ERROR, "randComplexMod rejects negative lower modulus");
+    valFree(out);
+
+    seedPRG(6006ULL);
+    out = evalLine(ctx, "xs = \\list{1,2,3,4}; \\shuffle{xs}");
+    CHECK(out.kind == VAL_LIST && out.as.list.n == 4, "shuffle returns list");
+    bool seen[5] = {0};
+    if (out.kind == VAL_LIST && out.as.list.n == 4) {
+        for (size_t i = 0; i < out.as.list.n; i++) {
+            if (out.as.list.items[i].kind == VAL_INT
+                    && out.as.list.items[i].as.i >= 1
+                    && out.as.list.items[i].as.i <= 4) {
+                seen[out.as.list.items[i].as.i] = true;
+            }
+        }
+    }
+    CHECK(seen[1] && seen[2] && seen[3] && seen[4], "shuffle preserves list elements");
+    valFree(out);
+
+    Value list;
+    CHECK(envList(ctx, "xs", &list), "shuffle keeps list in env");
+    CHECK(list.as.list.n == 4, "shuffle mutates named list");
+
+    out = evalLine(ctx, "\\shuffle{7}");
+    CHECK(out.kind == VAL_ERROR, "shuffle rejects non-list input");
+    valFree(out);
+
+    evalCtxFree(ctx);
+}
+
+static void testPolynomialSolveCommands(void) {
+    SECTION("polynomial solve commands");
+    EvalContext* ctx = evalCtxNew();
+
+    Value out = evalLine(ctx, "\\solveQuadratic{1,-3,2}");
+    CHECK(out.kind == VAL_LIST && out.as.list.n == 2
+          && listHasRoot(out, 1.0L, 0.0L)
+          && listHasRoot(out, 2.0L, 0.0L),
+          "solveQuadratic accepts coefficient arguments");
+    valFree(out);
+
+    out = evalLine(ctx, "\\solveQuadratic{\"x^2 + 1\"}");
+    CHECK(out.kind == VAL_LIST && out.as.list.n == 2
+          && listHasRoot(out, 0.0L, -1.0L)
+          && listHasRoot(out, 0.0L, 1.0L),
+          "solveQuadratic accepts polynomial strings");
+    valFree(out);
+
+    out = evalLine(ctx, "\\solveCubic{\\list{1,-6,11,-6}}");
+    CHECK(out.kind == VAL_LIST && out.as.list.n == 3
+          && listHasRoot(out, 1.0L, 0.0L)
+          && listHasRoot(out, 2.0L, 0.0L)
+          && listHasRoot(out, 3.0L, 0.0L),
+          "solveCubic accepts coefficient lists");
+    valFree(out);
+
+    out = evalLine(ctx, "\\solveQuartic{1,0,-5,0,4}");
+    CHECK(out.kind == VAL_LIST && out.as.list.n == 4
+          && listHasRoot(out, -2.0L, 0.0L)
+          && listHasRoot(out, -1.0L, 0.0L)
+          && listHasRoot(out, 1.0L, 0.0L)
+          && listHasRoot(out, 2.0L, 0.0L),
+          "solveQuartic accepts zero middle coefficients");
+    valFree(out);
+
+    out = evalLine(ctx, "\\solveQuartic{}");
+    CHECK(out.kind == VAL_INT && out.as.i == 0, "empty polynomial solver input returns zero");
+    valFree(out);
+
+    out = evalLine(ctx, "\\solveCubic{1,\"bad\",2,3}");
+    CHECK(out.kind == VAL_ERROR, "polynomial solvers reject nonnumeric coefficients");
+    valFree(out);
+
+    evalCtxFree(ctx);
 }
 
 static void testListPrinting(void) {
@@ -600,6 +810,222 @@ static void testCompoundAssignments(void) {
     evalCtxFree(ctx);
 }
 
+#if 0
+static void testQuaternionicCommands(void) {
+    SECTION("Quaternionic commands");
+    EvalContext* ctx = evalCtxNew();
+    char buf[256];
+
+    Value out = evalLine(ctx, "F = \\QQ; a = \\fieldElement{F}{1}; b = \\fieldElement{F}{\\frac{1}{2}}; a + b");
+    CHECK(out.kind == VAL_FIELD_ELEMENT && printValueToBuffer(out, buf, sizeof(buf))
+          && strcmp(buf, "3/2") == 0,
+          "field elements add through operator dispatch");
+    valFree(out);
+
+    out = evalLine(ctx, "\\mathbb{Q} == \\QQ");
+    CHECK(out.kind == VAL_BOOL && out.as.b, "mathbb Q maps to QQ");
+    valFree(out);
+
+    out = evalLine(ctx, "\\mathbb{R} == \\RR");
+    CHECK(out.kind == VAL_BOOL && out.as.b, "mathbb R maps to RR");
+    valFree(out);
+
+    out = evalLine(ctx, "\\mathbb{C} == \\CC");
+    CHECK(out.kind == VAL_BOOL && out.as.b, "mathbb C maps to CC");
+    valFree(out);
+
+    out = evalLine(ctx, "\\mathbb{H} == \\HH");
+    CHECK(out.kind == VAL_BOOL && out.as.b, "mathbb H maps to HH");
+    valFree(out);
+
+    out = evalLine(ctx, "\\mathbb{O} == \\OO");
+    CHECK(out.kind == VAL_BOOL && out.as.b, "mathbb O maps to OO");
+    valFree(out);
+
+    out = evalLine(ctx, "Q = 17; \\mathbb{Q} == \\QQ");
+    CHECK(out.kind == VAL_BOOL && out.as.b, "mathbb reads raw symbols instead of variables");
+    valFree(out);
+
+    out = evalLine(ctx, "\\mathbb{Z}");
+    CHECK(out.kind == VAL_ERROR, "mathbb rejects unsupported blackboard names");
+    valFree(out);
+
+    out = evalLine(ctx, "A = \\quaternionAlgebra{\\RR}{-1}{-1}");
+    CHECK(out.kind == VAL_NONE, "quaternion algebra assignment succeeds");
+    valFree(out);
+
+    out = evalLine(ctx, "x = \\quaternion{A}{1}{2}{3}{4}");
+    CHECK(out.kind == VAL_NONE, "quaternion assignment succeeds");
+    valFree(out);
+
+    out = evalLine(ctx, "y = \\quaternion{A}{4}{3}{2}{1}; x + y");
+    CHECK(out.kind == VAL_CD_ELEMENT, "CD elements add with infix plus");
+    valFree(out);
+
+    out = evalLine(ctx, "\\cdAdd{x}{y}");
+    CHECK(out.kind == VAL_CD_ELEMENT, "CD elements add with explicit command");
+    valFree(out);
+
+    out = evalLine(ctx, "|x|");
+    CHECK(out.kind == VAL_FIELD_ELEMENT && printValueToBuffer(out, buf, sizeof(buf))
+          && strcmp(buf, "30") == 0,
+          "single bars return the CD norm");
+    valFree(out);
+
+    out = evalLine(ctx, "||x||");
+    CHECK(out.kind == VAL_FIELD_ELEMENT && printValueToBuffer(out, buf, sizeof(buf))
+          && strcmp(buf, "30") == 0,
+          "double bars return the CD norm");
+    valFree(out);
+
+    out = evalLine(ctx, "x * x^{-1} == \\quaternion{A}{1}{0}{0}{0}");
+    CHECK(out.kind == VAL_BOOL && out.as.b, "CD inverse works through exponent -1");
+    valFree(out);
+
+    out = evalLine(ctx, "x / x == \\quaternion{A}{1}{0}{0}{0}");
+    CHECK(out.kind == VAL_BOOL && out.as.b, "CD division uses right division");
+    valFree(out);
+
+    out = evalLine(ctx, "\\cdRightDivide{A}{x}{x} == \\quaternion{A}{1}{0}{0}{0}");
+    CHECK(out.kind == VAL_BOOL && out.as.b, "explicit CD right division works");
+    valFree(out);
+
+    out = evalLine(ctx, "2 * x");
+    CHECK(out.kind == VAL_CD_ELEMENT, "CD scalar multiplication works from the left");
+    valFree(out);
+
+    out = evalLine(ctx, "\\cdLeftMatrix{x}");
+    CHECK(out.kind == VAL_MATRIX, "CD left multiplication matrix returns a matrix");
+    valFree(out);
+
+    out = evalLine(ctx, "F5 = \\GF{5}; AF5 = \\quaternionAlgebra{F5}{-1}{-1}; qF5 = \\quaternion{AF5}{1}{2}{3}{4}; MF5 = \\cdLeftMatrix{qF5}");
+    CHECK(out.kind == VAL_NONE, "finite-field CD matrix assignment succeeds");
+    valFree(out);
+
+    out = evalLine(ctx, "MF5[0][0]");
+    CHECK(out.kind == VAL_FIELD_ELEMENT, "finite-field matrix indexing returns a field element");
+    valFree(out);
+
+    out = evalLine(ctx, "\\det{MF5}");
+    CHECK(out.kind == VAL_FIELD_ELEMENT, "finite-field matrix determinant returns a field element");
+    valFree(out);
+
+    out = evalLine(ctx, "\\rref{MF5}");
+    CHECK(out.kind == VAL_MATRIX, "finite-field CD matrix supports row reduction");
+    valFree(out);
+
+    out = evalLine(ctx, "\\eigenvalues{MF5}");
+    CHECK(out.kind == VAL_ERROR, "finite-field eigenvalues are rejected as numeric-only");
+    valFree(out);
+
+    out = evalLine(ctx, "EF5 = \\quadraticExtension{F5}{2}; AEF5 = \\quaternionAlgebra{EF5}{-1}{-1}; qEF5 = \\quaternion{AEF5}{1}{2}{3}{4}; MEF5 = \\cdRightMatrix{qEF5}; \\rank{MEF5}");
+    CHECK(out.kind == VAL_INT, "finite-field extension matrix supports rank");
+    valFree(out);
+
+    out = evalLine(ctx, "K = \\quadraticExtension{\\QQ}{2}; AK = \\quaternionAlgebra{K}{-1}{-1}; qK = \\quaternion{AK}{1}{2}{3}{4}; MK = \\cdCommutatorMatrix{qK}; \\nullity{MK}");
+    CHECK(out.kind == VAL_INT, "number-field matrix supports nullity");
+    valFree(out);
+
+    out = evalLine(ctx, "\\octonionAlgebra{\\RR}{-1}{-1}{-1}");
+    CHECK(out.kind == VAL_CD_ALGEBRA, "octonion algebra command constructs an algebra");
+    valFree(out);
+
+    out = evalLine(ctx, "\\HH");
+    CHECK(out.kind == VAL_CD_ALGEBRA, "HH constructs the standard Hamilton algebra");
+    valFree(out);
+
+    out = evalLine(ctx, "\\OO");
+    CHECK(out.kind == VAL_CD_ALGEBRA, "OO constructs the standard octonion algebra");
+    valFree(out);
+
+    out = evalLine(ctx, "i");
+    CHECK(out.kind == VAL_COMPLEX, "bare i remains the complex unit");
+    valFree(out);
+
+    out = evalLine(ctx, "1 + j");
+    CHECK(out.kind == VAL_CD_ELEMENT, "1 plus j promotes to a Hamilton quaternion");
+    valFree(out);
+
+    out = evalLine(ctx, "1 + i + j");
+    CHECK(out.kind == VAL_CD_ELEMENT, "complex partial expression promotes when j appears");
+    valFree(out);
+
+    out = evalLine(ctx, "1 + i*j");
+    CHECK(out.kind == VAL_CD_ELEMENT, "i*j promotes to Hamilton multiplication");
+    valFree(out);
+
+    out = evalLine(ctx, "\\cdTwoSidedIdeal{j}");
+    CHECK(out.kind == VAL_CD_IDEAL, "cdTwoSidedIdeal constructs a CD ideal");
+    valFree(out);
+
+    out = evalLine(ctx, "\\cdSubalgebra{j}");
+    CHECK(out.kind == VAL_CD_SUBALGEBRA, "cdSubalgebra constructs a CD subalgebra");
+    valFree(out);
+
+    out = evalLine(ctx, "\\cdTwoSidedIdeal{j} == \\cdTwoSidedIdeal{j}");
+    CHECK(out.kind == VAL_BOOL && out.as.b, "CD ideal equality works");
+    valFree(out);
+
+    out = evalLine(ctx, "\\cdSubalgebra{j} == \\cdSubalgebra{j}");
+    CHECK(out.kind == VAL_BOOL && out.as.b, "CD subalgebra equality works");
+    valFree(out);
+
+    out = evalLine(ctx, "\\cdCommutatorMatrix{j}");
+    CHECK(out.kind == VAL_MATRIX, "CD commutator matrix returns a matrix");
+    valFree(out);
+
+    out = evalLine(ctx, "\\cdAssociatorMatrix{j}{k}");
+    CHECK(out.kind == VAL_MATRIX, "CD associator matrix returns a matrix");
+    valFree(out);
+
+    out = evalLine(ctx, "\\cdLeftAnnihilator{j}");
+    CHECK(out.kind == VAL_CD_IDEAL, "CD left annihilator returns a CD ideal");
+    valFree(out);
+
+    out = evalLine(ctx, "\\cdRightAnnihilator{j}");
+    CHECK(out.kind == VAL_CD_IDEAL, "CD right annihilator returns a CD ideal");
+    valFree(out);
+
+    out = evalLine(ctx, "\\center{\\HH}");
+    CHECK(out.kind == VAL_CD_SUBALGEBRA, "center returns a CD subalgebra");
+    valFree(out);
+
+    out = evalLine(ctx, "\\nucleus{\\HH}");
+    CHECK(out.kind == VAL_CD_SUBALGEBRA, "nucleus returns a CD subalgebra");
+    valFree(out);
+
+    out = evalLine(ctx, "\\commutator{j}{k}");
+    CHECK(out.kind == VAL_CD_ELEMENT, "generic commutator works for CD elements");
+    valFree(out);
+
+    out = evalLine(ctx, "\\associator{j}{k}{j}");
+    CHECK(out.kind == VAL_CD_ELEMENT, "generic associator works for CD elements");
+    valFree(out);
+
+    out = evalLine(ctx, "\\isLeftZeroDivisor{j}");
+    CHECK(out.kind == VAL_BOOL && !out.as.b, "left zero-divisor test works for Hamilton unit");
+    valFree(out);
+
+    out = evalLine(ctx, "\\isRightZeroDivisor{j}");
+    CHECK(out.kind == VAL_BOOL && !out.as.b, "right zero-divisor test works for Hamilton unit");
+    valFree(out);
+
+    out = evalLine(ctx, "R = \\ZnRing{4}; r = \\getElement{R,\"2\"}; \\isLeftZeroDivisor{r}");
+    CHECK(out.kind == VAL_BOOL && out.as.b, "left zero-divisor test delegates to rings");
+    valFree(out);
+
+    out = evalLine(ctx, "\\isRightZeroDivisor{r}");
+    CHECK(out.kind == VAL_BOOL && out.as.b, "right zero-divisor test delegates to rings");
+    valFree(out);
+
+    out = evalLine(ctx, "\\commutator{r}{r}");
+    CHECK(out.kind == VAL_RING_ELEMENT, "generic commutator works for ring elements");
+    valFree(out);
+
+    evalCtxFree(ctx);
+}
+#endif
+
 static void testUserFunctions(void) {
     SECTION("user functions");
     EvalContext* ctx = evalCtxNew();
@@ -679,9 +1105,12 @@ int main(void) {
 
     testListConstruction();
     testListIndexing();
+    testMatrixIndexing();
     testListMutation();
     testListSorting();
     testKumaValueOwnership();
+    testRandomCommands();
+    testPolynomialSolveCommands();
     testListPrinting();
     testConditionals();
     testMultilineBraceBlocks();

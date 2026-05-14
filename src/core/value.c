@@ -22,6 +22,347 @@ static char* dupstr(const char* s) {
     return r;
 }
 
+static bool fieldUsable(Field* field) {
+    FieldElement zero = zeroFieldElement(field);
+    bool usable = fieldElementIsValid(&zero);
+    freeFieldElement(&zero);
+    return usable;
+}
+
+static void freeValueField(ValueField* field) {
+    if (!field) return;
+    freeField(&field->field);
+    freeValueField(field->base);
+    free(field);
+}
+
+static ValueField* cloneValueField(Field* field) {
+    ValueField* out;
+    if (!fieldUsable(field)) return NULL;
+
+    // Allocate the owned field wrapper before dispatching on the field type
+    out = calloc(1, sizeof(ValueField));
+    if (!out) return NULL;
+    switch (field->type) {
+        case QQ:
+            out->field = constructQQField();
+            break;
+        case RR:
+            out->field = constructRRField();
+            break;
+        case CC:
+            out->field = constructCCField();
+            break;
+        case FF:
+            out->field = constructFFField(field->data.ff.p, field->data.ff.degree,
+                    field->data.ff.modulus);
+            break;
+        case FF_QEXT:
+            out->base = cloneValueField(field->data.ffqext.baseField);
+            if (!out->base) {
+                freeValueField(out);
+                return NULL;
+            }
+            out->field.repr = field->repr;
+            out->field.chr = field->chr;
+            out->field.type = FF_QEXT;
+            out->field.data.ffqext.baseField = &out->base->field;
+            out->field.data.ffqext.genRepr = field->data.ffqext.genRepr;
+            out->field.data.ffqext.radicand = malloc(sizeof(FieldElement));
+            if (!out->field.data.ffqext.radicand) {
+                freeValueField(out);
+                return NULL;
+            }
+            *out->field.data.ffqext.radicand =
+                copyFieldElementToField(&out->base->field, *field->data.ffqext.radicand);
+            break;
+        case NF:
+            out->base = cloneValueField(field->data.nf.baseField);
+            if (!out->base) {
+                freeValueField(out);
+                return NULL;
+            }
+            out->field.repr = field->repr;
+            out->field.chr = field->chr;
+            out->field.type = NF;
+            out->field.data.nf.baseField = &out->base->field;
+            out->field.data.nf.gen.repr = field->data.nf.gen.repr;
+            out->field.data.nf.gen.degree = field->data.nf.gen.degree;
+            out->field.data.nf.gen.minPolyCoeffs =
+                calloc(field->data.nf.gen.degree + 1, sizeof(FieldElement));
+            if (!out->field.data.nf.gen.minPolyCoeffs) {
+                freeValueField(out);
+                return NULL;
+            }
+            for (size_t i = 0; i <= field->data.nf.gen.degree; i++) {
+                out->field.data.nf.gen.minPolyCoeffs[i] =
+                    copyFieldElementToField(&out->base->field,
+                            field->data.nf.gen.minPolyCoeffs[i]);
+                if (!fieldElementIsValid(&out->field.data.nf.gen.minPolyCoeffs[i])) {
+                    freeValueField(out);
+                    return NULL;
+                }
+            }
+            break;
+    }
+
+    // Validate the copied field through the public element construction API
+    if (!fieldUsable(&out->field)) {
+        freeValueField(out);
+        return NULL;
+    }
+    return out;
+}
+
+static ValueFieldElement* cloneValueFieldElement(FieldElement element) {
+    ValueFieldElement* out;
+    if (!fieldElementIsValid(&element)) return NULL;
+
+    // Copy the field first so the element can point into the owned field chain
+    out = calloc(1, sizeof(ValueFieldElement));
+    if (!out) return NULL;
+    out->field = cloneValueField(element.field);
+    if (!out->field) {
+        free(out);
+        return NULL;
+    }
+    out->element = copyFieldElementToField(&out->field->field, element);
+    if (!fieldElementIsValid(&out->element)) {
+        freeValueField(out->field);
+        free(out);
+        return NULL;
+    }
+    return out;
+}
+
+static ValueCDAlgebra* cloneValueCDAlgebra(CDAlgebra algebra) {
+    ValueCDAlgebra* out;
+    FieldElement* params = NULL;
+    if (!cdAlgebraIsValid(&algebra)) return NULL;
+
+    // Copy the base field before rebuilding the algebra over that copy
+    out = calloc(1, sizeof(ValueCDAlgebra));
+    if (!out) return NULL;
+    out->field = cloneValueField(algebra.field);
+    if (!out->field) {
+        free(out);
+        return NULL;
+    }
+    if (algebra.degree > 0) {
+        params = calloc(algebra.degree, sizeof(FieldElement));
+        if (!params) {
+            freeValueField(out->field);
+            free(out);
+            return NULL;
+        }
+        for (size_t i = 0; i < algebra.degree; i++) {
+            params[i] = copyFieldElementToField(&out->field->field, algebra.params[i]);
+            if (!fieldElementIsValid(&params[i])) {
+                for (size_t j = 0; j <= i; j++) freeFieldElement(&params[j]);
+                free(params);
+                freeValueField(out->field);
+                free(out);
+                return NULL;
+            }
+        }
+    }
+    out->algebra = constructCDAlgebra(&out->field->field, algebra.degree, params);
+    for (size_t i = 0; i < algebra.degree; i++) freeFieldElement(&params[i]);
+    free(params);
+    if (!cdAlgebraIsValid(&out->algebra)) {
+        freeValueField(out->field);
+        free(out);
+        return NULL;
+    }
+    return out;
+}
+
+static ValueCDElement* cloneValueCDElement(CDElement element) {
+    ValueCDElement* out;
+    FieldElement* coeffs;
+    if (!cdElementIsValid(&element)) return NULL;
+
+    // Rebuild the algebra and then copy coefficients into its owned field
+    out = calloc(1, sizeof(ValueCDElement));
+    if (!out) return NULL;
+    ValueCDAlgebra* algebraCopy = cloneValueCDAlgebra(*element.algebra);
+    if (!algebraCopy) {
+        free(out);
+        return NULL;
+    }
+    out->field = algebraCopy->field;
+    out->algebra = algebraCopy->algebra;
+    free(algebraCopy);
+
+    coeffs = calloc(element.dimension, sizeof(FieldElement));
+    if (!coeffs) {
+        freeCDAlgebra(&out->algebra);
+        freeValueField(out->field);
+        free(out);
+        return NULL;
+    }
+    for (size_t i = 0; i < element.dimension; i++) {
+        coeffs[i] = copyFieldElementToField(&out->field->field, element.coeffs[i]);
+        if (!fieldElementIsValid(&coeffs[i])) {
+            for (size_t j = 0; j <= i; j++) freeFieldElement(&coeffs[j]);
+            free(coeffs);
+            freeCDAlgebra(&out->algebra);
+            freeValueField(out->field);
+            free(out);
+            return NULL;
+        }
+    }
+    out->element = constructCDElement(&out->algebra, coeffs);
+    for (size_t i = 0; i < element.dimension; i++) freeFieldElement(&coeffs[i]);
+    free(coeffs);
+    if (!cdElementIsValid(&out->element)) {
+        freeCDAlgebra(&out->algebra);
+        freeValueField(out->field);
+        free(out);
+        return NULL;
+    }
+    return out;
+}
+
+static CDElement* cloneCDElementBasisToAlgebra(CDElement* basis, size_t count,
+        CDAlgebra* algebra, Field* field) {
+    CDElement* out = calloc(count, sizeof(CDElement));
+    if (!out && count > 0) return NULL;
+
+    // Copy every basis element into the cloned algebra and base field
+    for (size_t i = 0; i < count; i++) {
+        FieldElement* coeffs = calloc(basis[i].dimension, sizeof(FieldElement));
+        if (!coeffs) {
+            for (size_t j = 0; j < i; j++) freeCDElement(&out[j]);
+            free(out);
+            return NULL;
+        }
+        for (size_t j = 0; j < basis[i].dimension; j++) {
+            coeffs[j] = copyFieldElementToField(field, basis[i].coeffs[j]);
+            if (!fieldElementIsValid(&coeffs[j])) {
+                for (size_t k = 0; k <= j; k++) freeFieldElement(&coeffs[k]);
+                free(coeffs);
+                for (size_t k = 0; k < i; k++) freeCDElement(&out[k]);
+                free(out);
+                return NULL;
+            }
+        }
+        out[i] = constructCDElement(algebra, coeffs);
+        for (size_t j = 0; j < basis[i].dimension; j++) freeFieldElement(&coeffs[j]);
+        free(coeffs);
+        if (!cdElementIsValid(&out[i])) {
+            for (size_t j = 0; j <= i; j++) freeCDElement(&out[j]);
+            free(out);
+            return NULL;
+        }
+    }
+    return out;
+}
+
+static ValueCDIdeal* cloneValueCDIdeal(CDIdeal ideal) {
+    ValueCDIdeal* out;
+    if (!cdIdealIsValid(&ideal)) return NULL;
+
+    // Rebuild the ambient algebra so the ideal owns its basis coordinates
+    out = calloc(1, sizeof(ValueCDIdeal));
+    if (!out) return NULL;
+    ValueCDAlgebra* algebraCopy = cloneValueCDAlgebra(*ideal.algebra);
+    if (!algebraCopy) {
+        free(out);
+        return NULL;
+    }
+    out->field = algebraCopy->field;
+    out->algebra = algebraCopy->algebra;
+    free(algebraCopy);
+
+    out->ideal.algebra = &out->algebra;
+    out->ideal.count = ideal.count;
+    out->ideal.type = ideal.type;
+    if (ideal.count > 0) {
+        out->ideal.basis = cloneCDElementBasisToAlgebra(ideal.basis, ideal.count,
+                &out->algebra, &out->field->field);
+        if (!out->ideal.basis) {
+            freeCDAlgebra(&out->algebra);
+            freeValueField(out->field);
+            free(out);
+            return NULL;
+        }
+    }
+    if (!cdIdealIsValid(&out->ideal)) {
+        freeCDIdeal(&out->ideal);
+        freeCDAlgebra(&out->algebra);
+        freeValueField(out->field);
+        free(out);
+        return NULL;
+    }
+    return out;
+}
+
+static ValueCDSubalgebra* cloneValueCDSubalgebra(CDSubalgebra subalgebra) {
+    ValueCDSubalgebra* out;
+    if (!cdSubalgebraIsValid(&subalgebra)) return NULL;
+
+    // Rebuild the ambient algebra so the subalgebra owns its basis coordinates
+    out = calloc(1, sizeof(ValueCDSubalgebra));
+    if (!out) return NULL;
+    ValueCDAlgebra* algebraCopy = cloneValueCDAlgebra(*subalgebra.cdAlgebra);
+    if (!algebraCopy) {
+        free(out);
+        return NULL;
+    }
+    out->field = algebraCopy->field;
+    out->algebra = algebraCopy->algebra;
+    free(algebraCopy);
+
+    out->subalgebra.cdAlgebra = &out->algebra;
+    out->subalgebra.count = subalgebra.count;
+    out->subalgebra.basis = cloneCDElementBasisToAlgebra(subalgebra.basis, subalgebra.count,
+            &out->algebra, &out->field->field);
+    if (!out->subalgebra.basis || !cdSubalgebraIsValid(&out->subalgebra)) {
+        freeCDSubalgebra(&out->subalgebra);
+        freeCDAlgebra(&out->algebra);
+        freeValueField(out->field);
+        free(out);
+        return NULL;
+    }
+    return out;
+}
+
+static bool quaternionMatrixRepIsUsable(QuaternionMatrixRep* rep) {
+    return rep != NULL
+        && rep->algebra != NULL
+        && rep->extField != NULL
+        && quaternionAlgebraIsValid(rep->algebra)
+        && fieldElementIsValid(&rep->sqrt_a)
+        && fieldEq(rep->extField, rep->sqrt_a.field);
+}
+
+static ValueQuaternionMatrixRep* cloneValueQuaternionMatrixRep(QuaternionMatrixRep rep) {
+    ValueQuaternionMatrixRep* out;
+    if (!quaternionMatrixRepIsUsable(&rep)) return NULL;
+
+    out = calloc(1, sizeof(ValueQuaternionMatrixRep));
+    if (!out) return NULL;
+    ValueCDAlgebra* algebraCopy = cloneValueCDAlgebra(*rep.algebra);
+    if (!algebraCopy) {
+        free(out);
+        return NULL;
+    }
+    out->field = algebraCopy->field;
+    out->algebra = algebraCopy->algebra;
+    free(algebraCopy);
+
+    out->rep = constructQuaternionMatrixRep(&out->algebra);
+    if (!quaternionMatrixRepIsUsable(&out->rep)) {
+        freeQuaternionMatrixRep(&out->rep);
+        freeCDAlgebra(&out->algebra);
+        freeValueField(out->field);
+        free(out);
+        return NULL;
+    }
+    return out;
+}
+
 static void printInlineVector(Vector* vector) {
     if (!vector) {
         printf("null");
@@ -30,12 +371,11 @@ static void printInlineVector(Vector* vector) {
     putchar('[');
     for (size_t i = 0; i < vector->numRows; i++) {
         if (i) printf(", ");
-        MatrixElement elem = getEntry((Matrix*)vector, i, 0);
-        if (elem.isComplex) {
-            printf("(%Lg + %Lgi)", elem.value.complex.real, elem.value.complex.imag);
-        } else {
-            printf("%Lg", elem.value.real);
-        }
+        FieldElement elem = getEntry((Matrix*)vector, i, 0);
+        char* string = fieldElementToString(elem);
+        printf("%s", string ? string : "<invalid>");
+        free(string);
+        freeFieldElement(&elem);
     }
     putchar(']');
 }
@@ -410,22 +750,32 @@ static void printInlineRandomVariable(RandomVariable* rv) {
     printf(">");
 }
 
+static void printInlineQuaternionMatrixRep(ValueQuaternionMatrixRep* rep) {
+    if (!rep || !quaternionMatrixRepIsUsable(&rep->rep)) {
+        printf("<quaternionMatrixRep null>");
+        return;
+    }
+    char* algebra = cdAlgebraToString(&rep->algebra);
+    printf("<quaternionMatrixRep algebra=%s>", algebra ? algebra : "<invalid>");
+    free(algebra);
+}
+
 /* ---------- Construct methods ---------- */
 
 static long double zeroTiny(long double x) {
     return fabsl(x) < 1e-15 ? 0.0 : x;
 }
 
-static bool matrixIsFinite(Matrix* matrix) {
+static bool matrixHasValidEntries(Matrix* matrix) {
     if (!matrix) return true;
     for (size_t r = 0; r < matrix->numRows; r++) {
         for (size_t c = 0; c < matrix->numCols; c++) {
-            MatrixElement elem = getEntry(matrix, r, c);
-            if (elem.isComplex) {
-                if (!isfinite(elem.value.complex.real) || !isfinite(elem.value.complex.imag)) return false;
-            } else if (!isfinite(elem.value.real)) {
-                return false;
-            }
+            FieldElement elem = getEntry(matrix, r, c);
+            bool valid = fieldElementIsValid(&elem)
+                && matrix->field != NULL
+                && fieldEq(matrix->field, elem.field);
+            freeFieldElement(&elem);
+            if (!valid) return false;
         }
     }
     return true;
@@ -449,8 +799,71 @@ Value valList(Value* items, size_t n) {
     return v;
 }
 
+Value valField(Field field) {
+    ValueField* copy = cloneValueField(&field);
+    if (!copy) return valError("invalid field");
+    Value v = {0};
+    v.kind = VAL_FIELD;
+    v.as.ptr = copy;
+    return v;
+}
+
+Value valFieldElement(FieldElement element) {
+    ValueFieldElement* copy = cloneValueFieldElement(element);
+    if (!copy) return valError("invalid field element");
+    Value v = {0};
+    v.kind = VAL_FIELD_ELEMENT;
+    v.as.ptr = copy;
+    return v;
+}
+
+Value valCDAlgebra(CDAlgebra algebra) {
+    ValueCDAlgebra* copy = cloneValueCDAlgebra(algebra);
+    if (!copy) return valError("invalid Cayley-Dickson algebra");
+    Value v = {0};
+    v.kind = VAL_CD_ALGEBRA;
+    v.as.ptr = copy;
+    return v;
+}
+
+Value valCDElement(CDElement element) {
+    ValueCDElement* copy = cloneValueCDElement(element);
+    if (!copy) return valError("invalid Cayley-Dickson element");
+    Value v = {0};
+    v.kind = VAL_CD_ELEMENT;
+    v.as.ptr = copy;
+    return v;
+}
+
+Value valCDIdeal(CDIdeal ideal) {
+    ValueCDIdeal* copy = cloneValueCDIdeal(ideal);
+    if (!copy) return valError("invalid Cayley-Dickson ideal");
+    Value v = {0};
+    v.kind = VAL_CD_IDEAL;
+    v.as.ptr = copy;
+    return v;
+}
+
+Value valCDSubalgebra(CDSubalgebra subalgebra) {
+    ValueCDSubalgebra* copy = cloneValueCDSubalgebra(subalgebra);
+    if (!copy) return valError("invalid Cayley-Dickson subalgebra");
+    Value v = {0};
+    v.kind = VAL_CD_SUBALGEBRA;
+    v.as.ptr = copy;
+    return v;
+}
+
+Value valQuaternionMatrixRep(QuaternionMatrixRep rep) {
+    ValueQuaternionMatrixRep* copy = cloneValueQuaternionMatrixRep(rep);
+    if (!copy) return valError("invalid Quaternion matrix representation");
+    Value v = {0};
+    v.kind = VAL_QUATERNION_MATRIX_REP;
+    v.as.ptr = copy;
+    return v;
+}
+
 Value valPtr(ValueKind kind, void* p) {
-    if ((kind == VAL_MATRIX || kind == VAL_VECTOR) && !matrixIsFinite((Matrix*)p)) {
+    if ((kind == VAL_MATRIX || kind == VAL_VECTOR) && !matrixHasValidEntries((Matrix*)p)) {
         freeMatrix((Matrix*)p);
         return valError("numeric overflow or undefined matrix/vector result");
     }
@@ -487,6 +900,68 @@ void valFree(Value v) {
         case VAL_NEKO_EXPR:
             if (v.as.ptr) nekoFreeExpr((NekoExpr*)v.as.ptr);
             break;
+        case VAL_FIELD: {
+            freeValueField((ValueField*)v.as.ptr);
+            break;
+        }
+        case VAL_FIELD_ELEMENT: {
+            ValueFieldElement* element = (ValueFieldElement*)v.as.ptr;
+            if (element) {
+                freeFieldElement(&element->element);
+                freeValueField(element->field);
+                free(element);
+            }
+            break;
+        }
+        case VAL_CD_ALGEBRA: {
+            ValueCDAlgebra* algebra = (ValueCDAlgebra*)v.as.ptr;
+            if (algebra) {
+                freeCDAlgebra(&algebra->algebra);
+                freeValueField(algebra->field);
+                free(algebra);
+            }
+            break;
+        }
+        case VAL_CD_ELEMENT: {
+            ValueCDElement* element = (ValueCDElement*)v.as.ptr;
+            if (element) {
+                freeCDElement(&element->element);
+                freeCDAlgebra(&element->algebra);
+                freeValueField(element->field);
+                free(element);
+            }
+            break;
+        }
+        case VAL_CD_IDEAL: {
+            ValueCDIdeal* ideal = (ValueCDIdeal*)v.as.ptr;
+            if (ideal) {
+                freeCDIdeal(&ideal->ideal);
+                freeCDAlgebra(&ideal->algebra);
+                freeValueField(ideal->field);
+                free(ideal);
+            }
+            break;
+        }
+        case VAL_CD_SUBALGEBRA: {
+            ValueCDSubalgebra* subalgebra = (ValueCDSubalgebra*)v.as.ptr;
+            if (subalgebra) {
+                freeCDSubalgebra(&subalgebra->subalgebra);
+                freeCDAlgebra(&subalgebra->algebra);
+                freeValueField(subalgebra->field);
+                free(subalgebra);
+            }
+            break;
+        }
+        case VAL_QUATERNION_MATRIX_REP: {
+            ValueQuaternionMatrixRep* rep = (ValueQuaternionMatrixRep*)v.as.ptr;
+            if (rep) {
+                freeQuaternionMatrixRep(&rep->rep);
+                freeCDAlgebra(&rep->algebra);
+                freeValueField(rep->field);
+                free(rep);
+            }
+            break;
+        }
         case VAL_PROBABILITY_DISTRIBUTION:
             if (v.as.ptr) freeProbabilityDistribution((ProbabilityDistribution*)v.as.ptr);
             break;
@@ -565,6 +1040,34 @@ Value valClone(Value v) {
         case VAL_NEKO_EXPR:
             return valPtr(VAL_NEKO_EXPR,
                           v.as.ptr ? nekoCloneExpr((NekoExpr*)v.as.ptr) : NULL);
+        case VAL_FIELD: {
+            ValueField* field = (ValueField*)v.as.ptr;
+            return field ? valField(field->field) : valPtr(VAL_FIELD, NULL);
+        }
+        case VAL_FIELD_ELEMENT: {
+            ValueFieldElement* element = (ValueFieldElement*)v.as.ptr;
+            return element ? valFieldElement(element->element) : valPtr(VAL_FIELD_ELEMENT, NULL);
+        }
+        case VAL_CD_ALGEBRA: {
+            ValueCDAlgebra* algebra = (ValueCDAlgebra*)v.as.ptr;
+            return algebra ? valCDAlgebra(algebra->algebra) : valPtr(VAL_CD_ALGEBRA, NULL);
+        }
+        case VAL_CD_ELEMENT: {
+            ValueCDElement* element = (ValueCDElement*)v.as.ptr;
+            return element ? valCDElement(element->element) : valPtr(VAL_CD_ELEMENT, NULL);
+        }
+        case VAL_CD_IDEAL: {
+            ValueCDIdeal* ideal = (ValueCDIdeal*)v.as.ptr;
+            return ideal ? valCDIdeal(ideal->ideal) : valPtr(VAL_CD_IDEAL, NULL);
+        }
+        case VAL_CD_SUBALGEBRA: {
+            ValueCDSubalgebra* subalgebra = (ValueCDSubalgebra*)v.as.ptr;
+            return subalgebra ? valCDSubalgebra(subalgebra->subalgebra) : valPtr(VAL_CD_SUBALGEBRA, NULL);
+        }
+        case VAL_QUATERNION_MATRIX_REP: {
+            ValueQuaternionMatrixRep* rep = (ValueQuaternionMatrixRep*)v.as.ptr;
+            return rep ? valQuaternionMatrixRep(rep->rep) : valPtr(VAL_QUATERNION_MATRIX_REP, NULL);
+        }
         case VAL_PROBABILITY_DISTRIBUTION:
             return valPtr(VAL_PROBABILITY_DISTRIBUTION,
                           v.as.ptr ? copyProbabilityDistribution((ProbabilityDistribution*)v.as.ptr) : NULL);
@@ -607,6 +1110,13 @@ const char* valKindName(ValueKind k) {
         case VAL_SYMBOL:        return "symbol";
         case VAL_LIST:          return "list";
         case VAL_NEKO_EXPR:     return "neko_expr";
+        case VAL_FIELD:         return "field";
+        case VAL_FIELD_ELEMENT: return "field_element";
+        case VAL_CD_ALGEBRA:    return "cd_algebra";
+        case VAL_CD_ELEMENT:    return "cd_element";
+        case VAL_CD_IDEAL:      return "cd_ideal";
+        case VAL_CD_SUBALGEBRA: return "cd_subalgebra";
+        case VAL_QUATERNION_MATRIX_REP: return "quaternion_matrix_rep";
         case VAL_MATRIX:        return "matrix";
         case VAL_VECTOR:        return "vector";
         case VAL_COMBSET:       return "combset";
@@ -656,6 +1166,51 @@ void valPrint(Value v) {
         case VAL_NEKO_EXPR:
             if (v.as.ptr) nekoPrintExpr((NekoExpr*)v.as.ptr);
             else printf("<neko_expr null>");
+            break;
+        case VAL_FIELD: {
+            ValueField* field = (ValueField*)v.as.ptr;
+            char* string = field ? fieldToString(&field->field) : NULL;
+            printf("%s", string ? string : "<field null>");
+            free(string);
+            break;
+        }
+        case VAL_FIELD_ELEMENT: {
+            ValueFieldElement* element = (ValueFieldElement*)v.as.ptr;
+            char* string = element ? fieldElementToString(element->element) : NULL;
+            printf("%s", string ? string : "<field_element null>");
+            free(string);
+            break;
+        }
+        case VAL_CD_ALGEBRA: {
+            ValueCDAlgebra* algebra = (ValueCDAlgebra*)v.as.ptr;
+            char* string = algebra ? cdAlgebraToString(&algebra->algebra) : NULL;
+            printf("%s", string ? string : "<cd_algebra null>");
+            free(string);
+            break;
+        }
+        case VAL_CD_ELEMENT: {
+            ValueCDElement* element = (ValueCDElement*)v.as.ptr;
+            char* string = element ? cdElementToString(&element->element) : NULL;
+            printf("%s", string ? string : "<cd_element null>");
+            free(string);
+            break;
+        }
+        case VAL_CD_IDEAL: {
+            ValueCDIdeal* ideal = (ValueCDIdeal*)v.as.ptr;
+            char* string = ideal ? cdIdealToString(&ideal->ideal) : NULL;
+            printf("%s", string ? string : "<cd_ideal null>");
+            free(string);
+            break;
+        }
+        case VAL_CD_SUBALGEBRA: {
+            ValueCDSubalgebra* subalgebra = (ValueCDSubalgebra*)v.as.ptr;
+            char* string = subalgebra ? cdSubalgebraToString(&subalgebra->subalgebra) : NULL;
+            printf("%s", string ? string : "<cd_subalgebra null>");
+            free(string);
+            break;
+        }
+        case VAL_QUATERNION_MATRIX_REP:
+            printInlineQuaternionMatrixRep((ValueQuaternionMatrixRep*)v.as.ptr);
             break;
         case VAL_MATRIX:
         case VAL_VECTOR:

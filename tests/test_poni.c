@@ -31,11 +31,11 @@ static bool approx(long double a, long double b, long double tol) {
     return fabsl(a - b) <= tol;
 }
 
-/* PONI is real-only. These helpers bridge to Sokko's MatrixElement API:
-   R() lifts a long double into a real MatrixElement; re() pulls the real part
+/* PONI is real-only. These helpers bridge to Sokko's FieldElement API:
+   R() lifts a long double into a real FieldElement; re() pulls the real part
    back out. Using them keeps the tests readable. */
-static inline long double re(MatrixElement e) { return e.value.real; }
-static inline MatrixElement R(long double x) { return elemFromReal(x); }
+static inline long double re(FieldElement e) { return elemToComplex(e).real; }
+static inline FieldElement R(long double x) { return elemFromReal(x); }
 
 /* ---------- Helper tests ---------- */
 
