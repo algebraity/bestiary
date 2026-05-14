@@ -2779,6 +2779,62 @@ Number probabilitySample(ProbabilityDistribution* dist) {
     return dist->sample(dist);
 }
 
+// Build a NEKO expression for a supported distribution PDF
+NekoExpr* probabilityPDFfunc(ProbabilityDistribution* dist) {
+    // Reject missing distributions before dispatching by kind
+    if (!dist) return NULL;
+
+    // Delegate to named continuous distributions with symbolic densities
+    switch (dist->kind) {
+        case KUMA_DIST_CONTINUOUS_UNIFORM:
+            return continuousUniformPDFfunc(dist);
+        case KUMA_DIST_NORMAL:
+            return normalPDFfunc(dist);
+        case KUMA_DIST_EXPONENTIAL:
+            return exponentialPDFfunc(dist);
+        case KUMA_DIST_BERNOULLI:
+        case KUMA_DIST_BINOMIAL:
+        case KUMA_DIST_GEOMETRIC:
+        case KUMA_DIST_POISSON:
+        case KUMA_DIST_DISCRETE_UNIFORM:
+        case KUMA_DIST_CUSTOM:
+        case KUMA_DIST_AFFINE:
+        case KUMA_DIST_SUM_INDEPENDENT:
+        case KUMA_DIST_PRODUCT_INDEPENDENT:
+            return NULL;
+    }
+
+    return NULL;
+}
+
+// Build a NEKO expression for a supported distribution CDF
+NekoExpr* probabilityCDFfunc(ProbabilityDistribution* dist) {
+    // Reject missing distributions before dispatching by kind
+    if (!dist) return NULL;
+
+    // Delegate to named continuous distributions with symbolic cumulative functions
+    switch (dist->kind) {
+        case KUMA_DIST_CONTINUOUS_UNIFORM:
+            return continuousUniformCDFfunc(dist);
+        case KUMA_DIST_NORMAL:
+            return normalCDFfunc(dist);
+        case KUMA_DIST_EXPONENTIAL:
+            return exponentialCDFfunc(dist);
+        case KUMA_DIST_BERNOULLI:
+        case KUMA_DIST_BINOMIAL:
+        case KUMA_DIST_GEOMETRIC:
+        case KUMA_DIST_POISSON:
+        case KUMA_DIST_DISCRETE_UNIFORM:
+        case KUMA_DIST_CUSTOM:
+        case KUMA_DIST_AFFINE:
+        case KUMA_DIST_SUM_INDEPENDENT:
+        case KUMA_DIST_PRODUCT_INDEPENDENT:
+            return NULL;
+    }
+
+    return NULL;
+}
+
 /* ---------- Named distribution functions ---------- */
 
 /*
@@ -4407,6 +4463,20 @@ Number rvSample(RandomVariable* rv) {
     // Delegate to the underlying distribution accessor
     if (!rv || !rv->distribution) return kumaNan();
     return probabilitySample(rv->distribution);
+}
+
+// Build a NEKO expression for a supported random variable PDF
+NekoExpr* rvPDFfunc(RandomVariable* rv) {
+    // Delegate to the underlying distribution function builder
+    if (!rv || !rv->distribution) return NULL;
+    return probabilityPDFfunc(rv->distribution);
+}
+
+// Build a NEKO expression for a supported random variable CDF
+NekoExpr* rvCDFfunc(RandomVariable* rv) {
+    // Delegate to the underlying distribution function builder
+    if (!rv || !rv->distribution) return NULL;
+    return probabilityCDFfunc(rv->distribution);
 }
 
 /* ---------- RandomVariable transformations ---------- */

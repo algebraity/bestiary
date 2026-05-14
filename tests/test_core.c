@@ -64,6 +64,11 @@ static int valueIsRoot(Value value, long double real, long double imag) {
     return fabsl(valToDouble(value) - real) <= 1e-8L;
 }
 
+static int valueNumericEquals(Value value, long double expected) {
+    if (!valIsNumeric(value)) return 0;
+    return fabsl(valToDouble(value) - expected) <= 1e-8L;
+}
+
 static int listHasRoot(Value list, long double real, long double imag) {
     if (list.kind != VAL_LIST) return 0;
     for (size_t i = 0; i < list.as.list.n; i++) {
@@ -405,6 +410,316 @@ static void testKumaValueOwnership(void) {
           "random variable clone remains usable");
     valFree(copiedRv);
     valFree(wrappedRv);
+}
+
+static void testKumaCommands(void) {
+    SECTION("KUMA commands");
+    EvalContext* ctx = evalCtxNew();
+
+    Value out = evalLine(ctx, "\\factorial{5}");
+    CHECK(out.kind == VAL_INT && out.as.i == 120, "KUMA factorial command");
+    valFree(out);
+
+    out = evalLine(ctx, "\\ncr{5}{2}");
+    CHECK(out.kind == VAL_INT && out.as.i == 10, "ncr command");
+    valFree(out);
+
+    out = evalLine(ctx, "\\npr{5}{2}");
+    CHECK(out.kind == VAL_INT && out.as.i == 20, "npr command");
+    valFree(out);
+
+    out = evalLine(ctx, "\\multinomial{5}{\\list{2,3}}");
+    CHECK(out.kind == VAL_INT && out.as.i == 10, "multinomial list command");
+    valFree(out);
+
+    out = evalLine(ctx, "\\multinomial{5}{2}{2}{1}");
+    CHECK(out.kind == VAL_INT && out.as.i == 30, "multinomial variadic command");
+    valFree(out);
+
+    out = evalLine(ctx, "\\sum{\\list{1,2,3,4}}");
+    CHECK(out.kind == VAL_INT && out.as.i == 10, "sum command");
+    valFree(out);
+
+    out = evalLine(ctx, "\\product{\\list{1,2,3,4}}");
+    CHECK(out.kind == VAL_INT && out.as.i == 24, "product command");
+    valFree(out);
+
+    out = evalLine(ctx, "\\mean{\\list{1,2,3,4}}");
+    CHECK(valueNumericEquals(out, 2.5L), "mean command");
+    valFree(out);
+
+    out = evalLine(ctx, "\\median{\\list{1,2,3,4}}");
+    CHECK(valueNumericEquals(out, 2.5L), "median command");
+    valFree(out);
+
+    out = evalLine(ctx, "\\mode{\\list{3,1,2,2,3}}");
+    CHECK(out.kind == VAL_INT && out.as.i == 2, "mode returns smallest mode");
+    valFree(out);
+
+    out = evalLine(ctx, "\\modes{\\list{3,1,2,2,3}}");
+    CHECK(out.kind == VAL_LIST && out.as.list.n == 2
+          && out.as.list.items[0].kind == VAL_INT && out.as.list.items[0].as.i == 2
+          && out.as.list.items[1].kind == VAL_INT && out.as.list.items[1].as.i == 3,
+          "modes returns all modal values");
+    valFree(out);
+
+    out = evalLine(ctx, "\\min{\\list{3,1,2}}");
+    CHECK(out.kind == VAL_INT && out.as.i == 1, "min command");
+    valFree(out);
+
+    out = evalLine(ctx, "\\max{\\list{3,1,2}}");
+    CHECK(out.kind == VAL_INT && out.as.i == 3, "max command");
+    valFree(out);
+
+    out = evalLine(ctx, "\\range{\\list{3,1,2}}");
+    CHECK(out.kind == VAL_INT && out.as.i == 2, "range command");
+    valFree(out);
+
+    out = evalLine(ctx, "\\variance{\\list{1,2,3}}");
+    CHECK(valueNumericEquals(out, 2.0L / 3.0L), "variance command");
+    valFree(out);
+
+    out = evalLine(ctx, "\\sampleVariance{\\list{1,2,3}}");
+    CHECK(out.kind == VAL_INT && out.as.i == 1, "sample variance command");
+    valFree(out);
+
+    out = evalLine(ctx, "\\stddev{\\list{1,2,3}}");
+    CHECK(valueNumericEquals(out, sqrtl(2.0L / 3.0L)), "stddev command");
+    valFree(out);
+
+    out = evalLine(ctx, "\\sampleStddev{\\list{1,2,3}}");
+    CHECK(valueNumericEquals(out, 1.0L), "sample stddev command");
+    valFree(out);
+
+    out = evalLine(ctx, "\\meanAbsDev{\\list{1,2,3}}");
+    CHECK(valueNumericEquals(out, 2.0L / 3.0L), "mean absolute deviation command");
+    valFree(out);
+
+    out = evalLine(ctx, "\\medianAbsDev{\\list{1,2,3}}");
+    CHECK(out.kind == VAL_INT && out.as.i == 1, "median absolute deviation command");
+    valFree(out);
+
+    out = evalLine(ctx, "\\percentile{\\list{1,2,3,4}}{50}");
+    CHECK(valueNumericEquals(out, 2.5L), "percentile command");
+    valFree(out);
+
+    out = evalLine(ctx, "\\quartile{\\list{1,2,3,4}}{2}");
+    CHECK(valueNumericEquals(out, 2.5L), "quartile command");
+    valFree(out);
+
+    out = evalLine(ctx, "\\iqr{\\list{1,2,3,4}}");
+    CHECK(valueNumericEquals(out, 1.5L), "iqr command");
+    valFree(out);
+
+    out = evalLine(ctx, "\\geometricMean{\\list{1,4,16}}");
+    CHECK(valueNumericEquals(out, 4.0L), "geometric mean command");
+    valFree(out);
+
+    out = evalLine(ctx, "\\harmonicMean{\\list{1,2,4}}");
+    CHECK(valueNumericEquals(out, 12.0L / 7.0L), "harmonic mean command");
+    valFree(out);
+
+    out = evalLine(ctx, "\\frequency{\\list{1,2,2,3}}{2}");
+    CHECK(out.kind == VAL_INT && out.as.i == 2, "frequency command");
+    valFree(out);
+
+    out = evalLine(ctx, "\\countDistinct{\\list{1,2,2,3}}");
+    CHECK(out.kind == VAL_INT && out.as.i == 3, "count distinct command");
+    valFree(out);
+
+    out = evalLine(ctx, "\\frequencies{\\list{1,2,2,3}}");
+    CHECK(out.kind == VAL_LIST && out.as.list.n == 3
+          && out.as.list.items[1].kind == VAL_LIST
+          && out.as.list.items[1].as.list.items[0].kind == VAL_INT
+          && out.as.list.items[1].as.list.items[0].as.i == 2
+          && out.as.list.items[1].as.list.items[1].kind == VAL_INT
+          && out.as.list.items[1].as.list.items[1].as.i == 2,
+          "frequencies returns value-count pairs");
+    valFree(out);
+
+    out = evalLine(ctx, "\\covariance{\\list{1,2,3}}{\\list{2,4,6}}");
+    CHECK(valueNumericEquals(out, 4.0L / 3.0L), "covariance command");
+    valFree(out);
+
+    out = evalLine(ctx, "\\sampleCovariance{\\list{1,2,3}}{\\list{2,4,6}}");
+    CHECK(out.kind == VAL_INT && out.as.i == 2, "sample covariance command");
+    valFree(out);
+
+    out = evalLine(ctx, "\\correlation{\\list{1,2,3}}{\\list{2,4,6}}");
+    CHECK(valueNumericEquals(out, 1.0L), "correlation command");
+    valFree(out);
+
+    out = evalLine(ctx, "\\linearRegressionSlope{\\list{1,2,3}}{\\list{2,4,6}}");
+    CHECK(valueNumericEquals(out, 2.0L), "linear regression slope command");
+    valFree(out);
+
+    out = evalLine(ctx, "\\linearRegressionIntercept{\\list{1,2,3}}{\\list{2,4,6}}");
+    CHECK(valueNumericEquals(out, 0.0L), "linear regression intercept command");
+    valFree(out);
+
+    out = evalLine(ctx, "\\linearRegressionPredict{2}{0}{4}");
+    CHECK(out.kind == VAL_INT && out.as.i == 8, "linear regression predict command");
+    valFree(out);
+
+    out = evalLine(ctx, "\\mean{\\list{1 + i}}");
+    CHECK(out.kind == VAL_ERROR, "KUMA stats reject complex data");
+    valFree(out);
+
+    out = evalLine(ctx, "\\bernoulli{\\frac{1}{3}}");
+    CHECK(out.kind == VAL_PROBABILITY_DISTRIBUTION, "bernoulli command constructs a distribution");
+    valFree(out);
+
+    out = evalLine(ctx, "\\binomial{4}{\\frac{1}{2}}");
+    CHECK(out.kind == VAL_PROBABILITY_DISTRIBUTION, "binomial command constructs a distribution");
+    valFree(out);
+
+    out = evalLine(ctx, "\\geometric{\\frac{1}{2}}");
+    CHECK(out.kind == VAL_PROBABILITY_DISTRIBUTION, "geometric command constructs a distribution");
+    valFree(out);
+
+    out = evalLine(ctx, "\\poisson{3}");
+    CHECK(out.kind == VAL_PROBABILITY_DISTRIBUTION, "poisson command constructs a distribution");
+    valFree(out);
+
+    out = evalLine(ctx, "\\discreteUniform{2}{5}");
+    CHECK(out.kind == VAL_PROBABILITY_DISTRIBUTION, "discreteUniform command constructs a distribution");
+    valFree(out);
+
+    out = evalLine(ctx, "\\continuousUniform{0}{2}");
+    CHECK(out.kind == VAL_PROBABILITY_DISTRIBUTION, "continuousUniform command constructs a distribution");
+    valFree(out);
+
+    out = evalLine(ctx, "\\normal{0}{1}");
+    CHECK(out.kind == VAL_PROBABILITY_DISTRIBUTION, "normal command constructs a distribution");
+    valFree(out);
+
+    out = evalLine(ctx, "\\exponential{2}");
+    CHECK(out.kind == VAL_PROBABILITY_DISTRIBUTION, "exponential command constructs a distribution");
+    valFree(out);
+
+    out = evalLine(ctx, "\\pmf{\\bernoulli{\\frac{1}{3}}}{1}");
+    CHECK(valueNumericEquals(out, 1.0L / 3.0L), "pmf evaluates a discrete distribution");
+    valFree(out);
+
+    out = evalLine(ctx, "\\cdf{\\bernoulli{\\frac{1}{3}}}{0}");
+    CHECK(valueNumericEquals(out, 2.0L / 3.0L), "cdf evaluates a discrete distribution");
+    valFree(out);
+
+    out = evalLine(ctx, "\\pdf{\\bernoulli{\\frac{1}{3}}}{1}");
+    CHECK(out.kind == VAL_ERROR, "pdf rejects distributions without densities");
+    valFree(out);
+
+    out = evalLine(ctx, "\\pdf{\\normal{0}{1}}{0}");
+    CHECK(valueNumericEquals(out, 1.0L / sqrtl(2.0L * acosl(-1.0L))), "pdf evaluates a normal distribution");
+    valFree(out);
+
+    out = evalLine(ctx, "\\cdf{\\normal{0}{1}}{0}");
+    CHECK(valueNumericEquals(out, 0.5L), "cdf evaluates a normal distribution");
+    valFree(out);
+
+    out = evalLine(ctx, "\\pdfFunc{\\normal{0}{1}}");
+    CHECK(out.kind == VAL_NEKO_EXPR, "pdfFunc returns a graphable NEKO expression for supported distributions");
+    valFree(out);
+
+    out = evalLine(ctx, "\\cdfFunc{\\exponential{2}}");
+    CHECK(out.kind == VAL_NEKO_EXPR, "cdfFunc returns a graphable NEKO expression for supported distributions");
+    valFree(out);
+
+    out = evalLine(ctx, "\\pdfFunc{\\bernoulli{\\frac{1}{3}}}");
+    CHECK(out.kind == VAL_ERROR, "pdfFunc rejects unsupported distributions");
+    valFree(out);
+
+    out = evalLine(ctx, "\\customDiscrete{\\list{1,2}}{\\list{\\frac{1}{4},\\frac{3}{4}}}");
+    CHECK(out.kind == VAL_PROBABILITY_DISTRIBUTION, "customDiscrete constructs a finite discrete distribution");
+    valFree(out);
+
+    out = evalLine(ctx, "\\pmf{\\customDiscrete{\\list{1,2}}{\\list{\\frac{1}{4},\\frac{3}{4}}}}{2}");
+    CHECK(valueNumericEquals(out, 0.75L), "customDiscrete PMF is available through pmf");
+    valFree(out);
+
+    out = evalLine(ctx, "\\pmf{\\affineDistribution{\\bernoulli{\\frac{1}{2}}}{2}{3}}{5}");
+    CHECK(valueNumericEquals(out, 0.5L), "affineDistribution transforms finite discrete support");
+    valFree(out);
+
+    out = evalLine(ctx, "\\pmf{\\sumIndependentDistributions{\\bernoulli{\\frac{1}{2}}}{\\bernoulli{\\frac{1}{2}}}}{1}");
+    CHECK(valueNumericEquals(out, 0.5L), "sumIndependentDistributions evaluates finite discrete sums");
+    valFree(out);
+
+    out = evalLine(ctx, "\\pmf{\\productIndependentDistributions{\\bernoulli{\\frac{1}{2}}}{\\bernoulli{\\frac{1}{2}}}}{1}");
+    CHECK(valueNumericEquals(out, 0.25L), "productIndependentDistributions evaluates finite discrete products");
+    valFree(out);
+
+    out = evalLine(ctx, "\\expectedValue{\\bernoulli{\\frac{1}{3}}}");
+    CHECK(valueNumericEquals(out, 1.0L / 3.0L), "expectedValue works for distributions");
+    valFree(out);
+
+    out = evalLine(ctx, "\\mean{\\bernoulli{\\frac{1}{3}}}");
+    CHECK(valueNumericEquals(out, 1.0L / 3.0L), "mean works as an expected-value alias for distributions");
+    valFree(out);
+
+    out = evalLine(ctx, "\\variance{\\bernoulli{\\frac{1}{2}}}");
+    CHECK(valueNumericEquals(out, 0.25L), "variance works for distributions");
+    valFree(out);
+
+    seedPRG(9090ULL);
+    out = evalLine(ctx, "\\sample{\\bernoulli{\\frac{1}{2}}}");
+    CHECK(out.kind == VAL_INT && (out.as.i == 0 || out.as.i == 1), "sample works for distributions");
+    valFree(out);
+
+    out = evalLine(ctx, "\\randomVariable{X}{\\bernoulli{\\frac{1}{3}}}");
+    CHECK(out.kind == VAL_RANDOM_VARIABLE, "randomVariable constructs an RV");
+    valFree(out);
+
+    out = evalLine(ctx, "\\rv{Y}{\\normal{0}{1}}");
+    CHECK(out.kind == VAL_RANDOM_VARIABLE, "rv alias constructs an RV");
+    valFree(out);
+
+    out = evalLine(ctx, "\\rvExpectedValue{\\rv{X}{\\bernoulli{\\frac{1}{3}}}}");
+    CHECK(valueNumericEquals(out, 1.0L / 3.0L), "rvExpectedValue works for RVs");
+    valFree(out);
+
+    out = evalLine(ctx, "\\rvPMF{\\rv{X}{\\bernoulli{\\frac{1}{3}}}}{1}");
+    CHECK(valueNumericEquals(out, 1.0L / 3.0L), "rvPMF evaluates an RV");
+    valFree(out);
+
+    out = evalLine(ctx, "\\rvPDF{\\rv{Y}{\\normal{0}{1}}}{0}");
+    CHECK(valueNumericEquals(out, 1.0L / sqrtl(2.0L * acosl(-1.0L))), "rvPDF evaluates an RV");
+    valFree(out);
+
+    out = evalLine(ctx, "\\rvCDF{\\rv{Y}{\\normal{0}{1}}}{0}");
+    CHECK(valueNumericEquals(out, 0.5L), "rvCDF evaluates an RV");
+    valFree(out);
+
+    out = evalLine(ctx, "\\pdfFunc{\\rv{Y}{\\normal{0}{1}}}");
+    CHECK(out.kind == VAL_NEKO_EXPR, "pdfFunc works for supported RVs");
+    valFree(out);
+
+    out = evalLine(ctx, "\\rvExpectedValue{\\rvScale{\\rv{X}{\\bernoulli{\\frac{1}{2}}}}{2}}");
+    CHECK(valueNumericEquals(out, 1.0L), "rvScale transforms RVs");
+    valFree(out);
+
+    out = evalLine(ctx, "\\rvExpectedValue{\\rvShift{\\rv{X}{\\bernoulli{\\frac{1}{2}}}}{3}}");
+    CHECK(valueNumericEquals(out, 3.5L), "rvShift transforms RVs");
+    valFree(out);
+
+    out = evalLine(ctx, "\\rvExpectedValue{\\rvAffine{\\rv{X}{\\bernoulli{\\frac{1}{2}}}}{2}{3}}");
+    CHECK(valueNumericEquals(out, 4.0L), "rvAffine transforms RVs");
+    valFree(out);
+
+    out = evalLine(ctx, "\\rvPMF{\\rvSumIndependent{\\rv{X}{\\bernoulli{\\frac{1}{2}}}}{\\rv{Y}{\\bernoulli{\\frac{1}{2}}}}}{1}");
+    CHECK(valueNumericEquals(out, 0.5L), "rvSumIndependent transforms RVs");
+    valFree(out);
+
+    out = evalLine(ctx, "\\rvPMF{\\rvProductIndependent{\\rv{X}{\\bernoulli{\\frac{1}{2}}}}{\\rv{Y}{\\bernoulli{\\frac{1}{2}}}}}{1}");
+    CHECK(valueNumericEquals(out, 0.25L), "rvProductIndependent transforms RVs");
+    valFree(out);
+
+    seedPRG(9191ULL);
+    out = evalLine(ctx, "\\rvSample{\\rv{X}{\\bernoulli{\\frac{1}{2}}}}");
+    CHECK(out.kind == VAL_INT && (out.as.i == 0 || out.as.i == 1), "rvSample works for RVs");
+    valFree(out);
+
+    evalCtxFree(ctx);
 }
 
 static void testRandomCommands(void) {
@@ -1109,6 +1424,7 @@ int main(void) {
     testListMutation();
     testListSorting();
     testKumaValueOwnership();
+    testKumaCommands();
     testRandomCommands();
     testPolynomialSolveCommands();
     testListPrinting();

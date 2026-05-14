@@ -389,7 +389,72 @@ static const BuiltinDoc BUILTIN_DOCS[] = {
     { "unitGroup", "Constructs the multiplicative unit group of a ring.", "Ring with multiplicative identity", "Group" },
     { "Q8", "Constructs the quaternion group Q8.", "no values", "Group" },
     { "isPrime", "Tests whether an integer is prime.", "Int", "Bool" },
-    { "factorial", "Computes n factorial.", "Int n >= 0", "Int" },
+    { "factorial", "Computes n factorial using KUMA combinatorics.", "Int n >= 0", "Int" },
+    { "ncr", "Computes the binomial coefficient n choose r.", "Int n and Int r with 0 <= r <= n", "Int" },
+    { "npr", "Computes the number of ordered r-permutations of n objects.", "Int n and Int r with 0 <= r <= n", "Int" },
+    { "multinomial", "Computes a multinomial coefficient.", "Int n and List of nonnegative Int parts summing to n, or Int n followed by parts", "Int" },
+    { "sum", "Computes the sum of numeric data.", "nonempty List of Int, Fraction, or Decimal values", "Int, Fraction, or Decimal" },
+    { "product", "Computes the product of numeric data.", "nonempty List of Int, Fraction, or Decimal values", "Int, Fraction, or Decimal" },
+    { "mean", "Computes the arithmetic mean of numeric data or the expected value of a distribution.", "nonempty List of Int, Fraction, or Decimal values, ProbabilityDistribution, or RandomVariable", "Int, Fraction, or Decimal" },
+    { "median", "Computes the median of numeric data.", "nonempty List of Int, Fraction, or Decimal values", "Int, Fraction, or Decimal" },
+    { "mode", "Computes the smallest mode of numeric data.", "nonempty List of Int, Fraction, or Decimal values", "Int, Fraction, or Decimal" },
+    { "modes", "Returns every modal value of numeric data.", "nonempty List of Int, Fraction, or Decimal values", "List" },
+    { "min", "Computes the minimum of numeric data.", "nonempty List of Int, Fraction, or Decimal values", "Int, Fraction, or Decimal" },
+    { "max", "Computes the maximum of numeric data.", "nonempty List of Int, Fraction, or Decimal values", "Int, Fraction, or Decimal" },
+    { "range", "Computes max(data) - min(data).", "nonempty List of Int, Fraction, or Decimal values", "Int, Fraction, or Decimal" },
+    { "variance", "Computes population variance or distribution variance.", "nonempty List of Int, Fraction, or Decimal values, ProbabilityDistribution, or RandomVariable", "Int, Fraction, or Decimal" },
+    { "sampleVariance", "Computes sample variance with denominator n - 1.", "nonempty List of Int, Fraction, or Decimal values", "Int, Fraction, or Decimal" },
+    { "stddev", "Computes population standard deviation or distribution standard deviation.", "nonempty List of Int, Fraction, or Decimal values, ProbabilityDistribution, or RandomVariable", "Decimal" },
+    { "sampleStddev", "Computes sample standard deviation with denominator n - 1.", "nonempty List of Int, Fraction, or Decimal values", "Decimal" },
+    { "meanAbsDev", "Computes mean absolute deviation from the mean.", "nonempty List of Int, Fraction, or Decimal values", "Int, Fraction, or Decimal" },
+    { "medianAbsDev", "Computes median absolute deviation from the median.", "nonempty List of Int, Fraction, or Decimal values", "Int, Fraction, or Decimal" },
+    { "percentile", "Computes a percentile using KUMA interpolation.", "nonempty numeric List and numeric percentile p from 0 to 100", "Int, Fraction, or Decimal" },
+    { "quartile", "Computes quartile q as the 25qth percentile.", "nonempty numeric List and Int q in {0,1,2,3,4}", "Int, Fraction, or Decimal" },
+    { "iqr", "Computes the interquartile range Q3 - Q1.", "nonempty List of Int, Fraction, or Decimal values", "Int, Fraction, or Decimal" },
+    { "geometricMean", "Computes the geometric mean of positive numeric data.", "nonempty List of positive Int, Fraction, or Decimal values", "Decimal" },
+    { "harmonicMean", "Computes the harmonic mean of nonzero numeric data.", "nonempty List of nonzero Int, Fraction, or Decimal values", "Int, Fraction, or Decimal" },
+    { "frequency", "Counts how often a numeric value occurs in numeric data.", "nonempty numeric List and numeric value", "Int" },
+    { "countDistinct", "Counts distinct values in numeric data.", "nonempty List of Int, Fraction, or Decimal values", "Int" },
+    { "frequencies", "Returns sorted value-count pairs for numeric data.", "nonempty List of Int, Fraction, or Decimal values", "List of [value, count] pairs" },
+    { "covariance", "Computes population covariance of paired numeric data.", "two same-length nonempty numeric Lists", "Int, Fraction, or Decimal" },
+    { "sampleCovariance", "Computes sample covariance with denominator n - 1.", "two same-length nonempty numeric Lists", "Int, Fraction, or Decimal" },
+    { "correlation", "Computes Pearson correlation of paired numeric data.", "two same-length nonempty numeric Lists", "Decimal" },
+    { "linearRegressionSlope", "Computes the least-squares regression slope for y on x.", "two same-length nonempty numeric Lists", "Int, Fraction, or Decimal" },
+    { "linearRegressionIntercept", "Computes the least-squares regression intercept for y on x.", "two same-length nonempty numeric Lists", "Int, Fraction, or Decimal" },
+    { "linearRegressionPredict", "Predicts y from slope, intercept, and x.", "numeric slope, numeric intercept, and numeric x", "Int, Fraction, or Decimal" },
+    { "bernoulli", "Constructs a Bernoulli distribution.", "probability p", "ProbabilityDistribution" },
+    { "binomial", "Constructs a binomial distribution.", "Int n >= 0 and probability p", "ProbabilityDistribution" },
+    { "geometric", "Constructs a geometric distribution.", "probability p with 0 < p <= 1", "ProbabilityDistribution" },
+    { "poisson", "Constructs a Poisson distribution.", "positive rate lambda", "ProbabilityDistribution" },
+    { "discreteUniform", "Constructs a discrete uniform distribution.", "integer lower and upper bounds with lower <= upper", "ProbabilityDistribution" },
+    { "continuousUniform", "Constructs a continuous uniform distribution.", "numeric lower and upper bounds with lower < upper", "ProbabilityDistribution" },
+    { "normal", "Constructs a normal distribution.", "numeric mean mu and positive standard deviation sigma", "ProbabilityDistribution" },
+    { "exponential", "Constructs an exponential distribution.", "positive rate lambda", "ProbabilityDistribution" },
+    { "customDiscrete", "Constructs a finite custom discrete distribution.", "List of numeric values and same-length List of probabilities summing to 1", "ProbabilityDistribution" },
+    { "affineDistribution", "Constructs the affine image scalar*X + shift of a distribution.", "ProbabilityDistribution, numeric scalar, and numeric shift", "ProbabilityDistribution" },
+    { "sumIndependentDistributions", "Constructs the sum of independent distributions when supported.", "two compatible ProbabilityDistribution values", "ProbabilityDistribution" },
+    { "productIndependentDistributions", "Constructs the product of independent distributions when supported.", "two compatible ProbabilityDistribution values", "ProbabilityDistribution" },
+    { "pmf", "Evaluates the probability mass function of a distribution or random variable.", "ProbabilityDistribution or RandomVariable, then numeric x", "Int, Fraction, or Decimal" },
+    { "pdf", "Evaluates the probability density function of a distribution or random variable.", "ProbabilityDistribution or RandomVariable, then numeric x", "Decimal" },
+    { "cdf", "Evaluates the cumulative distribution function of a distribution or random variable.", "ProbabilityDistribution or RandomVariable, then numeric x", "Int, Fraction, or Decimal" },
+    { "expectedValue", "Computes the expected value of a distribution or random variable.", "ProbabilityDistribution or RandomVariable", "Int, Fraction, or Decimal" },
+    { "sample", "Samples from a distribution or random variable using KUMA's sampler.", "ProbabilityDistribution or RandomVariable", "Int, Fraction, or Decimal" },
+    { "pdfFunc", "Builds a graphable NEKO expression for a supported PDF.", "supported continuous ProbabilityDistribution or RandomVariable", "NEKO expression" },
+    { "cdfFunc", "Builds a graphable NEKO expression for a supported CDF.", "supported continuous ProbabilityDistribution or RandomVariable", "NEKO expression" },
+    { "randomVariable", "Constructs a named random variable from a copied distribution.", "Symbol or String name and ProbabilityDistribution", "RandomVariable" },
+    { "rv", "Alias for randomVariable.", "Symbol or String name and ProbabilityDistribution", "RandomVariable" },
+    { "rvPMF", "Evaluates a random variable PMF.", "RandomVariable and numeric x", "Int, Fraction, or Decimal" },
+    { "rvPDF", "Evaluates a random variable PDF.", "RandomVariable and numeric x", "Decimal" },
+    { "rvCDF", "Evaluates a random variable CDF.", "RandomVariable and numeric x", "Int, Fraction, or Decimal" },
+    { "rvExpectedValue", "Computes a random variable expected value.", "RandomVariable", "Int, Fraction, or Decimal" },
+    { "rvVariance", "Computes a random variable variance.", "RandomVariable", "Int, Fraction, or Decimal" },
+    { "rvStddev", "Computes a random variable standard deviation.", "RandomVariable", "Decimal" },
+    { "rvSample", "Samples a random variable.", "RandomVariable", "Int, Fraction, or Decimal" },
+    { "rvScale", "Constructs the scaled random variable scalar*X.", "RandomVariable and numeric scalar", "RandomVariable" },
+    { "rvShift", "Constructs the shifted random variable X + shift.", "RandomVariable and numeric shift", "RandomVariable" },
+    { "rvAffine", "Constructs the affine random variable scalar*X + shift.", "RandomVariable, numeric scalar, and numeric shift", "RandomVariable" },
+    { "rvSumIndependent", "Constructs the sum of independent random variables when supported.", "two compatible RandomVariable values", "RandomVariable" },
+    { "rvProductIndependent", "Constructs the product of independent random variables when supported.", "two compatible RandomVariable values", "RandomVariable" },
     { "listElements", "Lists the elements of a group or ring.", "Group or Ring", "List of GroupElement values for a Group, or RingElement values for a Ring" },
     { "numElements", "Counts the elements of a group or ring.", "Group or Ring", "Int" },
     { "getElement", "Retrieves an element by its printed representation.", "Group or Ring, then String representation", "GroupElement for Group input, RingElement for Ring input" },
@@ -1148,16 +1213,6 @@ static int checkedNegLongLong(long long value, long long* out) {
 static int checkedAbsLongLong(long long value, long long* out) {
     if (value == LLONG_MIN) return 0;
     *out = value < 0 ? -value : value;
-    return 1;
-}
-
-static int checkedFactorialLongLong(long long n, long long* out) {
-    if (n < 0 || !out) return 0;
-    long long result = 1;
-    for (long long i = 2; i <= n; i++) {
-        if (!checkedMulLongLong(result, i, &result)) return 0;
-    }
-    *out = result;
     return 1;
 }
 
@@ -2111,6 +2166,43 @@ static int valueToKumaNumber(Value value, Number* out) {
     }
 }
 
+static Value valueFromKumaNumber(Number number, const char* commandName) {
+    switch (number.type) {
+        case NUMBER_INT:
+            return valInt(number.as.i);
+        case NUMBER_FRACTION:
+            return valFraction(number.as.frac);
+        case NUMBER_REAL:
+            return valDecimal(number.as.x);
+        case NUMBER_COMPLEX:
+            return valComplex(number.as.z);
+        case NUMBER_NAN:
+            break;
+    }
+
+    char buf[128];
+    snprintf(buf, sizeof(buf), "\\%s failed", commandName ? commandName : "KUMA command");
+    return valError(buf);
+}
+
+static int valueListToKumaNumbers(Value value, Number** outData, size_t* outSize) {
+    if (!outData || !outSize || value.kind != VAL_LIST || value.as.list.n == 0) return 0;
+
+    Number* data = calloc(value.as.list.n, sizeof(Number));
+    if (!data) return 0;
+
+    for (size_t i = 0; i < value.as.list.n; i++) {
+        if (!valueToKumaNumber(value.as.list.items[i], &data[i])) {
+            free(data);
+            return 0;
+        }
+    }
+
+    *outData = data;
+    *outSize = value.as.list.n;
+    return 1;
+}
+
 static int compareKumaNumberValues(const void* lhs, const void* rhs) {
     Number a;
     Number b;
@@ -2880,6 +2972,763 @@ static Value bi_shuffle(EvalContext* c, Value* a, size_t n) {
         a[0].as.list.items[j] = tmp;
     }
     return a[0];
+}
+
+static Value kumaUnaryStatsCommand(Value input, Number (*fn)(Number*, size_t), const char* name) {
+    Number* data = NULL;
+    size_t size = 0;
+    if (!valueListToKumaNumbers(input, &data, &size)) {
+        valFree(input);
+        char buf[160];
+        snprintf(buf, sizeof(buf), "\\%s expects a nonempty List of Int, Fraction, or Decimal values", name);
+        return valError(buf);
+    }
+
+    Number out = fn(data, size);
+    free(data);
+    valFree(input);
+    return valueFromKumaNumber(out, name);
+}
+
+static Value kumaBinaryStatsCommand(Value xInput, Value yInput, Number (*fn)(Number*, Number*, size_t), const char* name) {
+    if (xInput.kind != VAL_LIST || yInput.kind != VAL_LIST || xInput.as.list.n != yInput.as.list.n) {
+        valFree(xInput);
+        valFree(yInput);
+        char buf[160];
+        snprintf(buf, sizeof(buf), "\\%s expects two same-length Lists of Int, Fraction, or Decimal values", name);
+        return valError(buf);
+    }
+
+    Number* x = NULL;
+    Number* y = NULL;
+    size_t xSize = 0;
+    size_t ySize = 0;
+    if (!valueListToKumaNumbers(xInput, &x, &xSize) || !valueListToKumaNumbers(yInput, &y, &ySize) || xSize != ySize) {
+        free(x);
+        free(y);
+        valFree(xInput);
+        valFree(yInput);
+        char buf[160];
+        snprintf(buf, sizeof(buf), "\\%s expects two nonempty Lists of Int, Fraction, or Decimal values", name);
+        return valError(buf);
+    }
+
+    Number out = fn(x, y, xSize);
+    free(x);
+    free(y);
+    valFree(xInput);
+    valFree(yInput);
+    return valueFromKumaNumber(out, name);
+}
+
+static Value listFromKumaNumbers(Number* numbers, size_t count, const char* commandName) {
+    Value* items = calloc(count, sizeof(Value));
+    if (!items && count > 0) {
+        free(numbers);
+        return valError("failed to allocate KUMA list output");
+    }
+
+    for (size_t i = 0; i < count; i++) {
+        items[i] = valueFromKumaNumber(numbers[i], commandName);
+        if (items[i].kind == VAL_ERROR) {
+            for (size_t j = 0; j < i; j++) valFree(items[j]);
+            free(items);
+            free(numbers);
+            return valError("failed to convert KUMA list output");
+        }
+    }
+
+    free(numbers);
+    return valList(items, count);
+}
+
+static Value bi_kuma_factorial(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    long long input;
+    if (!valueToCombSetInt(a[0], &input)) {
+        valFree(a[0]);
+        return valError("\\factorial expects one integer");
+    }
+    valFree(a[0]);
+    if (input < 0) return valError("\\factorial requires n >= 0");
+    long long out = factorial(input);
+    if (out == 0) return integerOverflowError("\\factorial");
+    return valInt(out);
+}
+
+static Value bi_ncr(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    long long inputN;
+    long long inputR;
+    if (!valueToCombSetInt(a[0], &inputN) || !valueToCombSetInt(a[1], &inputR)) {
+        valFree(a[0]);
+        valFree(a[1]);
+        return valError("\\ncr expects integer n and r");
+    }
+    valFree(a[0]);
+    valFree(a[1]);
+    if (inputN < 0 || inputR < 0 || inputR > inputN) return valError("\\ncr requires 0 <= r <= n");
+    long long out = ncr(inputN, inputR);
+    if (out == 0) return integerOverflowError("\\ncr");
+    return valInt(out);
+}
+
+static Value bi_npr(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    long long inputN;
+    long long inputR;
+    if (!valueToCombSetInt(a[0], &inputN) || !valueToCombSetInt(a[1], &inputR)) {
+        valFree(a[0]);
+        valFree(a[1]);
+        return valError("\\npr expects integer n and r");
+    }
+    valFree(a[0]);
+    valFree(a[1]);
+    if (inputN < 0 || inputR < 0 || inputR > inputN) return valError("\\npr requires 0 <= r <= n");
+    long long out = npr(inputN, inputR);
+    if (out == 0) return integerOverflowError("\\npr");
+    return valInt(out);
+}
+
+static Value bi_multinomial(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    long long total;
+    if (n < 2 || !valueToCombSetInt(a[0], &total)) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\multinomial expects integer n and a List of integer parts");
+    }
+
+    size_t partCount = (n == 2 && a[1].kind == VAL_LIST) ? a[1].as.list.n : n - 1;
+    long long* parts = calloc(partCount, sizeof(long long));
+    if (!parts && partCount > 0) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\multinomial failed to allocate parts");
+    }
+
+    bool ok = true;
+    long long partsTotal = 0;
+    for (size_t i = 0; i < partCount; i++) {
+        Value part = (n == 2 && a[1].kind == VAL_LIST) ? a[1].as.list.items[i] : a[i + 1];
+        if (!valueToCombSetInt(part, &parts[i]) || parts[i] < 0
+                || !checkedAddLongLong(partsTotal, parts[i], &partsTotal)) {
+            ok = false;
+            break;
+        }
+    }
+
+    for (size_t i = 0; i < n; i++) valFree(a[i]);
+    if (!ok || total < 0 || partsTotal != total) {
+        free(parts);
+        return valError("\\multinomial expects nonnegative integer parts summing to n");
+    }
+
+    long long out = multinomial(total, parts, partCount);
+    free(parts);
+    if (out == 0) return integerOverflowError("\\multinomial");
+    return valInt(out);
+}
+
+static Value kumaDistributionMomentCommand(Value input,
+        Number (*distFn)(ProbabilityDistribution*),
+        Number (*rvFn)(RandomVariable*),
+        Number (*listFn)(Number*, size_t),
+        const char* name) {
+    // Dispatch distribution and random-variable inputs through KUMA accessors
+    if (input.kind == VAL_PROBABILITY_DISTRIBUTION) {
+        ProbabilityDistribution* dist = (ProbabilityDistribution*)input.as.ptr;
+        Number out = distFn(dist);
+        valFree(input);
+        return valueFromKumaNumber(out, name);
+    }
+    if (input.kind == VAL_RANDOM_VARIABLE) {
+        RandomVariable* rv = (RandomVariable*)input.as.ptr;
+        Number out = rvFn(rv);
+        valFree(input);
+        return valueFromKumaNumber(out, name);
+    }
+
+    // Fall back to the list statistic with the existing list semantics
+    return kumaUnaryStatsCommand(input, listFn, name);
+}
+
+static Value bi_kuma_sum(EvalContext* c, Value* a, size_t n) { (void)c; (void)n; return kumaUnaryStatsCommand(a[0], sum, "sum"); }
+static Value bi_kuma_product(EvalContext* c, Value* a, size_t n) { (void)c; (void)n; return kumaUnaryStatsCommand(a[0], product, "product"); }
+static Value bi_kuma_mean(EvalContext* c, Value* a, size_t n) { (void)c; (void)n; return kumaDistributionMomentCommand(a[0], probabilityMean, rvExpectedValue, mean, "mean"); }
+static Value bi_kuma_median(EvalContext* c, Value* a, size_t n) { (void)c; (void)n; return kumaUnaryStatsCommand(a[0], median, "median"); }
+static Value bi_kuma_mode(EvalContext* c, Value* a, size_t n) { (void)c; (void)n; return kumaUnaryStatsCommand(a[0], mode, "mode"); }
+static Value bi_kuma_min(EvalContext* c, Value* a, size_t n) { (void)c; (void)n; return kumaUnaryStatsCommand(a[0], min, "min"); }
+static Value bi_kuma_max(EvalContext* c, Value* a, size_t n) { (void)c; (void)n; return kumaUnaryStatsCommand(a[0], max, "max"); }
+static Value bi_kuma_range(EvalContext* c, Value* a, size_t n) { (void)c; (void)n; return kumaUnaryStatsCommand(a[0], range, "range"); }
+static Value bi_kuma_variance(EvalContext* c, Value* a, size_t n) { (void)c; (void)n; return kumaDistributionMomentCommand(a[0], probabilityVariance, rvVariance, variance, "variance"); }
+static Value bi_kuma_sampleVariance(EvalContext* c, Value* a, size_t n) { (void)c; (void)n; return kumaUnaryStatsCommand(a[0], sampleVariance, "sampleVariance"); }
+static Value bi_kuma_stddev(EvalContext* c, Value* a, size_t n) { (void)c; (void)n; return kumaDistributionMomentCommand(a[0], probabilityStddev, rvStddev, stddev, "stddev"); }
+static Value bi_kuma_sampleStddev(EvalContext* c, Value* a, size_t n) { (void)c; (void)n; return kumaUnaryStatsCommand(a[0], sampleStddev, "sampleStddev"); }
+static Value bi_kuma_meanAbsDev(EvalContext* c, Value* a, size_t n) { (void)c; (void)n; return kumaUnaryStatsCommand(a[0], meanAbsDev, "meanAbsDev"); }
+static Value bi_kuma_medianAbsDev(EvalContext* c, Value* a, size_t n) { (void)c; (void)n; return kumaUnaryStatsCommand(a[0], medianAbsDev, "medianAbsDev"); }
+static Value bi_kuma_iqr(EvalContext* c, Value* a, size_t n) { (void)c; (void)n; return kumaUnaryStatsCommand(a[0], iqr, "iqr"); }
+static Value bi_kuma_geometricMean(EvalContext* c, Value* a, size_t n) { (void)c; (void)n; return kumaUnaryStatsCommand(a[0], geometricMean, "geometricMean"); }
+static Value bi_kuma_harmonicMean(EvalContext* c, Value* a, size_t n) { (void)c; (void)n; return kumaUnaryStatsCommand(a[0], harmonicMean, "harmonicMean"); }
+
+static Value bi_percentile(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    Number* data = NULL;
+    size_t size = 0;
+    Number p;
+    if (!valueListToKumaNumbers(a[0], &data, &size) || !valueToKumaNumber(a[1], &p)) {
+        free(data);
+        valFree(a[0]);
+        valFree(a[1]);
+        return valError("\\percentile expects a nonempty numeric List and numeric percentile p");
+    }
+
+    Number out = percentile(data, size, p);
+    free(data);
+    valFree(a[0]);
+    valFree(a[1]);
+    return valueFromKumaNumber(out, "percentile");
+}
+
+static Value bi_quartile(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    Number* data = NULL;
+    size_t size = 0;
+    long long qRaw;
+    if (!valueListToKumaNumbers(a[0], &data, &size) || !valueToCombSetInt(a[1], &qRaw) || qRaw < 0 || qRaw > 4) {
+        free(data);
+        valFree(a[0]);
+        valFree(a[1]);
+        return valError("\\quartile expects a nonempty numeric List and q in {0,1,2,3,4}");
+    }
+
+    Number out = quartile(data, size, (int)qRaw);
+    free(data);
+    valFree(a[0]);
+    valFree(a[1]);
+    return valueFromKumaNumber(out, "quartile");
+}
+
+static Value bi_modes(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    Number* data = NULL;
+    size_t size = 0;
+    if (!valueListToKumaNumbers(a[0], &data, &size)) {
+        valFree(a[0]);
+        return valError("\\modes expects a nonempty List of Int, Fraction, or Decimal values");
+    }
+
+    size_t outCount = 0;
+    Number* out = modes(data, size, &outCount);
+    free(data);
+    valFree(a[0]);
+    if (!out && outCount == 0) return valError("\\modes failed");
+    return listFromKumaNumbers(out, outCount, "modes");
+}
+
+static Value bi_frequency(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    Number* data = NULL;
+    size_t size = 0;
+    Number x;
+    if (!valueListToKumaNumbers(a[0], &data, &size) || !valueToKumaNumber(a[1], &x)) {
+        free(data);
+        valFree(a[0]);
+        valFree(a[1]);
+        return valError("\\frequency expects a nonempty numeric List and numeric value");
+    }
+
+    size_t out = numFreq(data, x, size);
+    free(data);
+    valFree(a[0]);
+    valFree(a[1]);
+    return valSizeT(out, "\\frequency");
+}
+
+static Value bi_countDistinct(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    Number* data = NULL;
+    size_t size = 0;
+    if (!valueListToKumaNumbers(a[0], &data, &size)) {
+        valFree(a[0]);
+        return valError("\\countDistinct expects a nonempty List of Int, Fraction, or Decimal values");
+    }
+
+    size_t out = countDistinct(data, size);
+    free(data);
+    valFree(a[0]);
+    return valSizeT(out, "\\countDistinct");
+}
+
+static Value bi_frequencies(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    Number* data = NULL;
+    size_t size = 0;
+    if (!valueListToKumaNumbers(a[0], &data, &size)) {
+        valFree(a[0]);
+        return valError("\\frequencies expects a nonempty List of Int, Fraction, or Decimal values");
+    }
+
+    size_t freqCount = 0;
+    Frequency* freqs = frequencies(data, size, &freqCount);
+    free(data);
+    valFree(a[0]);
+    if (!freqs && freqCount == 0) return valError("\\frequencies failed");
+
+    Value* items = calloc(freqCount, sizeof(Value));
+    if (!items && freqCount > 0) {
+        freeFrequencies(freqs);
+        return valError("failed to allocate frequency list output");
+    }
+
+    for (size_t i = 0; i < freqCount; i++) {
+        Value* pair = calloc(2, sizeof(Value));
+        if (!pair) {
+            for (size_t j = 0; j < i; j++) valFree(items[j]);
+            free(items);
+            freeFrequencies(freqs);
+            return valError("failed to allocate frequency pair output");
+        }
+        pair[0] = valueFromKumaNumber(freqs[i].value, "frequencies");
+        pair[1] = valSizeT(freqs[i].count, "\\frequencies");
+        items[i] = valList(pair, 2);
+    }
+
+    freeFrequencies(freqs);
+    return valList(items, freqCount);
+}
+
+static Value bi_covariance(EvalContext* c, Value* a, size_t n) { (void)c; (void)n; return kumaBinaryStatsCommand(a[0], a[1], covariance, "covariance"); }
+static Value bi_sampleCovariance(EvalContext* c, Value* a, size_t n) { (void)c; (void)n; return kumaBinaryStatsCommand(a[0], a[1], sampleCovariance, "sampleCovariance"); }
+static Value bi_correlation(EvalContext* c, Value* a, size_t n) { (void)c; (void)n; return kumaBinaryStatsCommand(a[0], a[1], correlation, "correlation"); }
+static Value bi_linearRegressionSlope(EvalContext* c, Value* a, size_t n) { (void)c; (void)n; return kumaBinaryStatsCommand(a[0], a[1], linearRegressionSlope, "linearRegressionSlope"); }
+static Value bi_linearRegressionIntercept(EvalContext* c, Value* a, size_t n) { (void)c; (void)n; return kumaBinaryStatsCommand(a[0], a[1], linearRegressionIntercept, "linearRegressionIntercept"); }
+
+static Value bi_linearRegressionPredict(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    Number slope;
+    Number intercept;
+    Number x;
+    if (!valueToKumaNumber(a[0], &slope) || !valueToKumaNumber(a[1], &intercept) || !valueToKumaNumber(a[2], &x)) {
+        valFree(a[0]);
+        valFree(a[1]);
+        valFree(a[2]);
+        return valError("\\linearRegressionPredict expects numeric slope, intercept, and x");
+    }
+
+    Number out = linearRegressionPredict(slope, intercept, x);
+    valFree(a[0]);
+    valFree(a[1]);
+    valFree(a[2]);
+    return valueFromKumaNumber(out, "linearRegressionPredict");
+}
+
+static Value kumaDistributionOutput(ProbabilityDistribution* dist, const char* commandName) {
+    // Wrap successfully constructed distributions as owned Bestiary values
+    if (!dist) {
+        char buf[128];
+        snprintf(buf, sizeof(buf), "\\%s failed", commandName);
+        return valError(buf);
+    }
+    return valPtr(VAL_PROBABILITY_DISTRIBUTION, dist);
+}
+
+static Value kumaRandomVariableOutput(RandomVariable* rv, const char* commandName) {
+    // Wrap successfully constructed random variables as owned Bestiary values
+    if (!rv) {
+        char buf[128];
+        snprintf(buf, sizeof(buf), "\\%s failed", commandName);
+        return valError(buf);
+    }
+    return valPtr(VAL_RANDOM_VARIABLE, rv);
+}
+
+static Value bi_bernoulli(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    Number p;
+    if (!valueToKumaNumber(a[0], &p)) {
+        valFree(a[0]);
+        return valError("\\bernoulli expects one numeric probability");
+    }
+    valFree(a[0]);
+    return kumaDistributionOutput(constructBernoulliDistribution(p), "bernoulli");
+}
+
+static Value bi_binomial(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    long long trials;
+    Number p;
+    if (!valueToCombSetInt(a[0], &trials) || !valueToKumaNumber(a[1], &p)) {
+        valFree(a[0]);
+        valFree(a[1]);
+        return valError("\\binomial expects integer n and numeric probability p");
+    }
+    valFree(a[0]);
+    valFree(a[1]);
+    return kumaDistributionOutput(constructBinomialDistribution(trials, p), "binomial");
+}
+
+static Value bi_geometric(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    Number p;
+    if (!valueToKumaNumber(a[0], &p)) {
+        valFree(a[0]);
+        return valError("\\geometric expects one numeric probability");
+    }
+    valFree(a[0]);
+    return kumaDistributionOutput(constructGeometricDistribution(p), "geometric");
+}
+
+static Value bi_poisson(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    Number lambda;
+    if (!valueToKumaNumber(a[0], &lambda)) {
+        valFree(a[0]);
+        return valError("\\poisson expects one numeric rate");
+    }
+    valFree(a[0]);
+    return kumaDistributionOutput(constructPoissonDistribution(lambda), "poisson");
+}
+
+static Value bi_discreteUniform(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    long long lower;
+    long long upper;
+    if (!valueToCombSetInt(a[0], &lower) || !valueToCombSetInt(a[1], &upper)) {
+        valFree(a[0]);
+        valFree(a[1]);
+        return valError("\\discreteUniform expects integer lower and upper bounds");
+    }
+    valFree(a[0]);
+    valFree(a[1]);
+    return kumaDistributionOutput(constructDiscreteUniformDistribution(lower, upper), "discreteUniform");
+}
+
+static Value bi_continuousUniform(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    Number lower;
+    Number upper;
+    if (!valueToKumaNumber(a[0], &lower) || !valueToKumaNumber(a[1], &upper)) {
+        valFree(a[0]);
+        valFree(a[1]);
+        return valError("\\continuousUniform expects numeric lower and upper bounds");
+    }
+    valFree(a[0]);
+    valFree(a[1]);
+    return kumaDistributionOutput(constructContinuousUniformDistribution(lower, upper), "continuousUniform");
+}
+
+static Value bi_normal(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    Number mu;
+    Number sigma;
+    if (!valueToKumaNumber(a[0], &mu) || !valueToKumaNumber(a[1], &sigma)) {
+        valFree(a[0]);
+        valFree(a[1]);
+        return valError("\\normal expects numeric mu and sigma");
+    }
+    valFree(a[0]);
+    valFree(a[1]);
+    return kumaDistributionOutput(constructNormalDistribution(mu, sigma), "normal");
+}
+
+static Value bi_exponential(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    Number lambda;
+    if (!valueToKumaNumber(a[0], &lambda)) {
+        valFree(a[0]);
+        return valError("\\exponential expects one numeric rate");
+    }
+    valFree(a[0]);
+    return kumaDistributionOutput(constructExponentialDistribution(lambda), "exponential");
+}
+
+static Value bi_customDiscrete(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    Number* values = NULL;
+    Number* probabilities = NULL;
+    size_t valueCount = 0;
+    size_t probabilityCount = 0;
+    if (!valueListToKumaNumbers(a[0], &values, &valueCount)
+            || !valueListToKumaNumbers(a[1], &probabilities, &probabilityCount)
+            || valueCount != probabilityCount) {
+        free(values);
+        free(probabilities);
+        valFree(a[0]);
+        valFree(a[1]);
+        return valError("\\customDiscrete expects same-length numeric value and probability Lists");
+    }
+
+    ProbabilityDistribution* dist = constructCustomDiscreteDistribution(values, probabilities, valueCount, true);
+    free(values);
+    free(probabilities);
+    valFree(a[0]);
+    valFree(a[1]);
+    return kumaDistributionOutput(dist, "customDiscrete");
+}
+
+static ProbabilityDistribution* valueAsDistribution(Value value) {
+    // Read the owned distribution pointer without taking ownership
+    return value.kind == VAL_PROBABILITY_DISTRIBUTION ? (ProbabilityDistribution*)value.as.ptr : NULL;
+}
+
+static RandomVariable* valueAsRandomVariable(Value value) {
+    // Read the owned random-variable pointer without taking ownership
+    return value.kind == VAL_RANDOM_VARIABLE ? (RandomVariable*)value.as.ptr : NULL;
+}
+
+static Value kumaDistributionAtCommand(Value target, Value xInput,
+        Number (*distFn)(ProbabilityDistribution*, Number),
+        Number (*rvFn)(RandomVariable*, Number),
+        const char* name) {
+    Number x;
+    if (!valueToKumaNumber(xInput, &x)) {
+        valFree(target);
+        valFree(xInput);
+        char buf[128];
+        snprintf(buf, sizeof(buf), "\\%s expects a distribution or random variable and a numeric input", name);
+        return valError(buf);
+    }
+
+    // Dispatch to either a distribution accessor or an RV accessor
+    Number out = { .type = NUMBER_NAN, .as.x = NAN };
+    ProbabilityDistribution* dist = valueAsDistribution(target);
+    RandomVariable* rv = valueAsRandomVariable(target);
+    if (dist) out = distFn(dist, x);
+    else if (rv) out = rvFn(rv, x);
+    else {
+        valFree(target);
+        valFree(xInput);
+        char buf[128];
+        snprintf(buf, sizeof(buf), "\\%s expects a distribution or random variable", name);
+        return valError(buf);
+    }
+
+    valFree(target);
+    valFree(xInput);
+    return valueFromKumaNumber(out, name);
+}
+
+static Value kumaDistributionUnaryCommand(Value target,
+        Number (*distFn)(ProbabilityDistribution*),
+        Number (*rvFn)(RandomVariable*),
+        const char* name) {
+    // Dispatch to either a distribution accessor or an RV accessor
+    Number out = { .type = NUMBER_NAN, .as.x = NAN };
+    ProbabilityDistribution* dist = valueAsDistribution(target);
+    RandomVariable* rv = valueAsRandomVariable(target);
+    if (dist) out = distFn(dist);
+    else if (rv) out = rvFn(rv);
+    else {
+        valFree(target);
+        char buf[128];
+        snprintf(buf, sizeof(buf), "\\%s expects a distribution or random variable", name);
+        return valError(buf);
+    }
+
+    valFree(target);
+    return valueFromKumaNumber(out, name);
+}
+
+static Value bi_pmf(EvalContext* c, Value* a, size_t n) { (void)c; (void)n; return kumaDistributionAtCommand(a[0], a[1], probabilityPMF, rvPMF, "pmf"); }
+static Value bi_pdf(EvalContext* c, Value* a, size_t n) { (void)c; (void)n; return kumaDistributionAtCommand(a[0], a[1], probabilityPDF, rvPDF, "pdf"); }
+static Value bi_cdf(EvalContext* c, Value* a, size_t n) { (void)c; (void)n; return kumaDistributionAtCommand(a[0], a[1], probabilityCDF, rvCDF, "cdf"); }
+static Value bi_expectedValue(EvalContext* c, Value* a, size_t n) { (void)c; (void)n; return kumaDistributionUnaryCommand(a[0], probabilityMean, rvExpectedValue, "expectedValue"); }
+static Value bi_sample(EvalContext* c, Value* a, size_t n) { (void)c; (void)n; return kumaDistributionUnaryCommand(a[0], probabilitySample, rvSample, "sample"); }
+
+static Value kumaDistributionFuncCommand(Value target, bool wantPDF, const char* name) {
+    // Dispatch graphable PDF/CDF requests through KUMA function builders
+    NekoExpr* expr = NULL;
+    ProbabilityDistribution* dist = valueAsDistribution(target);
+    RandomVariable* rv = valueAsRandomVariable(target);
+    if (dist) expr = wantPDF ? probabilityPDFfunc(dist) : probabilityCDFfunc(dist);
+    else if (rv) expr = wantPDF ? rvPDFfunc(rv) : rvCDFfunc(rv);
+    else {
+        valFree(target);
+        char buf[128];
+        snprintf(buf, sizeof(buf), "\\%s expects a distribution or random variable", name);
+        return valError(buf);
+    }
+
+    valFree(target);
+    if (!expr) {
+        char buf[128];
+        snprintf(buf, sizeof(buf), "\\%s is not supported for this distribution", name);
+        return valError(buf);
+    }
+    return wrapNekoExpr(expr);
+}
+
+static Value bi_pdfFunc(EvalContext* c, Value* a, size_t n) { (void)c; (void)n; return kumaDistributionFuncCommand(a[0], true, "pdfFunc"); }
+static Value bi_cdfFunc(EvalContext* c, Value* a, size_t n) { (void)c; (void)n; return kumaDistributionFuncCommand(a[0], false, "cdfFunc"); }
+
+static Value bi_affineDistribution(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    Number scalar;
+    Number shift;
+    ProbabilityDistribution* dist = valueAsDistribution(a[0]);
+    if (!dist || !valueToKumaNumber(a[1], &scalar) || !valueToKumaNumber(a[2], &shift)) {
+        valFree(a[0]);
+        valFree(a[1]);
+        valFree(a[2]);
+        return valError("\\affineDistribution expects a distribution, scalar, and shift");
+    }
+
+    ProbabilityDistribution* out = affineDistribution(dist, scalar, shift);
+    valFree(a[0]);
+    valFree(a[1]);
+    valFree(a[2]);
+    return kumaDistributionOutput(out, "affineDistribution");
+}
+
+static Value bi_sumIndependentDistributions(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    ProbabilityDistribution* x = valueAsDistribution(a[0]);
+    ProbabilityDistribution* y = valueAsDistribution(a[1]);
+    if (!x || !y) {
+        valFree(a[0]);
+        valFree(a[1]);
+        return valError("\\sumIndependentDistributions expects two distributions");
+    }
+
+    ProbabilityDistribution* out = sumIndependentDistributions(x, y);
+    valFree(a[0]);
+    valFree(a[1]);
+    return kumaDistributionOutput(out, "sumIndependentDistributions");
+}
+
+static Value bi_productIndependentDistributions(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    ProbabilityDistribution* x = valueAsDistribution(a[0]);
+    ProbabilityDistribution* y = valueAsDistribution(a[1]);
+    if (!x || !y) {
+        valFree(a[0]);
+        valFree(a[1]);
+        return valError("\\productIndependentDistributions expects two distributions");
+    }
+
+    ProbabilityDistribution* out = productIndependentDistributions(x, y);
+    valFree(a[0]);
+    valFree(a[1]);
+    return kumaDistributionOutput(out, "productIndependentDistributions");
+}
+
+static Value bi_randomVariable(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (a[0].kind != VAL_SYMBOL && a[0].kind != VAL_STRING) {
+        valFree(a[0]);
+        valFree(a[1]);
+        return valError("\\randomVariable expects a Symbol or String name and a distribution");
+    }
+    ProbabilityDistribution* dist = valueAsDistribution(a[1]);
+    if (!dist) {
+        valFree(a[0]);
+        valFree(a[1]);
+        return valError("\\randomVariable expects a Symbol or String name and a distribution");
+    }
+
+    ProbabilityDistribution* copy = copyProbabilityDistribution(dist);
+    RandomVariable* rv = copy ? constructRandomVariable(a[0].as.str, copy, true) : NULL;
+    if (!rv) freeProbabilityDistribution(copy);
+    valFree(a[0]);
+    valFree(a[1]);
+    return kumaRandomVariableOutput(rv, "randomVariable");
+}
+
+static Value rvTransformUnaryCommand(Value input, Value scalarInput,
+        RandomVariable* (*fn)(RandomVariable*, Number),
+        const char* name) {
+    Number scalar;
+    RandomVariable* rv = valueAsRandomVariable(input);
+    if (!rv || !valueToKumaNumber(scalarInput, &scalar)) {
+        valFree(input);
+        valFree(scalarInput);
+        char buf[128];
+        snprintf(buf, sizeof(buf), "\\%s expects a random variable and a numeric value", name);
+        return valError(buf);
+    }
+
+    RandomVariable* out = fn(rv, scalar);
+    valFree(input);
+    valFree(scalarInput);
+    return kumaRandomVariableOutput(out, name);
+}
+
+static Value bi_rvScale(EvalContext* c, Value* a, size_t n) { (void)c; (void)n; return rvTransformUnaryCommand(a[0], a[1], rvScale, "rvScale"); }
+static Value bi_rvShift(EvalContext* c, Value* a, size_t n) { (void)c; (void)n; return rvTransformUnaryCommand(a[0], a[1], rvShift, "rvShift"); }
+
+static Value bi_rvAffine(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    Number scalar;
+    Number shift;
+    RandomVariable* rv = valueAsRandomVariable(a[0]);
+    if (!rv || !valueToKumaNumber(a[1], &scalar) || !valueToKumaNumber(a[2], &shift)) {
+        valFree(a[0]);
+        valFree(a[1]);
+        valFree(a[2]);
+        return valError("\\rvAffine expects a random variable, scalar, and shift");
+    }
+
+    RandomVariable* out = rvAffine(rv, scalar, shift);
+    valFree(a[0]);
+    valFree(a[1]);
+    valFree(a[2]);
+    return kumaRandomVariableOutput(out, "rvAffine");
+}
+
+static Value rvTransformBinaryCommand(Value xInput, Value yInput,
+        RandomVariable* (*fn)(RandomVariable*, RandomVariable*),
+        const char* name) {
+    RandomVariable* x = valueAsRandomVariable(xInput);
+    RandomVariable* y = valueAsRandomVariable(yInput);
+    if (!x || !y) {
+        valFree(xInput);
+        valFree(yInput);
+        char buf[128];
+        snprintf(buf, sizeof(buf), "\\%s expects two random variables", name);
+        return valError(buf);
+    }
+
+    RandomVariable* out = fn(x, y);
+    valFree(xInput);
+    valFree(yInput);
+    return kumaRandomVariableOutput(out, name);
+}
+
+static Value bi_rvSumIndependent(EvalContext* c, Value* a, size_t n) { (void)c; (void)n; return rvTransformBinaryCommand(a[0], a[1], rvSumIndependent, "rvSumIndependent"); }
+static Value bi_rvProductIndependent(EvalContext* c, Value* a, size_t n) { (void)c; (void)n; return rvTransformBinaryCommand(a[0], a[1], rvProductIndependent, "rvProductIndependent"); }
+
+static Value bi_rvPMF(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    return kumaDistributionAtCommand(a[0], a[1], probabilityPMF, rvPMF, "rvPMF");
+}
+
+static Value bi_rvPDF(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    return kumaDistributionAtCommand(a[0], a[1], probabilityPDF, rvPDF, "rvPDF");
+}
+
+static Value bi_rvCDF(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    return kumaDistributionAtCommand(a[0], a[1], probabilityCDF, rvCDF, "rvCDF");
+}
+
+static Value bi_rvExpectedValue(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    return kumaDistributionUnaryCommand(a[0], probabilityMean, rvExpectedValue, "rvExpectedValue");
+}
+
+static Value bi_rvVariance(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    return kumaDistributionUnaryCommand(a[0], probabilityVariance, rvVariance, "rvVariance");
+}
+
+static Value bi_rvStddev(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    return kumaDistributionUnaryCommand(a[0], probabilityStddev, rvStddev, "rvStddev");
+}
+
+static Value bi_rvSample(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    return kumaDistributionUnaryCommand(a[0], probabilitySample, rvSample, "rvSample");
 }
 
 static Value bi_randInt(EvalContext* c, Value* a, size_t n) {
@@ -9479,22 +10328,6 @@ static Value bi_isPrime_cmd(EvalContext* c, Value* a, size_t n) {
     return valBool(isPrime(p));
 }
 
-static Value bi_factorial_cmd(EvalContext* c, Value* a, size_t n) {
-    (void)c; (void)n;
-    long long input;
-    if (!valueToCombSetInt(a[0], &input)) {
-        valFree(a[0]);
-        return valError("\\factorial expects one integer");
-    }
-    valFree(a[0]);
-    if (input < 0) return valError("\\factorial requires n >= 0");
-    long long out;
-    if (!checkedFactorialLongLong(input, &out)) {
-        return integerOverflowError("\\factorial");
-    }
-    return valInt(out);
-}
-
 static Value bi_listElements(EvalContext* c, Value* a, size_t n) {
     (void)c; (void)n;
     if (!valueIsGroup(a[0]) && !valueIsRing(a[0])) {
@@ -11864,7 +12697,72 @@ void registerBuiltins(void) {
     registerCommand("unitGroup",  1, bi_unitGroup_cmd);
     registerCommand("Q8",  0, bi_quaternionGroup);
     registerCommand("isPrime",  1, bi_isPrime_cmd);
-    registerCommand("factorial",  1, bi_factorial_cmd);
+    registerCommand("factorial",  1, bi_kuma_factorial);
+    registerCommand("ncr",  2, bi_ncr);
+    registerCommand("npr",  2, bi_npr);
+    registerCommand("multinomial", -1, bi_multinomial);
+    registerCommand("sum",  1, bi_kuma_sum);
+    registerCommand("product",  1, bi_kuma_product);
+    registerCommand("mean",  1, bi_kuma_mean);
+    registerCommand("median",  1, bi_kuma_median);
+    registerCommand("mode",  1, bi_kuma_mode);
+    registerCommand("modes",  1, bi_modes);
+    registerCommand("min",  1, bi_kuma_min);
+    registerCommand("max",  1, bi_kuma_max);
+    registerCommand("range",  1, bi_kuma_range);
+    registerCommand("variance",  1, bi_kuma_variance);
+    registerCommand("sampleVariance",  1, bi_kuma_sampleVariance);
+    registerCommand("stddev",  1, bi_kuma_stddev);
+    registerCommand("sampleStddev",  1, bi_kuma_sampleStddev);
+    registerCommand("meanAbsDev",  1, bi_kuma_meanAbsDev);
+    registerCommand("medianAbsDev",  1, bi_kuma_medianAbsDev);
+    registerCommand("percentile",  2, bi_percentile);
+    registerCommand("quartile",  2, bi_quartile);
+    registerCommand("iqr",  1, bi_kuma_iqr);
+    registerCommand("geometricMean",  1, bi_kuma_geometricMean);
+    registerCommand("harmonicMean",  1, bi_kuma_harmonicMean);
+    registerCommand("frequency",  2, bi_frequency);
+    registerCommand("countDistinct",  1, bi_countDistinct);
+    registerCommand("frequencies",  1, bi_frequencies);
+    registerCommand("covariance",  2, bi_covariance);
+    registerCommand("sampleCovariance",  2, bi_sampleCovariance);
+    registerCommand("correlation",  2, bi_correlation);
+    registerCommand("linearRegressionSlope",  2, bi_linearRegressionSlope);
+    registerCommand("linearRegressionIntercept",  2, bi_linearRegressionIntercept);
+    registerCommand("linearRegressionPredict",  3, bi_linearRegressionPredict);
+    registerCommand("bernoulli",  1, bi_bernoulli);
+    registerCommand("binomial",  2, bi_binomial);
+    registerCommand("geometric",  1, bi_geometric);
+    registerCommand("poisson",  1, bi_poisson);
+    registerCommand("discreteUniform",  2, bi_discreteUniform);
+    registerCommand("continuousUniform",  2, bi_continuousUniform);
+    registerCommand("normal",  2, bi_normal);
+    registerCommand("exponential",  1, bi_exponential);
+    registerCommand("customDiscrete",  2, bi_customDiscrete);
+    registerCommand("affineDistribution",  3, bi_affineDistribution);
+    registerCommand("sumIndependentDistributions",  2, bi_sumIndependentDistributions);
+    registerCommand("productIndependentDistributions",  2, bi_productIndependentDistributions);
+    registerCommand("pmf",  2, bi_pmf);
+    registerCommand("pdf",  2, bi_pdf);
+    registerCommand("cdf",  2, bi_cdf);
+    registerCommand("expectedValue",  1, bi_expectedValue);
+    registerCommand("sample",  1, bi_sample);
+    registerCommand("pdfFunc",  1, bi_pdfFunc);
+    registerCommand("cdfFunc",  1, bi_cdfFunc);
+    registerCommand("randomVariable",  2, bi_randomVariable);
+    registerCommand("rv",  2, bi_randomVariable);
+    registerCommand("rvPMF",  2, bi_rvPMF);
+    registerCommand("rvPDF",  2, bi_rvPDF);
+    registerCommand("rvCDF",  2, bi_rvCDF);
+    registerCommand("rvExpectedValue",  1, bi_rvExpectedValue);
+    registerCommand("rvVariance",  1, bi_rvVariance);
+    registerCommand("rvStddev",  1, bi_rvStddev);
+    registerCommand("rvSample",  1, bi_rvSample);
+    registerCommand("rvScale",  2, bi_rvScale);
+    registerCommand("rvShift",  2, bi_rvShift);
+    registerCommand("rvAffine",  3, bi_rvAffine);
+    registerCommand("rvSumIndependent",  2, bi_rvSumIndependent);
+    registerCommand("rvProductIndependent",  2, bi_rvProductIndependent);
     registerCommand("listElements",  1, bi_listElements);
     registerCommand("numElements",  1, bi_numElements);
     registerCommand("getElement",  2, bi_getElement);

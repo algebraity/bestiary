@@ -250,6 +250,8 @@ Number probabilityMean(ProbabilityDistribution* dist);
 Number probabilityVariance(ProbabilityDistribution* dist);
 Number probabilityStddev(ProbabilityDistribution* dist);
 Number probabilitySample(ProbabilityDistribution* dist);
+NekoExpr* probabilityPDFfunc(ProbabilityDistribution* dist);
+NekoExpr* probabilityCDFfunc(ProbabilityDistribution* dist);
 
 /* ---------- Named distribution functions ---------- */
 
@@ -567,6 +569,8 @@ Number rvExpectedValue(RandomVariable* rv);
 Number rvVariance(RandomVariable* rv);
 Number rvStddev(RandomVariable* rv);
 Number rvSample(RandomVariable* rv);
+NekoExpr* rvPDFfunc(RandomVariable* rv);
+NekoExpr* rvCDFfunc(RandomVariable* rv);
 
 /* ---------- RandomVariable transformations ---------- */
 RandomVariable* rvScale(RandomVariable* rv, Number scalar);
