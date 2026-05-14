@@ -46,7 +46,7 @@ static constexpr Section kSections[] = {
         "Basic features and commands",
         "Basic features and commands",
         "* Creating a new tab: use Ctrl+T or the \"+\" button on the tab bar to create a new tab containing a Bestiary shell.\n\n"
-        "* Navigating tabs: Use Ctrl+n to move to the nth tab after the start page, Ctrl+` to move to the start page, and Ctrl+D to close the current tab.\n\n"
+        "* Navigating tabs: Use Ctrl+1 to move to the start page, Ctrl+2 through Ctrl+9 to move to later tabs, and Ctrl+D to close the current tab.\n\n"
         "* Zoom: Use Ctrl+- and Ctrl++ to zoom out and in to a terminal or help page. Bestiary remembers your zoom level and shares it across tabs of the same type! In graphs, use the scroll wheel or touchpad to zoom.\n\n"
         "* Graphing: Use the `\\graph{function}` command to graph a function in a new Graph tab, `\\graph{function}{n}` to add a function to the nth Graph tab, or `\\graph{x=c}` to graph a vertical line at a real constant c. Expressions involving y, such as `\\graph{x*y}`, are graphed implicitly as `x*y = 0`, and equations such as `\\graph{x^2 + y^2 = 1}` are shifted internally to graph the zero set. The graph command treats x and y as graph axes even if variables with those names exist in the shell.\n\n"
         "* Persistence: Bestiary remembers what tabs you have open when you close it, and restores them for you automatically. Use `\\export{\"filename.bsy\"}` to create a script that restores your session, so you can share your work with others!\n\n"

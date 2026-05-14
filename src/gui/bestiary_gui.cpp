@@ -1539,6 +1539,9 @@ public:
     static constexpr int kZoomOutId = wxID_HIGHEST + 100;
     static constexpr int kZoomInId  = wxID_HIGHEST + 101;
     static constexpr int kFindId    = wxID_HIGHEST + 102;
+    static constexpr int kNewTabId  = wxID_HIGHEST + 103;
+    static constexpr int kCloseTabId = wxID_HIGHEST + 104;
+    static constexpr int kSelectTabBaseId = wxID_HIGHEST + 120;
 
     MainFrame()
         : wxFrame(nullptr, wxID_ANY, "Bestiary", wxDefaultPosition, wxSize(720, 520)),
@@ -1562,6 +1565,26 @@ public:
             wxAcceleratorEntry(wxACCEL_CTRL, WXK_ADD,            kZoomInId),
             wxAcceleratorEntry(wxACCEL_CTRL, WXK_NUMPAD_ADD,     kZoomInId),
             wxAcceleratorEntry(wxACCEL_CTRL, (int)'F',           kFindId),
+            wxAcceleratorEntry(wxACCEL_CTRL, (int)'T',           kNewTabId),
+            wxAcceleratorEntry(wxACCEL_CTRL, (int)'D',           kCloseTabId),
+            wxAcceleratorEntry(wxACCEL_CTRL, (int)'1',           kSelectTabBaseId + 0),
+            wxAcceleratorEntry(wxACCEL_CTRL, (int)'2',           kSelectTabBaseId + 1),
+            wxAcceleratorEntry(wxACCEL_CTRL, (int)'3',           kSelectTabBaseId + 2),
+            wxAcceleratorEntry(wxACCEL_CTRL, (int)'4',           kSelectTabBaseId + 3),
+            wxAcceleratorEntry(wxACCEL_CTRL, (int)'5',           kSelectTabBaseId + 4),
+            wxAcceleratorEntry(wxACCEL_CTRL, (int)'6',           kSelectTabBaseId + 5),
+            wxAcceleratorEntry(wxACCEL_CTRL, (int)'7',           kSelectTabBaseId + 6),
+            wxAcceleratorEntry(wxACCEL_CTRL, (int)'8',           kSelectTabBaseId + 7),
+            wxAcceleratorEntry(wxACCEL_CTRL, (int)'9',           kSelectTabBaseId + 8),
+            wxAcceleratorEntry(wxACCEL_CTRL, WXK_NUMPAD1,        kSelectTabBaseId + 0),
+            wxAcceleratorEntry(wxACCEL_CTRL, WXK_NUMPAD2,        kSelectTabBaseId + 1),
+            wxAcceleratorEntry(wxACCEL_CTRL, WXK_NUMPAD3,        kSelectTabBaseId + 2),
+            wxAcceleratorEntry(wxACCEL_CTRL, WXK_NUMPAD4,        kSelectTabBaseId + 3),
+            wxAcceleratorEntry(wxACCEL_CTRL, WXK_NUMPAD5,        kSelectTabBaseId + 4),
+            wxAcceleratorEntry(wxACCEL_CTRL, WXK_NUMPAD6,        kSelectTabBaseId + 5),
+            wxAcceleratorEntry(wxACCEL_CTRL, WXK_NUMPAD7,        kSelectTabBaseId + 6),
+            wxAcceleratorEntry(wxACCEL_CTRL, WXK_NUMPAD8,        kSelectTabBaseId + 7),
+            wxAcceleratorEntry(wxACCEL_CTRL, WXK_NUMPAD9,        kSelectTabBaseId + 8),
         };
         SetAcceleratorTable(wxAcceleratorTable(WXSIZEOF(accels), accels));
         Bind(wxEVT_MENU, [this](wxCommandEvent&){ ZoomActiveTab(-1); }, kZoomOutId);
@@ -1570,6 +1593,11 @@ public:
             if (m_selected >= 0 && m_selected < (int)m_tabs.size() && m_tabs[m_selected].helpPage)
                 SearchCurrentHelpPage();
         }, kFindId);
+        Bind(wxEVT_MENU, [this](wxCommandEvent&){ AddBestiaryTab(); }, kNewTabId);
+        Bind(wxEVT_MENU, [this](wxCommandEvent&){ CloseCurrentTab(); }, kCloseTabId);
+        for (int i = 0; i < 9; i++) {
+            Bind(wxEVT_MENU, [this, i](wxCommandEvent&){ SelectTabByShortcut(i); }, kSelectTabBaseId + i);
+        }
         auto* root = new wxBoxSizer(wxVERTICAL);
         m_tabStrip = new wxScrolledWindow(this, wxID_ANY, wxDefaultPosition, wxDefaultSize,
                                           wxHSCROLL | wxBORDER_NONE);
@@ -2505,9 +2533,35 @@ private:
         if (tab.terminal) { AdjustTerminalZoom(delta); return; }
     }
 
+    void SelectTabByShortcut(int index) {
+        if (index < 0 || index >= (int)m_tabs.size()) return;
+        SelectTab(index);
+    }
+
+    void CloseCurrentTab() {
+        if (m_selected <= 0 || m_selected >= (int)m_tabs.size()) return;
+        CloseTabByPage(m_tabs[m_selected].page);
+    }
+
     void OnCharHook(wxKeyEvent& evt) {
         int kc = evt.GetKeyCode();
         if (evt.ControlDown() && !evt.AltDown()) {
+            if (kc == 'T' || kc == 't') {
+                AddBestiaryTab();
+                return;
+            }
+            if (kc == 'D' || kc == 'd') {
+                CloseCurrentTab();
+                return;
+            }
+            if (kc >= '1' && kc <= '9') {
+                SelectTabByShortcut(kc - '1');
+                return;
+            }
+            if (kc >= WXK_NUMPAD1 && kc <= WXK_NUMPAD9) {
+                SelectTabByShortcut(kc - WXK_NUMPAD1);
+                return;
+            }
             if ((kc == 'F' || kc == 'f') &&
                 m_selected >= 0 && m_selected < (int)m_tabs.size() &&
                 m_tabs[m_selected].helpPage) {
@@ -2530,7 +2584,9 @@ private:
         const BestiaryHelpPage::Section* section = FindHelpSection(beast);
         if (!section) return;
 
-        wxString tabTitle = "Help - " + HelpBeastName(*section);
+        wxString tabTitle = section->beast == BestiaryHelpPage::Beast::Basic
+            ? "Help - Basic"
+            : "Help - " + HelpBeastName(*section);
         for (size_t i = 0; i < m_tabs.size(); i++) {
             if (m_tabs[i].title == tabTitle) { SelectTab((int)i); return; }
         }
