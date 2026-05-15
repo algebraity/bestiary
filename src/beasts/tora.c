@@ -320,7 +320,13 @@ Representation* regularRepresentation(Group* G) {
             return NULL;
         }
         for (int j = 0; j < G->card; j++) {
-            setEntry(images[i], G->table[i][j], j, elemFromReal(1.0));
+            GroupElement* product = groupMult(G->elements[i], G->elements[j]);
+            if (!product || product->index < 0) {
+                for (int k = 0; k <= i; k++) freeMatrix(images[k]);
+                free(images);
+                return NULL;
+            }
+            setEntry(images[i], product->index, j, elemFromReal(1.0));
         }
     }
 
@@ -381,11 +387,20 @@ Representation* permutationRepresentation(Group* G) {
             return NULL;
         }
         for (int j = 0; j < dim; j++) {
-            int prodIndex = G->table[i][cosets[j]->indices[0]];
+            GroupElement* product = groupMult(G->elements[i], G->elements[cosets[j]->data.indexed.indices[0]]);
+            if (!product || product->index < 0) {
+                for (int k = 0; k <= i; k++) freeMatrix(images[k]);
+                free(images);
+                for (int k = 0; k < dim; k++) freeGroupCoset(cosets[k]);
+                free(cosets);
+                freeSubgroup(H);
+                return NULL;
+            }
+            int prodIndex = product->index;
             for (int k = 0; k < dim; k++) {
                 bool inCoset = false;
                 for (int m = 0; m < H->card; m++) {
-                    if (prodIndex == cosets[k]->indices[m]) { inCoset = true; break; }
+                    if (prodIndex == cosets[k]->data.indexed.indices[m]) { inCoset = true; break; }
                 }
                 if (inCoset) {
                     setEntry(images[i], k, j, elemFromReal(1.0));
@@ -504,7 +519,7 @@ GroupHomomorphism* projectToAbelianization(Group* G) {
     for (int g = 0; g < G->card; g++) mapping[g] = -1;
     for (int c = 0; c < n; c++) {
         for (int m = 0; m < commutator->card; m++) {
-            mapping[cosets[c]->indices[m]] = c;
+            mapping[cosets[c]->data.indexed.indices[m]] = c;
         }
     }
     // Release temporary coset and subgroup data after extracting the quotient map
@@ -586,16 +601,13 @@ Representation* dualRepresentation(Representation* V) {
     // For each element, find the inverse and transpose its original image
     for (int g = 0; g < G->card; g++) {
         // Find inverse index of g
-        int gInv = -1;
-        for (int x = 0; x < G->card; x++) {
-            if (G->table[g][x] == 0) { gInv = x; break; }
-        }
-        if (gInv < 0) {
+        GroupElement* inverse = groupInverse(G->elements[g]);
+        if (!inverse || inverse->index < 0) {
             for (int j = 0; j < g; j++) freeMatrix(images[j]);
             free(images);
             return NULL;
         }
-        images[g] = transpose(V->images[gInv]);
+        images[g] = transpose(V->images[inverse->index]);
         if (!images[g]) {
             for (int j = 0; j < g; j++) freeMatrix(images[j]);
             free(images);
@@ -692,8 +704,13 @@ static int propagateCharacter(Group* G, long double tol, ComplexNumber* vals, bo
             // Compute the forced character values for xy and yx
             ComplexNumber pxy = complexMul(vals[x], vals[y]);
             ComplexNumber pyx = complexMul(vals[y], vals[x]);
-            int zxy = G->table[x][y];
-            int zyx = G->table[y][x];
+            GroupElement* xy = groupMult(G->elements[x], G->elements[y]);
+            GroupElement* yx = groupMult(G->elements[y], G->elements[x]);
+            if (!xy || !yx || xy->index < 0 || yx->index < 0) {
+                free(queue); return -1;
+            }
+            int zxy = xy->index;
+            int zyx = yx->index;
             // Assign chi(xy) if unset, or reject the branch if it disagrees
             if (!set[zxy]) {
                 set[zxy] = true; vals[zxy] = pxy;
@@ -1046,7 +1063,7 @@ Representation* wedgeProduct(Representation* V) {
 }
 
 // Restrict a representation V of an ambient group G to a subgroup H realised as Hgroup
-// The caller supplies Hgroup, a Group whose i-th element corresponds to G->elements[H->indices[i]]
+// The caller supplies Hgroup, a Group whose i-th element corresponds to G->elements[H->data.indexed.indices[i]]
 // (Such a Group can be built independently from H)
 Representation* restrictRepresentation(Representation* V, SubGroup* H, Group* Hgroup) {
     // Require the representation, subgroup data, and realised subgroup group
@@ -1062,7 +1079,7 @@ Representation* restrictRepresentation(Representation* V, SubGroup* H, Group* Hg
 
     // Copy the ambient image at each subgroup element index
     for (int i = 0; i < H->card; i++) {
-        images[i] = copyMatrix(V->images[H->indices[i]]);
+        images[i] = copyMatrix(V->images[H->data.indexed.indices[i]]);
         if (!images[i]) {
             for (int j = 0; j < i; j++) freeMatrix(images[j]);
             free(images);
@@ -1082,7 +1099,7 @@ Representation* restrictRepresentation(Representation* V, SubGroup* H, Group* Hg
 }
 
 // Induce a representation V from a subgroup H (realised so that V->group's i-th element
-// matches H->ambient->elements[H->indices[i]]) up to the ambient group G = H->ambient
+// matches H->ambient->elements[H->data.indexed.indices[i]]) up to the ambient group G = H->ambient
 // Result has dimension [G:H] * dim(V). For coset reps t_0, ..., t_{n-1}, the action of
 // h on basis (t_a, v) is: choose b such that h * t_a in t_b * H, write h*t_a = t_b * k
 // with k in H, then h.(t_a, v) = (t_b, rho_V(k) v). The block at (b, a) is rho_V(k);
@@ -1114,20 +1131,18 @@ Representation* inducedRepresentation(Representation* V, SubGroup* H) {
     }
     // Store each coset representative and its inverse in the ambient group
     for (int a = 0; a < n; a++) {
-        tIdx[a] = cosets[a]->indices[0];
-        tInv[a] = -1;
-        for (int x = 0; x < G->card; x++) {
-            if (G->table[tIdx[a]][x] == 0) { tInv[a] = x; break; }
-        }
-        if (tInv[a] < 0) {
+        tIdx[a] = cosets[a]->data.indexed.indices[0];
+        GroupElement* inverse = groupInverse(G->elements[tIdx[a]]);
+        if (!inverse || inverse->index < 0) {
             free(tIdx); free(tInv);
             for (int j = 0; j < n; j++) freeGroupCoset(cosets[j]);
             free(cosets);
             return NULL;
         }
+        tInv[a] = inverse->index;
     }
 
-    // Map ambient-group index -> position in H->indices (or -1 if not in H)
+    // Map ambient-group index -> position in H->data.indexed.indices (or -1 if not in H)
     int* posInH = malloc(G->card * sizeof(int));
     if (!posInH) {
         free(tIdx); free(tInv);
@@ -1137,7 +1152,7 @@ Representation* inducedRepresentation(Representation* V, SubGroup* H) {
     }
     for (int i = 0; i < G->card; i++) posInH[i] = -1;
     // Fill the lookup that converts ambient subgroup indices into V-image indices
-    for (int i = 0; i < H->card; i++) posInH[H->indices[i]] = i;
+    for (int i = 0; i < H->card; i++) posInH[H->data.indexed.indices[i]] = i;
 
     // Allocate one induced image for every ambient group element
     Matrix** images = malloc(G->card * sizeof(Matrix*));
@@ -1161,12 +1176,22 @@ Representation* inducedRepresentation(Representation* V, SubGroup* H) {
         }
         for (int a = 0; a < n; a++) {
             // Compute h * t_a and find which coset contains it
-            int hta = G->table[h][tIdx[a]];
+            GroupElement* htaElement = groupMult(G->elements[h], G->elements[tIdx[a]]);
+            if (!htaElement || htaElement->index < 0) {
+                freeMatrix(M);
+                for (int j = 0; j < h; j++) freeMatrix(images[j]);
+                free(images);
+                free(tIdx); free(tInv); free(posInH);
+                for (int j = 0; j < n; j++) freeGroupCoset(cosets[j]);
+                free(cosets);
+                return NULL;
+            }
+            int hta = htaElement->index;
             // Find coset b containing hta
             int b = -1;
             for (int bb = 0; bb < n; bb++) {
                 for (int m = 0; m < H->card; m++) {
-                    if (cosets[bb]->indices[m] == hta) { b = bb; break; }
+                    if (cosets[bb]->data.indexed.indices[m] == hta) { b = bb; break; }
                 }
                 if (b >= 0) break;
             }
@@ -1180,7 +1205,17 @@ Representation* inducedRepresentation(Representation* V, SubGroup* H) {
                 return NULL;
             }
             // k = t_b^{-1} * h * t_a, an element of H
-            int kAmbient = G->table[tInv[b]][hta];
+            GroupElement* kElement = groupMult(G->elements[tInv[b]], G->elements[hta]);
+            if (!kElement || kElement->index < 0) {
+                freeMatrix(M);
+                for (int j = 0; j < h; j++) freeMatrix(images[j]);
+                free(images);
+                free(tIdx); free(tInv); free(posInH);
+                for (int j = 0; j < n; j++) freeGroupCoset(cosets[j]);
+                free(cosets);
+                return NULL;
+            }
+            int kAmbient = kElement->index;
             int kLocal = posInH[kAmbient];
             if (kLocal < 0) {
                 freeMatrix(M);
@@ -1391,11 +1426,9 @@ static int* classAlgebraStructureConstants(Group* G, ConjugacyClass** classes, i
     if (!invIdx) { free(c); return NULL; }
     // Find x^{-1} for each group element index x
     for (int x = 0; x < G->card; x++) {
-        invIdx[x] = -1;
-        for (int t = 0; t < G->card; t++) {
-            if (G->table[x][t] == 0) { invIdx[x] = t; break; }
-        }
-        if (invIdx[x] < 0) { free(invIdx); free(c); return NULL; }
+        GroupElement* inverse = groupInverse(G->elements[x]);
+        if (!inverse || inverse->index < 0) { free(invIdx); free(c); return NULL; }
+        invIdx[x] = inverse->index;
     }
 
     // Precompute: ambient-element index -> conjugacy class index
@@ -1417,7 +1450,9 @@ static int* classAlgebraStructureConstants(Group* G, ConjugacyClass** classes, i
             int z = classes[k]->rep->index;
             for (int xi = 0; xi < Ci->size; xi++) {
                 int x = Ci->indices[xi];
-                int y = G->table[invIdx[x]][z]; // y = x^{-1} * z, so x * y = z
+                GroupElement* yElement = groupMult(G->elements[invIdx[x]], G->elements[z]);
+                if (!yElement || yElement->index < 0) { free(invIdx); free(classOf); free(c); return NULL; }
+                int y = yElement->index; // y = x^{-1} * z, so x * y = z
                 int j = classOf[y];
                 if (j >= 0) {
                     size_t idx = (size_t)i * rr + (size_t)j * (size_t)r + (size_t)k;

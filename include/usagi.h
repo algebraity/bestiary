@@ -2,6 +2,9 @@
 #define USAGI_H
 
 #include <stdbool.h>
+#include <stddef.h>
+#include "hebi.h"
+#include "sokko.h"
 
 typedef struct Group Group;
 typedef struct GroupElement GroupElement;
@@ -14,67 +17,459 @@ typedef struct SubRing SubRing;
 typedef struct Ideal Ideal;
 typedef struct RingHomomorphism RingHomomorphism;
 
+typedef enum {
+    GROUP_ELEM_INDEXED,
+    GROUP_ELEM_INT,
+    GROUP_ELEM_ZN,
+    GROUP_ELEM_PERMUTATION,
+    GROUP_ELEM_DIHEDRAL,
+    GROUP_ELEM_PRODUCT,
+    GROUP_ELEM_MATRIX
+} GroupElementType;
+
+typedef enum {
+    GROUP_CAYLEY,
+    GROUP_ZN,
+    GROUP_Z,
+    GROUP_SYMMETRIC,
+    GROUP_ALTERNATING,
+    GROUP_DIHEDRAL,
+    GROUP_PRODUCT,
+    GROUP_QUOTIENT,
+    GROUP_MATRIX
+} GroupType;
+
+typedef enum {
+    RING_ELEM_INDEXED,
+    RING_ELEM_INT,
+    RING_ELEM_ZN,
+    RING_ELEM_FF,
+    RING_ELEM_PRODUCT,
+    RING_ELEM_MATRIX
+} RingElementType;
+
+typedef enum {
+    RING_CAYLEY,
+    RING_ZN,
+    RING_Z,
+    RING_PRODUCT,
+    RING_QUOTIENT,
+    RING_MATRIX,
+    RING_FF
+} RingType;
+
+typedef struct {
+    long long a;
+    bool b;
+} DihedralElementData;
+
+typedef struct {
+    GroupElement** factors;
+    size_t count;
+} ProductGroupElementData;
+
+typedef struct {
+    RingElement** factors;
+    size_t count;
+} ProductRingElementData;
+
+typedef struct {
+    GroupElement** elements;
+    int** table;
+} CayleyGroupData;
+
+typedef struct {
+    GroupElement** elements;
+    int** table;
+    int tableLen;
+    bool skipValidate;
+} TableGroupConstructionData;
+
+typedef struct {
+    long long modulus;
+} ZnGroupData;
+
+typedef struct {
+    size_t degree;
+} PermutationGroupData;
+
+typedef struct {
+    long long n;
+} DihedralGroupData;
+
+typedef struct {
+    Group** factors;
+    size_t count;
+} ProductGroupData;
+
+typedef struct {
+    Group* ambient;
+    SubGroup* normal;
+} QuotientGroupData;
+
+typedef struct {
+    GroupElement* (*identity)(Group* group);
+    GroupElement* (*multiply)(GroupElement* left, GroupElement* right);
+    GroupElement* (*inverse)(GroupElement* element);
+    bool (*equals)(GroupElement* left, GroupElement* right);
+} GroupOps;
+
+typedef struct {
+    RingElement** elements;
+    int** addTable;
+    int** multTable;
+} CayleyRingData;
+
+typedef struct {
+    RingElement** elements;
+    int** addTable;
+    int** multTable;
+    int tableLen;
+    bool skipValidate;
+} TableRingConstructionData;
+
+typedef struct {
+    long long modulus;
+} ZnRingData;
+
+typedef struct {
+    int p;
+    int degree;
+    int* modulus;
+} FiniteFieldRingData;
+
+typedef struct {
+    Ring** factors;
+    size_t count;
+} ProductRingData;
+
+typedef struct {
+    Ring* ambient;
+    Ideal* ideal;
+} QuotientRingData;
+
+typedef struct {
+    RingElement* (*zero)(Ring* ring);
+    RingElement* (*one)(Ring* ring);
+    RingElement* (*add)(RingElement* left, RingElement* right);
+    RingElement* (*multiply)(RingElement* left, RingElement* right);
+    RingElement* (*addInverse)(RingElement* element);
+    RingElement* (*multInverse)(RingElement* element);
+    bool (*equals)(RingElement* left, RingElement* right);
+} RingOps;
+
+typedef enum {
+    SUBGROUP_INDEXED,
+    SUBGROUP_GENERATED,
+    SUBGROUP_EXPLICIT,
+    SUBGROUP_PREDICATE
+} SubGroupType;
+
+typedef enum {
+    GROUP_COSET_INDEXED,
+    GROUP_COSET_REPRESENTATIVE,
+    GROUP_COSET_EXPLICIT
+} GroupCosetType;
+
+typedef enum {
+    GROUP_HOM_INDEXED,
+    GROUP_HOM_FUNCTION
+} GroupHomomorphismType;
+
+typedef enum {
+    SUBRING_INDEXED,
+    SUBRING_GENERATED,
+    SUBRING_EXPLICIT,
+    SUBRING_PREDICATE
+} SubRingType;
+
+typedef enum {
+    IDEAL_LEFT,
+    IDEAL_RIGHT,
+    IDEAL_TWO_SIDED
+} IdealSide;
+
+typedef enum {
+    IDEAL_INDEXED,
+    IDEAL_GENERATED,
+    IDEAL_EXPLICIT,
+    IDEAL_PREDICATE
+} UsagiIdealType;
+
+typedef enum {
+    RING_HOM_INDEXED,
+    RING_HOM_FUNCTION
+} RingHomomorphismType;
+
+typedef struct {
+    int* indices;
+} IndexedSubGroupData;
+
+typedef struct {
+    GroupElement** generators;
+    size_t count;
+} GeneratedSubGroupData;
+
+typedef struct {
+    GroupElement** elements;
+    size_t count;
+} ExplicitSubGroupData;
+
+typedef struct {
+    bool (*contains)(SubGroup* subgroup, GroupElement* element);
+} PredicateSubGroupData;
+
+typedef struct {
+    bool (*contains)(SubGroup* subgroup, GroupElement* element);
+    bool (*equals)(SubGroup* left, SubGroup* right);
+} SubGroupOps;
+
+typedef struct {
+    int* indices;
+} IndexedGroupCosetData;
+
+typedef struct {
+    GroupElement* representative;
+} RepresentativeGroupCosetData;
+
+typedef struct {
+    GroupElement** elements;
+    size_t count;
+} ExplicitGroupCosetData;
+
+typedef struct {
+    bool (*contains)(GroupCoset* coset, GroupElement* element);
+    bool (*equals)(GroupCoset* left, GroupCoset* right);
+} GroupCosetOps;
+
+typedef struct {
+    int* mapping;
+    size_t count;
+} IndexedGroupHomomorphismData;
+
+typedef struct {
+    GroupElement* (*apply)(GroupHomomorphism* homomorphism, GroupElement* element);
+} FunctionGroupHomomorphismData;
+
+typedef struct {
+    int* indices;
+} IndexedSubRingData;
+
+typedef struct {
+    RingElement** generators;
+    size_t count;
+} GeneratedSubRingData;
+
+typedef struct {
+    RingElement** elements;
+    size_t count;
+} ExplicitSubRingData;
+
+typedef struct {
+    bool (*contains)(SubRing* subring, RingElement* element);
+} PredicateSubRingData;
+
+typedef struct {
+    bool (*contains)(SubRing* subring, RingElement* element);
+    bool (*equals)(SubRing* left, SubRing* right);
+} SubRingOps;
+
+typedef struct {
+    int* indices;
+} IndexedIdealData;
+
+typedef struct {
+    RingElement** generators;
+    size_t count;
+} GeneratedIdealData;
+
+typedef struct {
+    RingElement** elements;
+    size_t count;
+} ExplicitIdealData;
+
+typedef struct {
+    bool (*contains)(Ideal* ideal, RingElement* element);
+} PredicateIdealData;
+
+typedef struct {
+    bool (*contains)(Ideal* ideal, RingElement* element);
+    bool (*equals)(Ideal* left, Ideal* right);
+} IdealOps;
+
+typedef struct {
+    int* mapping;
+    size_t count;
+} IndexedRingHomomorphismData;
+
+typedef struct {
+    RingElement* (*apply)(RingHomomorphism* homomorphism, RingElement* element);
+} FunctionRingHomomorphismData;
+
 struct GroupElement {
     char* repr;
     Group* group;
-    int index;
+    int index; // >= 0 when the group is finite and indexed, else -1
+    GroupElementType type;
+    union {
+        int indexValue;                                 // Cayley or finite indexed element
+        long long integer;                              // Z
+        long long znVal;                                // Zn
+        long long* perm;                                // permutation in Sn or An
+        DihedralElementData dihedral;                   // s^{b mod 2} * r^a
+        ProductGroupElementData product;                // direct-product element
+        Matrix* matrix;
+        void* ptr;
+    } data;
 };
 
 struct Group {
-    GroupElement** elements;
-    int** table;
-    int card;
+    GroupType type;
+    size_t card;
+    bool isFinite;
+    GroupElement** elements;            // NULL when the group is not finite/enumerated
+    GroupElement** generators;
+    size_t numGenerators;
+    GroupOps ops;
+    union {
+        CayleyGroupData cayley;
+        ZnGroupData zn;
+        PermutationGroupData permutation;
+        DihedralGroupData dihedral;
+        ProductGroupData product;
+        QuotientGroupData quotient;
+        Matrix* matrixPrototype;
+        void* ptr;
+    } data;
 };
 
 struct SubGroup {
     Group* ambient;
-    int* indices;
-    int card;
+    size_t card;
+    bool isFinite;
+    GroupElement** elements;            // NULL when the subgroup is not finite/enumerated
+    GroupElement** generators;
+    size_t numGenerators;
+    SubGroupType type;
+    SubGroupOps ops;
+    union {
+        IndexedSubGroupData indexed;
+        GeneratedSubGroupData generated;
+        ExplicitSubGroupData explicitElements;
+        PredicateSubGroupData predicate;
+        void* ptr;
+    } data;
 };
 
 struct GroupCoset {
     Group* group;
     SubGroup* subgroup;
-    int* indices; // indices of the representatives of the cosets
+    size_t card;
+    bool isFinite;
     bool isLeft;
+    GroupElement** elements;            // NULL when the coset is not finite/enumerated
+    GroupElement* representative;
+    GroupCosetType type;
+    GroupCosetOps ops;
+    union {
+        IndexedGroupCosetData indexed;
+        RepresentativeGroupCosetData representativeData;
+        ExplicitGroupCosetData explicitElements;
+        void* ptr;
+    } data;
 };
 
 struct GroupHomomorphism {
     Group* domain;
     Group* codomain;
-    int* mapping; // mapping[i] = j means domain->elements[i] maps to codomain->elements[j]
+    GroupHomomorphismType type;
+    union {
+        IndexedGroupHomomorphismData indexed;
+        FunctionGroupHomomorphismData function;
+        void* ptr;
+    } data;
 };
 
 struct RingElement {
     char* repr;
     Ring* ring;
-    int index;
+    int index; // >= 0 when the ring is finite and indexed, else -1
+    RingElementType type;
+    union {
+        int indexValue;                                 // Cayley or finite indexed element
+        long long integer;                              // Z
+        long long znVal;                                // Zn
+        ProductRingElementData product;                 // direct-product element
+        Matrix* matrix;
+        void* ptr;
+    } data;
 };
 
 struct Ring {
-    RingElement** elements;
-    int** addTable;
-    int** multTable;
-    int card;
+    RingType type;
+    size_t card;
+    bool isFinite;
+    RingElement** elements;             // NULL when the ring is not finite/enumerated
+    RingElement** generators;
+    size_t numGenerators;
+    RingOps ops;
+    union {
+        CayleyRingData cayley;
+        ZnRingData zn;
+        FiniteFieldRingData ff;
+        ProductRingData product;
+        QuotientRingData quotient;
+        Matrix* matrixPrototype;
+        void* ptr;
+    } data;
 };
 
 struct SubRing {
     Ring* ambient;
-    int* indices;
-    int card;
+    size_t card;
+    bool isFinite;
+    RingElement** elements;             // NULL when the subring is not finite/enumerated
+    RingElement** generators;
+    size_t numGenerators;
+    SubRingType type;
+    SubRingOps ops;
+    union {
+        IndexedSubRingData indexed;
+        GeneratedSubRingData generated;
+        ExplicitSubRingData explicitElements;
+        PredicateSubRingData predicate;
+        void* ptr;
+    } data;
 };
 
 struct Ideal {
     Ring* ring;
-    int* indices;
-    int card;
-    int isLeft;
+    size_t card;
+    bool isFinite;
+    RingElement** elements;             // NULL when the ideal is not finite/enumerated
+    RingElement** generators;
+    size_t numGenerators;
+    IdealSide side;
+    UsagiIdealType type;
+    IdealOps ops;
+    union {
+        IndexedIdealData indexed;
+        GeneratedIdealData generated;
+        ExplicitIdealData explicitElements;
+        PredicateIdealData predicate;
+        void* ptr;
+    } data;
 };
 
 struct RingHomomorphism {
     Ring* domain;
     Ring* codomain;
-    int* mapping;
+    RingHomomorphismType type;
+    union {
+        IndexedRingHomomorphismData indexed;
+        FunctionRingHomomorphismData function;
+        void* ptr;
+    } data;
 };
 
 /* ---------- Free methods ---------- */
@@ -88,13 +483,16 @@ void freeRingElement(RingElement* x);
 void freeRing(Ring* ring);
 
 /* ---------- Construct methods ---------- */
-bool validateGroupTable(int** table, int card);
-bool validateRingTables(int** addTable, int** multTable, int card);
-GroupElement* constructGroupElement(Group* group, char* repr);
-Group* constructGroup(GroupElement** elements, int** table, int tableLen);
-Group* constructGroupSkipValidate(GroupElement** elements, int** table, int tableLen);
-RingElement* constructRingElement(Ring* ring, char* repr);
-Ring* constructRing(RingElement** elements, int** addTable, int** multTable, int tableLen);
+bool validateGroupTable(int** table, size_t card);
+bool validateRingTables(int** addTable, int** multTable, size_t card);
+GroupElement* constructGroupElement(Group* group, void* data);
+Group* constructGroup(GroupType type, void* data);
+Group* constructTableGroup(GroupElement** elements, int** table, int tableLen);
+Group* constructTableGroupSkipValidate(GroupElement** elements, int** table, int tableLen);
+RingElement* constructRingElement(Ring* ring, void* data);
+Ring* constructRing(RingType type, void* data);
+Ring* constructTableRing(RingElement** elements, int** addTable, int** multTable, int tableLen);
+Ring* constructTableRingSkipValidate(RingElement** elements, int** addTable, int** multTable, int tableLen);
 
 /* ---------- Repr helpers ---------- */
 char* flattenReprInner(const char* s);

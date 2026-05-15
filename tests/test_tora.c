@@ -346,7 +346,9 @@ static bool checkHomomorphism(Representation* rep, long double tol) {
     Group* G = rep->group;
     for (int i = 0; i < G->card; i++) {
         for (int j = 0; j < G->card; j++) {
-            int k = G->table[i][j];
+            GroupElement* product = groupMult(G->elements[i], G->elements[j]);
+            int k = product ? product->index : -1;
+            if (k < 0) return false;
             Matrix* P = multiplyMatrices(rep->images[i], rep->images[j]);
             if (!P) return false;
             bool ok = matrixComp(P, rep->images[k], tol);
@@ -514,7 +516,9 @@ void testSymmetricAndWedgeProduct() {
     // and chi_{Wedge^2 V}(g) = (chi_V(g)^2 - chi_V(g^2)) / 2
     bool symId = true, wedgeId = true;
     for (int g = 0; g < S3->card; g++) {
-        int g2 = S3->table[g][g];
+        GroupElement* square = groupMult(S3->elements[g], S3->elements[g]);
+        int g2 = square ? square->index : -1;
+        if (g2 < 0) { symId = false; wedgeId = false; break; }
         FieldElement tV = trace(std->images[g]);
         FieldElement tV2 = trace(std->images[g2]);
         ComplexNumber a = elemToComplex(tV);
@@ -645,7 +649,7 @@ void testProjectToAbelianization() {
     GroupHomomorphism* hom = projectToAbelianization(S3);
     CHECK(hom != NULL, "S3 abelianization built");
     CHECK(hom->codomain->card == 2, "S3^ab has order 2");
-    CHECK(hom->mapping[0] == 0, "identity maps to identity coset");
+    CHECK(hom->data.indexed.mapping[0] == 0, "identity maps to identity coset");
 
     // Image of an even permutation should be 0; odd -> nonzero coset
     int* perm = malloc(3 * sizeof(int));
@@ -653,7 +657,7 @@ void testProjectToAbelianization() {
     bool ok = true;
     for (int idx = 0; idx < S3->card; idx++) {
         int s = permSign(perm, 3); // 0 even, 1 odd
-        int img = hom->mapping[idx];
+        int img = hom->data.indexed.mapping[idx];
         if (s == 0 && img != 0) ok = false;
         if (s == 1 && img == 0) ok = false;
         if (idx + 1 < S3->card) nextPermutation(perm, 3);
@@ -747,7 +751,10 @@ void testDualRepresentation() {
     bool charOk = true;
     for (int g = 0; g < S3->card; g++) {
         int gInv = -1;
-        for (int x = 0; x < S3->card; x++) if (S3->table[g][x] == 0) { gInv = x; break; }
+        for (int x = 0; x < S3->card; x++) {
+            GroupElement* product = groupMult(S3->elements[g], S3->elements[x]);
+            if (product && product->index == 0) { gInv = x; break; }
+        }
         ComplexNumber a = elemToComplex(trace(dual->images[g]));
         ComplexNumber b = elemToComplex(trace(std->images[gInv]));
         if (!complexEq(a, b, 1e-9)) charOk = false;

@@ -1525,8 +1525,9 @@ static void appendInlineSubgroupElements(char* buf, size_t bufSize, SubGroup* su
     }
     used += snprintf(buf + used, bufSize - used, "[");
     int limit = subgroup->card < 8 ? subgroup->card : 8;
+    int* indices = subgroup->type == SUBGROUP_INDEXED ? subgroup->data.indexed.indices : NULL;
     for (int i = 0; i < limit && used < bufSize; i++) {
-        GroupElement* element = subgroup->ambient->elements[subgroup->indices[i]];
+        GroupElement* element = indices ? subgroup->ambient->elements[indices[i]] : NULL;
         used += snprintf(buf + used, bufSize - used, "%s%s",
                          i ? ", " : "",
                          (element && element->repr) ? element->repr : "?");
@@ -1557,8 +1558,9 @@ static void appendInlineSubringSummary(char* buf, size_t bufSize, SubRing* subri
     }
     used += snprintf(buf + used, bufSize - used, "<subring card=%d; elements=[", subring->card);
     int limit = subring->card < 8 ? subring->card : 8;
+    int* indices = subring->type == SUBRING_INDEXED ? subring->data.indexed.indices : NULL;
     for (int i = 0; i < limit && used < bufSize; i++) {
-        RingElement* element = subring->ambient->elements[subring->indices[i]];
+        RingElement* element = indices ? subring->ambient->elements[indices[i]] : NULL;
         used += snprintf(buf + used, bufSize - used, "%s%s",
                          i ? ", " : "",
                          (element && element->repr) ? element->repr : "?");
@@ -1574,11 +1576,13 @@ static void appendInlineIdealSummary(char* buf, size_t bufSize, Ideal* ideal) {
         snprintf(buf + used, bufSize - used, "<ideal null>");
         return;
     }
+    const char* side = ideal->side == IDEAL_LEFT ? "left" : (ideal->side == IDEAL_RIGHT ? "right" : "two-sided");
     used += snprintf(buf + used, bufSize - used, "<%sIdeal card=%d; elements=[",
-                     ideal->isLeft ? "left" : "right", ideal->card);
+                     side, ideal->card);
     int limit = ideal->card < 8 ? ideal->card : 8;
+    int* indices = ideal->type == IDEAL_INDEXED ? ideal->data.indexed.indices : NULL;
     for (int i = 0; i < limit && used < bufSize; i++) {
-        RingElement* element = ideal->ring->elements[ideal->indices[i]];
+        RingElement* element = indices ? ideal->ring->elements[indices[i]] : NULL;
         used += snprintf(buf + used, bufSize - used, "%s%s",
                          i ? ", " : "",
                          (element && element->repr) ? element->repr : "?");
@@ -8567,7 +8571,7 @@ static Value bi_eq(EvalContext* c, Value* a, size_t n) {
             if (!cmpGroups(f->domain, g->domain) || !cmpGroups(f->codomain, g->codomain)) break;
             result = true;
             for (int k = 0; k < f->domain->card && result; k++)
-                result = (f->mapping[k] == g->mapping[k]);
+                result = (f->data.indexed.mapping[k] == g->data.indexed.mapping[k]);
             break;
         }
         case VAL_RING:        result = cmpRings((Ring*)a[0].as.ptr, (Ring*)a[1].as.ptr); break;
@@ -8580,7 +8584,7 @@ static Value bi_eq(EvalContext* c, Value* a, size_t n) {
             if (!cmpRings(f->domain, g->domain) || !cmpRings(f->codomain, g->codomain)) break;
             result = true;
             for (int k = 0; k < f->domain->card && result; k++)
-                result = (f->mapping[k] == g->mapping[k]);
+                result = (f->data.indexed.mapping[k] == g->data.indexed.mapping[k]);
             break;
         }
         default: result = (a[0].as.ptr == a[1].as.ptr); break;
@@ -11046,7 +11050,7 @@ static Value bi_ringHomomorphismInfo_cmd(EvalContext* c, Value* a, size_t n) {
                                      kernel ? kernel->card : -1,
                                      image ? image->card : -1,
                                      (hom && isRingIsomorphism(hom)) ? "yes" : "no");
-    free(kernel ? kernel->indices : NULL);
+    free(kernel ? kernel->data.indexed.indices : NULL);
     free(kernel);
     freeRing(image);
     valFree(a[0]);

@@ -84,35 +84,11 @@ static Group* make_Zn(int n) {
         names[i] = name_storage[i];
     }
 
-    /* We need a placeholder Group* for constructGroupElement; pass NULL-ish
-     * by constructing a temporary then patching. Easier: pass a real pointer
-     * after constructing the Group. But constructGroupElement requires a
-     * non-NULL group. So we allocate the Group first manually, then build
-     * elements pointing to it, then call constructGroup.
-     *
-     * Workaround: pass a dummy non-NULL pointer; constructGroup will overwrite
-     * via the elements[i]->group field? No — it doesn't. So elements end up
-     * pointing to the dummy. We instead build elements pointing to a real
-     * Group allocated up front.
-     */
-    Group* G = malloc(sizeof(Group));
-    GroupElement** elems = alloc_group_elements(G, names, n);
-
-    /* Now call constructGroup, which will validate, set fields, and assign
-     * indices. But constructGroup mallocs its own Group. So free our scratch
-     * one first... actually we need to thread this carefully. The cleanest
-     * way given the API: just construct a Group manually here, mirroring
-     * what constructGroup does, since constructGroup would allocate a second
-     * one.
-     */
+    GroupElement** elems = alloc_group_elements(NULL, names, n);
     if (!validateGroupTable(table, n)) {
         printf("  (internal: Z/%dZ table failed validation!)\n", n);
     }
-    G->elements = elems;
-    G->table = table;
-    G->card = n;
-    for (int i = 0; i < n; i++) elems[i]->group = G;
-    for (int i = 0; i < n; i++) elems[i]->index = i;
+    Group* G = constructTableGroupSkipValidate(elems, table, n);
 
     for (int i = 0; i < n; i++) free(name_storage[i]);
     return G;
@@ -134,14 +110,9 @@ static Group* make_V4(void) {
             table[i][j] = v4[i][j];
 
     const char* names[] = {"e","a","b","c"};
-    Group* G = malloc(sizeof(Group));
-    GroupElement** elems = alloc_group_elements(G, names, n);
+    GroupElement** elems = alloc_group_elements(NULL, names, n);
 
-    G->elements = elems;
-    G->table = table;
-    G->card = n;
-    for (int i = 0; i < n; i++) { elems[i]->group = G; elems[i]->index = i; }
-    return G;
+    return constructTableGroupSkipValidate(elems, table, n);
 }
 
 /* S_3 with elements labeled:
@@ -174,14 +145,9 @@ static Group* make_S3(void) {
             table[i][j] = s3[i][j];
 
     const char* names[] = {"e","r","r2","s","sr","sr2"};
-    Group* G = malloc(sizeof(Group));
-    GroupElement** elems = alloc_group_elements(G, names, n);
+    GroupElement** elems = alloc_group_elements(NULL, names, n);
 
-    G->elements = elems;
-    G->table = table;
-    G->card = n;
-    for (int i = 0; i < n; i++) { elems[i]->group = G; elems[i]->index = i; }
-    return G;
+    return constructTableGroupSkipValidate(elems, table, n);
 }
 
 /* ---------- ring constructors ---------- */
@@ -207,14 +173,8 @@ static Ring* make_Zn_ring(int n) {
         names[i] = name_storage[i];
     }
 
-    Ring* R = malloc(sizeof(Ring));
-    RingElement** elems = alloc_ring_elements(R, names, n);
-
-    R->elements = elems;
-    R->addTable = addT;
-    R->multTable = multT;
-    R->card = n;
-    for (int i = 0; i < n; i++) { elems[i]->ring = R; elems[i]->index = i; }
+    RingElement** elems = alloc_ring_elements(NULL, names, n);
+    Ring* R = constructTableRingSkipValidate(elems, addT, multT, n);
 
     for (int i = 0; i < n; i++) free(name_storage[i]);
     return R;
@@ -624,8 +584,8 @@ static void test_ring_classification(Ring* Z3, Ring* Z4, Ring* Z5, Ring* Z6) {
 static void test_null_safety(void) {
     printf("\n=== NULL safety ===\n");
 
-    CHECK(constructGroupElement((Group*)0x1, NULL) == NULL, "constructGroupElement rejects NULL repr");
-    CHECK(constructGroupElement((Group*)0x1, "") == NULL, "constructGroupElement rejects empty repr");
+    CHECK(constructGroupElement(NULL, NULL) == NULL, "constructGroupElement rejects NULL repr");
+    CHECK(constructGroupElement(NULL, "") == NULL, "constructGroupElement rejects empty repr");
 
     CHECK(groupMult(NULL, NULL) == NULL, "groupMult(NULL,NULL) returns NULL");
     CHECK(groupInverse(NULL) == NULL, "groupInverse(NULL) returns NULL");
@@ -784,7 +744,7 @@ static void test_cosets(Group* V4, Group* S3) {
     bool coveredS3[6] = {false};
     for (int i = 0; i < numS3; i++)
         for (int j = 0; j < leftCosets[i]->subgroup->card; j++)
-            coveredS3[leftCosets[i]->indices[j]] = true;
+            coveredS3[leftCosets[i]->data.indexed.indices[j]] = true;
     bool allS3 = true;
     for (int i = 0; i < 6; i++) if (!coveredS3[i]) { allS3 = false; break; }
     CHECK(allS3, "left cosets of {e,r,r^2} partition all of S3");
@@ -797,18 +757,18 @@ static void test_cosets(Group* V4, Group* S3) {
     bool coveredV4[4] = {false};
     for (int i = 0; i < numV4; i++)
         for (int j = 0; j < rightCosets[i]->subgroup->card; j++)
-            coveredV4[rightCosets[i]->indices[j]] = true;
+            coveredV4[rightCosets[i]->data.indexed.indices[j]] = true;
     bool allV4 = true;
     for (int i = 0; i < 4; i++) if (!coveredV4[i]) { allV4 = false; break; }
     CHECK(allV4, "right cosets of {e,a} partition all of V4");
 
-    free(eN->indices); free(eN);
-    free(sN->indices); free(sN);
-    free(He->indices); free(He);
-    free(Hb->indices); free(Hb);
-    for (int i = 0; i < numS3; i++) { free(leftCosets[i]->indices); free(leftCosets[i]); }
+    free(eN->data.indexed.indices); free(eN);
+    free(sN->data.indexed.indices); free(sN);
+    free(He->data.indexed.indices); free(He);
+    free(Hb->data.indexed.indices); free(Hb);
+    for (int i = 0; i < numS3; i++) { free(leftCosets[i]->data.indexed.indices); free(leftCosets[i]); }
     free(leftCosets);
-    for (int i = 0; i < numV4; i++) { free(rightCosets[i]->indices); free(rightCosets[i]); }
+    for (int i = 0; i < numV4; i++) { free(rightCosets[i]->data.indexed.indices); free(rightCosets[i]); }
     free(rightCosets);
     freeSubgroup(N);
     freeSubgroup(H);
@@ -1121,8 +1081,8 @@ static void test_subgroup_conjugate(Group* S3) {
     /* conj should contain indices 0 and 5 */
     bool has0 = false, has5 = false;
     for (int i = 0; i < conj->card; i++) {
-        if (conj->indices[i] == 0) has0 = true;
-        if (conj->indices[i] == 5) has5 = true;
+        if (conj->data.indexed.indices[i] == 0) has0 = true;
+        if (conj->data.indexed.indices[i] == 5) has5 = true;
     }
     CHECK(has0 && has5, "r{e,s}r^-1 = {e, sr^2}");
 
@@ -1138,7 +1098,7 @@ static void test_subgroup_conjugate(Group* S3) {
     for (int i = 0; conjN_eq_N && i < N->card; i++) {
         bool found = false;
         for (int j = 0; j < conjN->card; j++)
-            if (N->indices[i] == conjN->indices[j]) { found = true; break; }
+            if (N->data.indexed.indices[i] == conjN->data.indexed.indices[j]) { found = true; break; }
         if (!found) conjN_eq_N = false;
     }
     CHECK(conjN_eq_N, "conjugate of normal {e,r,r^2} by s equals itself (set equality)");
@@ -1168,9 +1128,9 @@ static void test_derived_groups(Group* Z4, Group* V4, Group* S3) {
 
     bool hasR  = false, hasR2 = false, hasE = false;
     for (int i = 0; i < cgS3->card; i++) {
-        if (cgS3->indices[i] == 0) hasE  = true;
-        if (cgS3->indices[i] == 1) hasR  = true;
-        if (cgS3->indices[i] == 2) hasR2 = true;
+        if (cgS3->data.indexed.indices[i] == 0) hasE  = true;
+        if (cgS3->data.indexed.indices[i] == 1) hasR  = true;
+        if (cgS3->data.indexed.indices[i] == 2) hasR2 = true;
     }
     CHECK(hasE && hasR && hasR2, "commutator subgroup of S3 = {e,r,r^2}");
 
@@ -1244,13 +1204,8 @@ static Group* make_Q8(void) {
             table[i][j] = q8[i][j];
 
     const char* names[] = {"1","-1","i","-i","j","-j","k","-k"};
-    Group* G = malloc(sizeof(Group));
-    GroupElement** elems = alloc_group_elements(G, names, n);
-    G->elements = elems;
-    G->table    = table;
-    G->card     = n;
-    for (int i = 0; i < n; i++) { elems[i]->group = G; elems[i]->index = i; }
-    return G;
+    GroupElement** elems = alloc_group_elements(NULL, names, n);
+    return constructTableGroupSkipValidate(elems, table, n);
 }
 
 /* ---------- cartesian product tests ---------- */
@@ -1392,8 +1347,8 @@ static void test_homomorphisms(Group* Z4, Group* Z2) {
     {
         bool has0 = false, has2 = false;
         for (int i = 0; i < ker_quot->card; i++) {
-            if (ker_quot->indices[i] == 0) has0 = true;
-            if (ker_quot->indices[i] == 2) has2 = true;
+            if (ker_quot->data.indexed.indices[i] == 0) has0 = true;
+            if (ker_quot->data.indexed.indices[i] == 2) has2 = true;
         }
         CHECK(has0 && has2, "kernel of quotient map = {0, 2}");
     }
@@ -1402,7 +1357,7 @@ static void test_homomorphisms(Group* Z4, Group* Z2) {
     SubGroup* ker_id = groupHomomorphismKernel(idhom);
     CHECK(ker_id != NULL,              "kernel of identity map non-NULL");
     CHECK(ker_id->card == 1,           "kernel of identity map is trivial");
-    CHECK(ker_id->indices[0] == 0,     "kernel of identity map = {e}");
+    CHECK(ker_id->data.indexed.indices[0] == 0,     "kernel of identity map = {e}");
 
     /* kernel of trivial map: the whole group */
     SubGroup* ker_triv = groupHomomorphismKernel(trivhom);
@@ -1506,8 +1461,8 @@ static void test_Q8(Group* Q8) {
     CHECK(center->card == 2,  "center of Q8 has order 2");
     { bool c0 = false, c1 = false;
       for (int i = 0; i < center->card; i++) {
-          if (center->indices[i] == 0) c0 = true;
-          if (center->indices[i] == 1) c1 = true;
+          if (center->data.indexed.indices[i] == 0) c0 = true;
+          if (center->data.indexed.indices[i] == 1) c1 = true;
       }
       CHECK(c0 && c1, "center of Q8 = {1, -1}"); }
     CHECK(!isInSubgroup(center, qi), "i is NOT in the center of Q8");
@@ -1520,8 +1475,8 @@ static void test_Q8(Group* Q8) {
     CHECK(comm->card == 2, "commutator subgroup of Q8 has order 2");
     { bool cc0 = false, cc1 = false;
       for (int i = 0; i < comm->card; i++) {
-          if (comm->indices[i] == 0) cc0 = true;
-          if (comm->indices[i] == 1) cc1 = true;
+          if (comm->data.indexed.indices[i] == 0) cc0 = true;
+          if (comm->data.indexed.indices[i] == 1) cc1 = true;
       }
       CHECK(cc0 && cc1, "commutator subgroup of Q8 = {1, -1}"); }
     CHECK(!isTrivialSubgroup(comm), "commutator subgroup of Q8 is non-trivial");
@@ -1546,7 +1501,7 @@ static void test_Q8(Group* Q8) {
     CHECK(cyc_i != NULL,    "<i> non-NULL");
     CHECK(cyc_i->card == 4, "<i> has order 4");
     bool hi[8] = {false};
-    for (int m = 0; m < cyc_i->card; m++) hi[cyc_i->indices[m]] = true;
+    for (int m = 0; m < cyc_i->card; m++) hi[cyc_i->data.indexed.indices[m]] = true;
     CHECK(hi[0] && hi[1] && hi[2] && hi[3], "<i> = {1,-1,i,-i}");
     CHECK(!hi[4] && !hi[5] && !hi[6] && !hi[7], "<i> does not contain j,-j,k,-k");
     CHECK(isCyclicSubgroup(cyc_i),              "<i> is a cyclic subgroup");
@@ -1598,8 +1553,8 @@ static void test_Z2xZ3xZ5(void) {
     /* abelianization of an abelian group ≅ itself */
     Group* ab = groupAbelianization(Z2xZ3xZ5);
     CHECK(ab != NULL,                   "abelianization of Z30 non-NULL");
-    CHECK(ab->card == 30,               "abelianization of Z30 has order 30");
-    CHECK(isCommutativeGroup(ab),       "abelianization of Z30 is abelian");
+    CHECK(ab && ab->card == 30,         "abelianization of Z30 has order 30");
+    CHECK(ab && isCommutativeGroup(ab), "abelianization of Z30 is abelian");
 
     /* Z2 x Z2 x Z3 x Z5 has order 60 but is NOT cyclic (two factors of 2) */
     Group* Z2xZ2    = constructProductGroup(Z2, Z2);
@@ -2372,14 +2327,14 @@ static void test_ideals(void) {
     Ideal* I_even = constructLeftIdeal(Z6, idx_even, 3);
     CHECK(I_even != NULL, "{0,2,4} is a valid left ideal of Z/6Z");
     CHECK(I_even->card == 3, "even ideal has order 3");
-    CHECK(I_even->isLeft == true, "even ideal is marked left");
+    CHECK(I_even->side == IDEAL_LEFT, "even ideal is marked left");
 
     /* Same set as right ideal (Z/6Z is commutative, so left=right) */
     int* idx_even2 = malloc(3 * sizeof(int));
     idx_even2[0] = 0; idx_even2[1] = 2; idx_even2[2] = 4;
     Ideal* I_even_r = constructRightIdeal(Z6, idx_even2, 3);
     CHECK(I_even_r != NULL, "{0,2,4} is a valid right ideal of Z/6Z");
-    CHECK(I_even_r->isLeft == false, "right ideal marked as right");
+    CHECK(I_even_r->side == IDEAL_RIGHT, "right ideal marked as right");
 
     /* {0, 3} is an ideal of Z/6Z (multiples of 3 mod 6) */
     int* idx_03 = malloc(2 * sizeof(int));
@@ -2404,7 +2359,7 @@ static void test_ideals(void) {
     /* cmpIdeals */
     CHECK(cmpIdeals(I_even, I_even), "ideal equals itself");
     CHECK(!cmpIdeals(I_even, I_03), "different ideals compare unequal");
-    /* left vs right of same set: should NOT be equal (isLeft differs) */
+    /* left vs right of same set: should NOT be equal (side differs) */
     CHECK(!cmpIdeals(I_even, I_even_r), "left and right ideals of same set differ");
     CHECK(cmpIdeals(NULL, I_even) == false, "cmpIdeals(NULL, _) false");
 
@@ -2847,10 +2802,10 @@ static void test_isSimple(void) {
     CHECK(!isSimple(NULL), "isSimple(NULL) false");
 }
 
-/* ---------- constructGroupSkipValidate tests ---------- */
+/* ---------- constructTableGroupSkipValidate tests ---------- */
 
-static void test_constructGroupSkipValidate(void) {
-    printf("\n=== constructGroupSkipValidate ===\n");
+static void test_constructTableGroupSkipValidate(void) {
+    printf("\n=== constructTableGroupSkipValidate ===\n");
 
     /* Use a known-good table (Z/3Z) */
     int** table = alloc_table(3);
@@ -2858,18 +2813,321 @@ static void test_constructGroupSkipValidate(void) {
         for (int j = 0; j < 3; j++)
             table[i][j] = (i + j) % 3;
     const char* names[] = {"0","1","2"};
-    Group* G = malloc(sizeof(Group));
-    GroupElement** elems = alloc_group_elements(G, names, 3);
+    GroupElement** elems = alloc_group_elements(NULL, names, 3);
 
-    Group* G2 = constructGroupSkipValidate(elems, table, 3);
-    CHECK(G2 != NULL, "constructGroupSkipValidate non-NULL");
+    Group* G2 = constructTableGroupSkipValidate(elems, table, 3);
+    CHECK(G2 != NULL, "constructTableGroupSkipValidate non-NULL");
     CHECK(G2->card == 3, "skip-validate group has correct card");
-    /* must assign group pointer (constructGroupSkipValidate doesn't do this) */
-    for (int i = 0; i < 3; i++) elems[i]->group = G2;
     CHECK(isCyclicGroup(G2), "skip-validate Z/3Z is cyclic");
 
-    free(G); /* free the placeholder we malloc'd */
     freeGroup(G2);
+}
+
+/* ---------- finite group method coverage across constructors ---------- */
+
+static GroupElement* fresh_identity_element(Group* G) {
+    if (!G) return NULL;
+
+    switch (G->type) {
+        case GROUP_CAYLEY:
+        case GROUP_QUOTIENT: {
+            int index = 0;
+            return constructGroupElement(G, &index);
+        }
+        case GROUP_ZN: {
+            long long value = 0;
+            return constructGroupElement(G, &value);
+        }
+        case GROUP_Z:
+            return NULL;
+        case GROUP_SYMMETRIC:
+        case GROUP_ALTERNATING: {
+            size_t degree = G->data.permutation.degree;
+            long long* perm = malloc(degree * sizeof(long long));
+            if (!perm) return NULL;
+            for (size_t i = 0; i < degree; i++) perm[i] = (long long)i;
+            GroupElement* identity = constructGroupElement(G, perm);
+            free(perm);
+            return identity;
+        }
+        case GROUP_DIHEDRAL: {
+            DihedralElementData data = {0, false};
+            return constructGroupElement(G, &data);
+        }
+        case GROUP_PRODUCT: {
+            size_t count = G->data.product.count;
+            GroupElement** factors = malloc(count * sizeof(GroupElement*));
+            if (!factors) return NULL;
+            for (size_t i = 0; i < count; i++) {
+                factors[i] = groupIdentity(G->data.product.factors[i]);
+                if (!factors[i]) {
+                    free(factors);
+                    return NULL;
+                }
+            }
+            ProductGroupElementData data = {factors, count};
+            GroupElement* identity = constructGroupElement(G, &data);
+            free(factors);
+            return identity;
+        }
+        case GROUP_MATRIX:
+            return NULL;
+    }
+
+    return NULL;
+}
+
+static void free_subgroup_list(SubGroup** subgroups, int count) {
+    if (!subgroups) return;
+
+    for (int i = 0; i < count; i++) freeSubgroup(subgroups[i]);
+    free(subgroups);
+}
+
+static void check_finite_group_methods(Group* G, const char* label) {
+    printf("  case: %s\n", label);
+    CHECK(G != NULL, "finite group constructor returned non-NULL");
+    if (!G) return;
+
+    CHECK(G->isFinite && G->elements != NULL, "finite group has indexed elements");
+    if (!G->isFinite || !G->elements) return;
+
+    GroupElement* id = groupIdentity(G);
+    CHECK(id != NULL, "finite group identity exists");
+    CHECK(isGroupIdentity(G, id), "canonical identity is recognized");
+
+    GroupElement* freshId = fresh_identity_element(G);
+    CHECK(freshId != NULL, "fresh identity element can be constructed");
+    CHECK(isGroupIdentity(G, freshId), "fresh identity element is recognized by index");
+    freeGroupElement(freshId);
+
+    bool allElementsInGroup = true;
+    bool allInversesValid = true;
+    bool allOrdersValid = true;
+    bool allPowersReturnIdentity = true;
+    bool allCyclicSubgroupsValid = true;
+    for (int i = 0; i < G->card; i++) {
+        GroupElement* g = G->elements[i];
+        if (!isInGroup(G, g)) allElementsInGroup = false;
+
+        GroupElement* inv = groupInverse(g);
+        if (!inv || !isInverse(g, inv)) allInversesValid = false;
+
+        int order = elementOrder(G, g);
+        if (order < 1 || order > G->card) allOrdersValid = false;
+
+        GroupElement* power = groupExp(g, order);
+        if (!cmpGroupElements(power, id)) allPowersReturnIdentity = false;
+
+        SubGroup* cyclic = getCyclicSubgroup(g);
+        if (!cyclic || !isCyclicSubgroup(cyclic) || !isInSubgroup(cyclic, g)) {
+            allCyclicSubgroupsValid = false;
+        }
+        freeSubgroup(cyclic);
+    }
+    CHECK(allElementsInGroup, "every indexed element is in its group");
+    CHECK(allInversesValid, "every element has a valid inverse");
+    CHECK(allOrdersValid, "every element has a finite order");
+    CHECK(allPowersReturnIdentity, "g^order(g) is identity for every element");
+    CHECK(allCyclicSubgroupsValid, "cyclic subgroups generated by elements are valid");
+
+    SubGroup* center = groupCenter(G);
+    CHECK(center != NULL, "center can be listed");
+    CHECK(center != NULL && isNormalSubgroup(G, center), "center is normal");
+
+    SubGroup* centralizer = groupCentralizer(G, id);
+    CHECK(centralizer != NULL, "identity centralizer can be listed");
+    CHECK(centralizer != NULL && isWholeGroup(G, centralizer), "identity centralizer is the whole group");
+
+    int* allIndices = malloc(G->card * sizeof(int));
+    if (allIndices) {
+        for (int i = 0; i < G->card; i++) allIndices[i] = (int)G->card - 1 - i;
+    }
+    SubGroup* whole = allIndices ? constructSubgroup(G, allIndices, (int)G->card) : NULL;
+    if (!whole) free(allIndices);
+    CHECK(whole != NULL, "whole group can be constructed as an unsorted subgroup");
+    CHECK(whole != NULL && isWholeGroup(G, whole), "whole subgroup is recognized");
+
+    Group* wholeAsGroup = subgroupAsGroup(whole);
+    CHECK(wholeAsGroup != NULL, "whole subgroup can be realized as a group");
+    CHECK(wholeAsGroup != NULL && wholeAsGroup->card == G->card, "subgroupAsGroup preserves cardinality");
+    freeGroup(wholeAsGroup);
+
+    int subCount = 0;
+    SubGroup** subgroups = listAllSubgroups(G, &subCount);
+    CHECK(subgroups != NULL, "all subgroups can be listed");
+    bool allSubgroupsValid = subgroups != NULL && subCount >= 1;
+    bool sawTrivial = false;
+    bool sawWhole = false;
+    for (int i = 0; i < subCount; i++) {
+        if (!isSubgroup(G, subgroups[i])) allSubgroupsValid = false;
+        if (isTrivialSubgroup(subgroups[i])) sawTrivial = true;
+        if (isWholeGroup(G, subgroups[i])) sawWhole = true;
+    }
+    CHECK(allSubgroupsValid, "listed subgroups are valid");
+    CHECK(sawTrivial, "listed subgroups include the trivial subgroup");
+    CHECK(sawWhole, "listed subgroups include the whole group");
+    free_subgroup_list(subgroups, subCount);
+
+    int normalCount = 0;
+    SubGroup** normals = listAllNormalSubgroups(G, &normalCount);
+    CHECK(normals != NULL, "normal subgroups can be listed");
+    bool allNormalsValid = normals != NULL && normalCount >= 1;
+    for (int i = 0; i < normalCount; i++) {
+        if (!isNormalSubgroup(G, normals[i])) allNormalsValid = false;
+    }
+    CHECK(allNormalsValid, "listed normal subgroups are normal");
+    free_subgroup_list(normals, normalCount);
+
+    int conjugacyCount = 0;
+    int* identityClass = conjugacyClass(id, &conjugacyCount);
+    CHECK(identityClass != NULL, "identity conjugacy class can be listed");
+    CHECK(identityClass != NULL && conjugacyCount == 1 && identityClass[0] == 0,
+          "identity conjugacy class is singleton");
+    free(identityClass);
+
+    Group* abelianization = groupAbelianization(G);
+    CHECK(abelianization != NULL, "abelianization can be constructed");
+    CHECK(abelianization != NULL && isCommutativeGroup(abelianization),
+          "abelianization is commutative");
+    freeGroup(abelianization);
+
+    int* identityMap = malloc(G->card * sizeof(int));
+    if (identityMap) {
+        for (int i = 0; i < G->card; i++) identityMap[i] = i;
+    }
+    GroupHomomorphism* identityHom = identityMap ? constructGroupHomomorphism(G, G, identityMap, (int)G->card) : NULL;
+    if (!identityHom) free(identityMap);
+    CHECK(identityHom != NULL, "identity homomorphism can be constructed");
+    CHECK(identityHom != NULL && isGroupIsomorphism(identityHom), "identity homomorphism is an isomorphism");
+
+    SubGroup* kernel = identityHom ? groupHomomorphismKernel(identityHom) : NULL;
+    CHECK(kernel != NULL, "identity homomorphism kernel can be constructed");
+    CHECK(kernel != NULL && isTrivialSubgroup(kernel), "identity homomorphism kernel is trivial");
+    freeSubgroup(kernel);
+
+    Group* image = identityHom ? groupHomomorphismImage(identityHom) : NULL;
+    CHECK(image != NULL, "identity homomorphism image can be constructed");
+    CHECK(image != NULL && image->card == G->card, "identity homomorphism image has full cardinality");
+    freeGroup(image);
+    freeGroupHomomorphism(identityHom);
+
+    freeSubgroup(center);
+    freeSubgroup(centralizer);
+    freeSubgroup(whole);
+}
+
+static void test_subgroup_index_normalization(void) {
+    printf("\n=== subgroup index normalization ===\n");
+
+    Group* Z4 = constructZnGroup(4);
+    int* unsorted = malloc(2 * sizeof(int));
+    unsorted[0] = 2; unsorted[1] = 0;
+    SubGroup* H = constructSubgroup(Z4, unsorted, 2);
+    if (!H) free(unsorted);
+    CHECK(H != NULL, "constructSubgroup accepts unsorted subgroup indices");
+    CHECK(H != NULL && H->data.indexed.indices[0] == 0 && H->data.indexed.indices[1] == 2,
+          "constructSubgroup normalizes subgroup index order");
+
+    int* sorted = malloc(2 * sizeof(int));
+    sorted[0] = 0; sorted[1] = 2;
+    SubGroup* K = constructSubgroup(Z4, sorted, 2);
+    if (!K) free(sorted);
+    CHECK(K != NULL, "constructSubgroup accepts sorted subgroup indices");
+    CHECK(H != NULL && K != NULL && cmpSubgroups(H, K), "cmpSubgroups compares indexed subgroups as sets");
+
+    int* duplicates = malloc(3 * sizeof(int));
+    duplicates[0] = 0; duplicates[1] = 2; duplicates[2] = 2;
+    SubGroup* duplicateSubgroup = constructSubgroup(Z4, duplicates, 3);
+    CHECK(duplicateSubgroup == NULL, "constructSubgroup rejects duplicate subgroup indices");
+    if (duplicateSubgroup) freeSubgroup(duplicateSubgroup);
+    else free(duplicates);
+
+    freeSubgroup(H);
+    freeSubgroup(K);
+    freeGroup(Z4);
+}
+
+static void test_finite_group_methods_all_constructors(void) {
+    printf("\n=== finite group methods across constructors ===\n");
+
+    Group* cayley = make_V4();
+    check_finite_group_methods(cayley, "direct Cayley V4");
+    freeGroup(cayley);
+
+    Group* zn = constructZnGroup(6);
+    check_finite_group_methods(zn, "direct Z/6Z");
+    freeGroup(zn);
+
+    Group* symmetric = constructSymmetricGroup(3);
+    check_finite_group_methods(symmetric, "direct S(3)");
+    freeGroup(symmetric);
+
+    Group* alternating = constructAlternatingGroup(4);
+    check_finite_group_methods(alternating, "direct A(4)");
+    freeGroup(alternating);
+
+    Group* dihedral = constructDihedralGroup(4);
+    check_finite_group_methods(dihedral, "direct D(4)");
+    freeGroup(dihedral);
+
+    Group* z2 = constructZnGroup(2);
+    Group* z3 = constructZnGroup(3);
+    Group* product = constructProductGroup(z2, z3);
+    check_finite_group_methods(product, "direct Z/2Z x Z/3Z");
+    freeGroup(product);
+    freeGroup(z3);
+    freeGroup(z2);
+
+    int** table = alloc_table(3);
+    for (int i = 0; i < 3; i++)
+        for (int j = 0; j < 3; j++)
+            table[i][j] = (i + j) % 3;
+    const char* names[] = {"0","1","2"};
+    GroupElement** elements = alloc_group_elements(NULL, names, 3);
+    TableGroupConstructionData tableData = {elements, table, 3, false};
+    Group* genericCayley = constructGroup(GROUP_CAYLEY, &tableData);
+    check_finite_group_methods(genericCayley, "constructGroup GROUP_CAYLEY");
+    freeGroup(genericCayley);
+
+    ZnGroupData znData = {5};
+    Group* genericZn = constructGroup(GROUP_ZN, &znData);
+    check_finite_group_methods(genericZn, "constructGroup GROUP_ZN");
+    freeGroup(genericZn);
+
+    PermutationGroupData symmetricData = {3};
+    Group* genericSymmetric = constructGroup(GROUP_SYMMETRIC, &symmetricData);
+    check_finite_group_methods(genericSymmetric, "constructGroup GROUP_SYMMETRIC");
+    freeGroup(genericSymmetric);
+
+    PermutationGroupData alternatingData = {4};
+    Group* genericAlternating = constructGroup(GROUP_ALTERNATING, &alternatingData);
+    check_finite_group_methods(genericAlternating, "constructGroup GROUP_ALTERNATING");
+    freeGroup(genericAlternating);
+
+    DihedralGroupData dihedralData = {5};
+    Group* genericDihedral = constructGroup(GROUP_DIHEDRAL, &dihedralData);
+    check_finite_group_methods(genericDihedral, "constructGroup GROUP_DIHEDRAL");
+    freeGroup(genericDihedral);
+
+    Group* productZ2 = constructZnGroup(2);
+    Group* productZ3 = constructZnGroup(3);
+    Group* productFactors[] = {productZ2, productZ3};
+    ProductGroupData productData = {productFactors, 2};
+    Group* genericProduct = constructGroup(GROUP_PRODUCT, &productData);
+    check_finite_group_methods(genericProduct, "constructGroup GROUP_PRODUCT");
+    freeGroup(genericProduct);
+    freeGroup(productZ3);
+    freeGroup(productZ2);
+
+    Group* quotientAmbient = constructSymmetricGroup(3);
+    SubGroup* quotientNormal = commutatorSubgroup(quotientAmbient);
+    QuotientGroupData quotientData = {quotientAmbient, quotientNormal};
+    Group* genericQuotient = constructGroup(GROUP_QUOTIENT, &quotientData);
+    check_finite_group_methods(genericQuotient, "constructGroup GROUP_QUOTIENT");
+    freeGroup(genericQuotient);
+    freeSubgroup(quotientNormal);
+    freeGroup(quotientAmbient);
 }
 
 /* ---------- more product group tests ---------- */
@@ -3362,14 +3620,14 @@ static void test_extra_coverage(void) {
 
     /* constructGroupElement */
     Group* Z3 = constructZnGroup(3);
-    GroupElement* ge = constructGroupElement(Z3, "test");
+    GroupElement* ge = constructGroupElement(NULL, "test");
     CHECK(ge != NULL, "constructGroupElement non-NULL");
     CHECK(strcmp(ge->repr, "test") == 0, "constructGroupElement repr set correctly");
     freeGroupElement(ge);
 
     /* constructRingElement */
     Ring* Z3r = constructZnRing(3);
-    RingElement* re = constructRingElement(Z3r, "test_ring");
+    RingElement* re = constructRingElement(NULL, "test_ring");
     CHECK(re != NULL, "constructRingElement non-NULL");
     CHECK(strcmp(re->repr, "test_ring") == 0, "constructRingElement repr set correctly");
     freeRingElement(re);
@@ -3510,7 +3768,9 @@ int main(void) {
     test_subgroupGeneratedBy();
     test_listAllSubgroups();
     test_isSimple();
-    test_constructGroupSkipValidate();
+    test_constructTableGroupSkipValidate();
+    test_subgroup_index_normalization();
+    test_finite_group_methods_all_constructors();
     test_product_groups_extended();
     test_element_orders_extended();
     test_large_Zn();

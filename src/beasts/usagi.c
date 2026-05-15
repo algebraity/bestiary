@@ -3,13 +3,674 @@
 #include<string.h>
 #include<math.h>
 #include<limits.h>
+#include "hebi.h"
+#include "sokko.h"
 #include "usagi.h"
 
+static char* finiteFieldReprFromIndex(long long index, int p, int degree);
+static int finiteFieldAddIndex(long long left, long long right, int p, int degree);
+static int finiteFieldMultIndex(long long left, long long right, FiniteFieldRingData* ff);
+
 /* ---------- Free methods ---------- */
+
+static void freeGroupElementData(GroupElement* g) {
+    if (!g) return;
+
+    switch (g->type) {
+        case GROUP_ELEM_PERMUTATION:
+            free(g->data.perm);
+            break;
+        case GROUP_ELEM_PRODUCT:
+            free(g->data.product.factors);
+            break;
+        case GROUP_ELEM_MATRIX:
+            freeMatrix(g->data.matrix);
+            break;
+        case GROUP_ELEM_INDEXED:
+        case GROUP_ELEM_INT:
+        case GROUP_ELEM_ZN:
+        case GROUP_ELEM_DIHEDRAL:
+            break;
+    }
+}
+
+static void freeRingElementData(RingElement* x) {
+    if (!x) return;
+
+    switch (x->type) {
+        case RING_ELEM_PRODUCT:
+            free(x->data.product.factors);
+            break;
+        case RING_ELEM_MATRIX:
+            freeMatrix(x->data.matrix);
+            break;
+        case RING_ELEM_INDEXED:
+        case RING_ELEM_INT:
+        case RING_ELEM_ZN:
+        case RING_ELEM_FF:
+            break;
+    }
+}
+
+static void freeGroupElements(GroupElement** elements, size_t count) {
+    if (!elements) return;
+
+    for (size_t i = 0; i < count; i++) {
+        freeGroupElement(elements[i]);
+    }
+    free(elements);
+}
+
+static void freeRingElements(RingElement** elements, size_t count) {
+    if (!elements) return;
+
+    for (size_t i = 0; i < count; i++) {
+        freeRingElement(elements[i]);
+    }
+    free(elements);
+}
+
+static void freeGroupData(Group* group) {
+    if (!group) return;
+
+    switch (group->type) {
+        case GROUP_CAYLEY:
+            if (group->data.cayley.table) {
+                for (size_t i = 0; i < group->card; i++) {
+                    free(group->data.cayley.table[i]);
+                }
+                free(group->data.cayley.table);
+            }
+            break;
+        case GROUP_PRODUCT:
+            free(group->data.product.factors);
+            break;
+        case GROUP_ZN:
+        case GROUP_Z:
+        case GROUP_SYMMETRIC:
+        case GROUP_ALTERNATING:
+        case GROUP_DIHEDRAL:
+        case GROUP_QUOTIENT:
+        case GROUP_MATRIX:
+            break;
+    }
+
+    free(group->generators);
+}
+
+static void freeRingData(Ring* ring) {
+    if (!ring) return;
+
+    switch (ring->type) {
+        case RING_CAYLEY:
+            if (ring->data.cayley.addTable) {
+                for (size_t i = 0; i < ring->card; i++) {
+                    free(ring->data.cayley.addTable[i]);
+                }
+                free(ring->data.cayley.addTable);
+            }
+            if (ring->data.cayley.multTable) {
+                for (size_t i = 0; i < ring->card; i++) {
+                    free(ring->data.cayley.multTable[i]);
+                }
+                free(ring->data.cayley.multTable);
+            }
+            break;
+        case RING_PRODUCT:
+            free(ring->data.product.factors);
+            break;
+        case RING_ZN:
+        case RING_Z:
+        case RING_QUOTIENT:
+        case RING_MATRIX:
+            break;
+        case RING_FF:
+            free(ring->data.ff.modulus);
+            break;
+    }
+
+    free(ring->generators);
+}
+
+static void freeSubgroupData(SubGroup* subgroup) {
+    if (!subgroup) return;
+
+    switch (subgroup->type) {
+        case SUBGROUP_INDEXED:
+            free(subgroup->data.indexed.indices);
+            break;
+        case SUBGROUP_GENERATED:
+            if (subgroup->generators != subgroup->data.generated.generators) {
+                free(subgroup->data.generated.generators);
+            }
+            break;
+        case SUBGROUP_EXPLICIT:
+            if (subgroup->elements != subgroup->data.explicitElements.elements) {
+                free(subgroup->data.explicitElements.elements);
+            }
+            break;
+        case SUBGROUP_PREDICATE:
+            break;
+    }
+
+    free(subgroup->elements);
+    free(subgroup->generators);
+}
+
+static void freeGroupCosetData(GroupCoset* coset) {
+    if (!coset) return;
+
+    switch (coset->type) {
+        case GROUP_COSET_INDEXED:
+            free(coset->data.indexed.indices);
+            break;
+        case GROUP_COSET_EXPLICIT:
+            if (coset->elements != coset->data.explicitElements.elements) {
+                free(coset->data.explicitElements.elements);
+            }
+            break;
+        case GROUP_COSET_REPRESENTATIVE:
+            break;
+    }
+
+    free(coset->elements);
+}
+
+static bool indexInList(int index, int* indices, int indicesLen) {
+    for (int i = 0; i < indicesLen; i++) {
+        if (indices[i] == index) return true;
+    }
+
+    return false;
+}
+
+static bool hasDuplicateIndices(int* indices, int indicesLen) {
+    if (!indices) return false;
+
+    for (int i = 0; i < indicesLen; i++) {
+        for (int j = i + 1; j < indicesLen; j++) {
+            if (indices[i] == indices[j]) return true;
+        }
+    }
+
+    return false;
+}
+
+static void sortIndices(int* indices, int indicesLen) {
+    if (!indices) return;
+
+    for (int i = 1; i < indicesLen; i++) {
+        int value = indices[i];
+        int j = i - 1;
+        while (j >= 0 && indices[j] > value) {
+            indices[j + 1] = indices[j];
+            j--;
+        }
+        indices[j + 1] = value;
+    }
+}
+
+static int cayleyGroupInverseIndex(Group* G, int index) {
+    if (!G || G->type != GROUP_CAYLEY || index < 0 || (size_t)index >= G->card) return -1;
+
+    for (size_t i = 0; i < G->card; i++) {
+        if (G->data.cayley.table[index][i] == 0 && G->data.cayley.table[i][index] == 0) return (int)i;
+    }
+
+    return -1;
+}
+
+static int cayleyRingAddInverseIndex(Ring* R, int index) {
+    if (!R || R->type != RING_CAYLEY || index < 0 || (size_t)index >= R->card) return -1;
+
+    for (size_t i = 0; i < R->card; i++) {
+        if (R->data.cayley.addTable[index][i] == 0 && R->data.cayley.addTable[i][index] == 0) return (int)i;
+    }
+
+    return -1;
+}
+
+static GroupElement** subgroupElementView(Group* G, int* indices, int indicesLen) {
+    GroupElement** elements = malloc(indicesLen * sizeof(GroupElement*));
+    if (!elements) return NULL;
+
+    for (int i = 0; i < indicesLen; i++) {
+        elements[i] = G->elements[indices[i]];
+    }
+
+    return elements;
+}
+
+static RingElement** subringElementView(Ring* R, int* indices, int indicesLen) {
+    RingElement** elements = malloc(indicesLen * sizeof(RingElement*));
+    if (!elements) return NULL;
+
+    for (int i = 0; i < indicesLen; i++) {
+        elements[i] = R->elements[indices[i]];
+    }
+
+    return elements;
+}
+
+static int finiteGroupElementIndex(Group* group, const char* repr) {
+    if (!group || !group->isFinite || !group->elements || !repr) return -1;
+
+    for (size_t i = 0; i < group->card; i++) {
+        if (group->elements[i] && group->elements[i]->repr && strcmp(group->elements[i]->repr, repr) == 0) return (int)i;
+    }
+
+    return -1;
+}
+
+static int finiteRingElementIndex(Ring* ring, const char* repr) {
+    if (!ring || !ring->isFinite || !ring->elements || !repr) return -1;
+
+    for (size_t i = 0; i < ring->card; i++) {
+        if (ring->elements[i] && ring->elements[i]->repr && strcmp(ring->elements[i]->repr, repr) == 0) return (int)i;
+    }
+
+    return -1;
+}
+
+static GroupElement* canonicalGroupElement(Group* group, GroupElement* element) {
+    if (!group || !element) return element;
+    if (group->isFinite && group->elements && element->index >= 0 && (size_t)element->index < group->card) {
+        GroupElement* canonical = group->elements[element->index];
+        freeGroupElement(element);
+        return canonical;
+    }
+
+    return element;
+}
+
+static RingElement* canonicalRingElement(Ring* ring, RingElement* element) {
+    if (!ring || !element) return element;
+    if (ring->isFinite && ring->elements && element->index >= 0 && (size_t)element->index < ring->card) {
+        RingElement* canonical = ring->elements[element->index];
+        freeRingElement(element);
+        return canonical;
+    }
+
+    return element;
+}
+
+static bool parseLongLong(const char* repr, long long* value) {
+    if (!repr || !value) return false;
+
+    char* end = NULL;
+    long long parsed = strtoll(repr, &end, 10);
+    if (end == repr || *end != '\0') return false;
+
+    *value = parsed;
+    return true;
+}
+
+static long long normalizeMod(long long value, long long modulus) {
+    long long result = value % modulus;
+    if (result < 0) result += modulus;
+    return result;
+}
+
+static GroupElement* allocateGroupElement(Group* group, GroupElementType type, int index, const char* repr) {
+    if (!repr || repr[0] == '\0') return NULL;
+
+    GroupElement* element = calloc(1, sizeof(GroupElement));
+    if (!element) return NULL;
+
+    element->repr = malloc(strlen(repr) + 1);
+    if (!element->repr) {
+        free(element);
+        return NULL;
+    }
+    strcpy(element->repr, repr);
+
+    element->group = group;
+    element->index = index;
+    element->type = type;
+    return element;
+}
+
+static RingElement* allocateRingElement(Ring* ring, RingElementType type, int index, const char* repr) {
+    if (!repr || repr[0] == '\0') return NULL;
+
+    RingElement* element = calloc(1, sizeof(RingElement));
+    if (!element) return NULL;
+
+    element->repr = malloc(strlen(repr) + 1);
+    if (!element->repr) {
+        free(element);
+        return NULL;
+    }
+    strcpy(element->repr, repr);
+
+    element->ring = ring;
+    element->index = index;
+    element->type = type;
+    return element;
+}
+
+static GroupElement* constructRawGroupElement(void* data) {
+    char* repr = data;
+    GroupElement* element = allocateGroupElement(NULL, GROUP_ELEM_INDEXED, -1, repr);
+    if (!element) return NULL;
+
+    element->data.indexValue = -1;
+    return element;
+}
+
+static RingElement* constructRawRingElement(void* data) {
+    char* repr = data;
+    RingElement* element = allocateRingElement(NULL, RING_ELEM_INDEXED, -1, repr);
+    if (!element) return NULL;
+
+    element->data.indexValue = -1;
+    return element;
+}
+
+static GroupElement* constructCayleyGroupElement(Group* group, void* data) {
+    if (!group || !data || !group->isFinite || !group->elements) return NULL;
+
+    int index = *(int*)data;
+    if (index < 0 || (size_t)index >= group->card || !group->elements[index]) return NULL;
+
+    GroupElement* element = allocateGroupElement(group, GROUP_ELEM_INDEXED, index, group->elements[index]->repr);
+    if (!element) return NULL;
+
+    element->data.indexValue = index;
+    return element;
+}
+
+static GroupElement* constructZGroupElement(Group* group, void* data) {
+    if (!group || !data) return NULL;
+
+    long long value = *(long long*)data;
+    char repr[64];
+    snprintf(repr, sizeof(repr), "%lld", value);
+
+    GroupElement* element = allocateGroupElement(group, GROUP_ELEM_INT, -1, repr);
+    if (!element) return NULL;
+
+    element->data.integer = value;
+    return element;
+}
+
+static GroupElement* constructZnGroupElement(Group* group, void* data) {
+    if (!group || !data || group->data.zn.modulus <= 0) return NULL;
+
+    long long value = normalizeMod(*(long long*)data, group->data.zn.modulus);
+    char repr[64];
+    snprintf(repr, sizeof(repr), "%lld", value);
+    int index = finiteGroupElementIndex(group, repr);
+
+    GroupElement* element = allocateGroupElement(group, GROUP_ELEM_ZN, index, repr);
+    if (!element) return NULL;
+
+    element->data.znVal = value;
+    return element;
+}
+
+static bool validPermutation(long long* perm, size_t degree) {
+    if (!perm) return false;
+
+    bool* seen = calloc(degree, sizeof(bool));
+    if (!seen) return false;
+
+    for (size_t i = 0; i < degree; i++) {
+        if (perm[i] < 0 || (size_t)perm[i] >= degree || seen[perm[i]]) {
+            free(seen);
+            return false;
+        }
+        seen[perm[i]] = true;
+    }
+
+    free(seen);
+    return true;
+}
+
+static GroupElement* constructPermutationGroupElement(Group* group, void* data, bool requireEven) {
+    if (!group || !data) return NULL;
+
+    size_t degree = group->data.permutation.degree;
+    long long* perm = data;
+    if (!validPermutation(perm, degree)) return NULL;
+
+    int* intPerm = malloc(degree * sizeof(int));
+    if (!intPerm) return NULL;
+    for (size_t i = 0; i < degree; i++) intPerm[i] = (int)perm[i];
+
+    if (requireEven && permSign(intPerm, (int)degree) != 0) {
+        free(intPerm);
+        return NULL;
+    }
+
+    char* repr = permRepr(intPerm, (int)degree);
+    free(intPerm);
+    if (!repr) return NULL;
+
+    int index = finiteGroupElementIndex(group, repr);
+    GroupElement* element = allocateGroupElement(group, GROUP_ELEM_PERMUTATION, index, repr);
+    free(repr);
+    if (!element) return NULL;
+
+    element->data.perm = malloc(degree * sizeof(long long));
+    if (!element->data.perm) {
+        freeGroupElement(element);
+        return NULL;
+    }
+    for (size_t i = 0; i < degree; i++) element->data.perm[i] = perm[i];
+
+    return element;
+}
+
+static GroupElement* constructSymmetricGroupElement(Group* group, void* data) {
+    return constructPermutationGroupElement(group, data, false);
+}
+
+static GroupElement* constructAlternatingGroupElement(Group* group, void* data) {
+    return constructPermutationGroupElement(group, data, true);
+}
+
+static GroupElement* constructDihedralGroupElement(Group* group, void* data) {
+    if (!group || !data || group->data.dihedral.n <= 0) return NULL;
+
+    DihedralElementData raw = *(DihedralElementData*)data;
+    DihedralElementData normalized;
+    normalized.a = normalizeMod(raw.a, group->data.dihedral.n);
+    normalized.b = raw.b;
+
+    char repr[64];
+    if (!normalized.b) {
+        if (normalized.a == 0) snprintf(repr, sizeof(repr), "e");
+        else if (normalized.a == 1) snprintf(repr, sizeof(repr), "r");
+        else snprintf(repr, sizeof(repr), "r^%lld", normalized.a);
+    } else {
+        if (normalized.a == 0) snprintf(repr, sizeof(repr), "s");
+        else if (normalized.a == 1) snprintf(repr, sizeof(repr), "sr");
+        else snprintf(repr, sizeof(repr), "sr^%lld", normalized.a);
+    }
+
+    int index = finiteGroupElementIndex(group, repr);
+    GroupElement* element = allocateGroupElement(group, GROUP_ELEM_DIHEDRAL, index, repr);
+    if (!element) return NULL;
+
+    element->data.dihedral = normalized;
+    return element;
+}
+
+static GroupElement* constructProductGroupElement(Group* group, void* data) {
+    if (!group || !data) return NULL;
+
+    ProductGroupElementData* product = data;
+    if (!product->factors || product->count == 0) return NULL;
+    if (group->data.product.count != 0 && product->count != group->data.product.count) return NULL;
+
+    size_t reprLen = 3;
+    for (size_t i = 0; i < product->count; i++) {
+        if (!product->factors[i] || !product->factors[i]->repr) return NULL;
+        reprLen += strlen(product->factors[i]->repr) + 1;
+    }
+
+    char* repr = malloc(reprLen);
+    if (!repr) return NULL;
+    size_t pos = 0;
+    pos += snprintf(repr + pos, reprLen - pos, "(");
+    for (size_t i = 0; i < product->count; i++) {
+        if (i > 0) pos += snprintf(repr + pos, reprLen - pos, ",");
+        pos += snprintf(repr + pos, reprLen - pos, "%s", product->factors[i]->repr);
+    }
+    snprintf(repr + pos, reprLen - pos, ")");
+
+    char* flat = flattenRepr(repr);
+    char* elementRepr = flat ? flat : repr;
+    int index = finiteGroupElementIndex(group, elementRepr);
+    GroupElement* element = allocateGroupElement(group, GROUP_ELEM_PRODUCT, index, elementRepr);
+    free(flat);
+    free(repr);
+    if (!element) return NULL;
+
+    element->data.product.count = product->count;
+    element->data.product.factors = malloc(product->count * sizeof(GroupElement*));
+    if (!element->data.product.factors) {
+        freeGroupElement(element);
+        return NULL;
+    }
+    for (size_t i = 0; i < product->count; i++) element->data.product.factors[i] = product->factors[i];
+
+    return element;
+}
+
+static GroupElement* constructQuotientGroupElement(Group* group, void* data) {
+    return constructCayleyGroupElement(group, data);
+}
+
+static GroupElement* constructMatrixGroupElement(Group* group, void* data) {
+    if (!group || !data) return NULL;
+
+    GroupElement* element = allocateGroupElement(group, GROUP_ELEM_MATRIX, -1, "matrix");
+    if (!element) return NULL;
+
+    element->data.matrix = data;
+    return element;
+}
+
+static RingElement* constructCayleyRingElement(Ring* ring, void* data) {
+    if (!ring || !data || !ring->isFinite || !ring->elements) return NULL;
+
+    int index = *(int*)data;
+    if (index < 0 || (size_t)index >= ring->card || !ring->elements[index]) return NULL;
+
+    RingElement* element = allocateRingElement(ring, RING_ELEM_INDEXED, index, ring->elements[index]->repr);
+    if (!element) return NULL;
+
+    element->data.indexValue = index;
+    return element;
+}
+
+static RingElement* constructZRingElement(Ring* ring, void* data) {
+    if (!ring || !data) return NULL;
+
+    long long value = *(long long*)data;
+    char repr[64];
+    snprintf(repr, sizeof(repr), "%lld", value);
+
+    RingElement* element = allocateRingElement(ring, RING_ELEM_INT, -1, repr);
+    if (!element) return NULL;
+
+    element->data.integer = value;
+    return element;
+}
+
+static RingElement* constructZnRingElement(Ring* ring, void* data) {
+    if (!ring || !data || ring->data.zn.modulus <= 0) return NULL;
+
+    long long value = normalizeMod(*(long long*)data, ring->data.zn.modulus);
+    char repr[64];
+    snprintf(repr, sizeof(repr), "%lld", value);
+    int index = finiteRingElementIndex(ring, repr);
+
+    RingElement* element = allocateRingElement(ring, RING_ELEM_ZN, index, repr);
+    if (!element) return NULL;
+
+    element->data.znVal = value;
+    return element;
+}
+
+static RingElement* constructFiniteFieldRingElement(Ring* ring, void* data) {
+    if (!ring || !data || ring->data.ff.p <= 1 || ring->data.ff.degree < 1) return NULL;
+
+    long long value = normalizeMod(*(long long*)data, (long long)ring->card);
+    char* repr = finiteFieldReprFromIndex(value, ring->data.ff.p, ring->data.ff.degree);
+    if (!repr) return NULL;
+
+    int index = finiteRingElementIndex(ring, repr);
+    RingElement* element = allocateRingElement(ring, RING_ELEM_FF, index, repr);
+    free(repr);
+    if (!element) return NULL;
+
+    element->data.znVal = value;
+    return element;
+}
+
+static RingElement* constructProductRingElement(Ring* ring, void* data) {
+    if (!ring || !data) return NULL;
+
+    ProductRingElementData* product = data;
+    if (!product->factors || product->count == 0) return NULL;
+    if (ring->data.product.count != 0 && product->count != ring->data.product.count) return NULL;
+
+    size_t reprLen = 3;
+    for (size_t i = 0; i < product->count; i++) {
+        if (!product->factors[i] || !product->factors[i]->repr) return NULL;
+        reprLen += strlen(product->factors[i]->repr) + 1;
+    }
+
+    char* repr = malloc(reprLen);
+    if (!repr) return NULL;
+    size_t pos = 0;
+    pos += snprintf(repr + pos, reprLen - pos, "(");
+    for (size_t i = 0; i < product->count; i++) {
+        if (i > 0) pos += snprintf(repr + pos, reprLen - pos, ",");
+        pos += snprintf(repr + pos, reprLen - pos, "%s", product->factors[i]->repr);
+    }
+    snprintf(repr + pos, reprLen - pos, ")");
+
+    char* flat = flattenRepr(repr);
+    char* elementRepr = flat ? flat : repr;
+    int index = finiteRingElementIndex(ring, elementRepr);
+    RingElement* element = allocateRingElement(ring, RING_ELEM_PRODUCT, index, elementRepr);
+    free(flat);
+    free(repr);
+    if (!element) return NULL;
+
+    element->data.product.count = product->count;
+    element->data.product.factors = malloc(product->count * sizeof(RingElement*));
+    if (!element->data.product.factors) {
+        freeRingElement(element);
+        return NULL;
+    }
+    for (size_t i = 0; i < product->count; i++) element->data.product.factors[i] = product->factors[i];
+
+    return element;
+}
+
+static RingElement* constructQuotientRingElement(Ring* ring, void* data) {
+    return constructCayleyRingElement(ring, data);
+}
+
+static RingElement* constructMatrixRingElement(Ring* ring, void* data) {
+    if (!ring || !data) return NULL;
+
+    RingElement* element = allocateRingElement(ring, RING_ELEM_MATRIX, -1, "matrix");
+    if (!element) return NULL;
+
+    element->data.matrix = data;
+    return element;
+}
 
 // Free the memory associated with a GroupElement
 void freeGroupElement(GroupElement* g) {
     if (!g) return;
+    freeGroupElementData(g);
     free(g->repr);
     free(g);
 }
@@ -17,46 +678,55 @@ void freeGroupElement(GroupElement* g) {
 // Free the memory associated with a Group
 void freeGroup(Group* group) {
     if (!group) return;
-    for (int i = 0; i < group->card; i++) {
-		freeGroupElement(group->elements[i]);
-		free(group->table[i]);
-    }
-    free(group->elements);
-    free(group->table);
+    freeGroupElements(group->elements, group->card);
+    freeGroupData(group);
     free(group);
 }
 
 // Free the memory associated with a SubGroup
 void freeSubgroup(SubGroup* subgroup) {
     if (!subgroup) return;
-    free(subgroup->indices);
+    freeSubgroupData(subgroup);
     free(subgroup);
 }
 
 // Free the memroy associated with a GroupCoset
 void freeGroupCoset(GroupCoset* coset) {
     if (!coset) return;
-    free(coset->indices);
+    freeGroupCosetData(coset);
 	free(coset);
 }
 
 // Free a GroupHomomorphism
 void freeGroupHomomorphism(GroupHomomorphism* homo) {
     if (!homo) return;
-    free(homo->mapping);
+    switch (homo->type) {
+        case GROUP_HOM_INDEXED:
+            free(homo->data.indexed.mapping);
+            break;
+        case GROUP_HOM_FUNCTION:
+            break;
+    }
     free(homo);
 }
 
 // Free a RingHomomorphism
 void freeRingHomomorphism(RingHomomorphism* homo) {
     if (!homo) return;
-    free(homo->mapping);
+    switch (homo->type) {
+        case RING_HOM_INDEXED:
+            free(homo->data.indexed.mapping);
+            break;
+        case RING_HOM_FUNCTION:
+            break;
+    }
     free(homo);
 }
 
 // Free the memory associated with a RingElement
 void freeRingElement(RingElement* x) {
     if (!x) return;
+    freeRingElementData(x);
     free(x->repr);
     free(x);
 }
@@ -64,42 +734,36 @@ void freeRingElement(RingElement* x) {
 // Free the memory associated with a Ring
 void freeRing(Ring* ring) {
     if (!ring) return;
-    for (int i = 0; i < ring->card; i++) {
-	freeRingElement(ring->elements[i]);
-	free(ring->addTable[i]);
-	free(ring->multTable[i]);
-    }
-    free(ring->elements);
-    free(ring->addTable);
-    free(ring->multTable);
+    freeRingElements(ring->elements, ring->card);
+    freeRingData(ring);
     free(ring);
 }
 
 /* ---------- Construct methods (basic) ---------- */
 
 // Validate that a matrix can be a table for a Group
-bool validateGroupTable(int** table, int card) {
-    if (!table || card < 1) return false;
+bool validateGroupTable(int** table, size_t card) {
+    if (!table || card == 0) return false;
 
     // Verify associativity
-    for (int i = 0; i < card; i++) {
-		for (int j = 0; j < card; j++) {
-			if (table[i][j] < 0 || table[i][j] > card-1) return false;
-	        for (int k = 0; k < card; k++) {
+    for (size_t i = 0; i < card; i++) {
+		for (size_t j = 0; j < card; j++) {
+			if (table[i][j] < 0 || (size_t)table[i][j] >= card) return false;
+	        for (size_t k = 0; k < card; k++) {
 		    	if (table[table[i][j]][k] != table[i][table[j][k]]) return false;
 	        }
 	    }
     }
 
     // Verify that an identity exists
-    for (int i = 0; i < card; i++) {
+    for (size_t i = 0; i < card; i++) {
 	    if (table[i][0] != i || table[0][i] != i) return false;
     }
 
     // Verify that an inverse exists
-    for (int i = 0; i < card; i++) {
+    for (size_t i = 0; i < card; i++) {
 	bool invExists = false;
-	for (int j = 0; j < card; j++) {
+	for (size_t j = 0; j < card; j++) {
 	    if (table[i][j] == table[0][0] && table[j][i] == table[0][0]) {
 		    invExists = true;
 		    goto skip;
@@ -113,14 +777,14 @@ bool validateGroupTable(int** table, int card) {
 }
 
 // Validate that addTable and multTable can be used for a Ring
-bool validateRingTables(int** addTable, int** multTable, int card) {
-    if (!addTable || !multTable || card < 1) return false;
+bool validateRingTables(int** addTable, int** multTable, size_t card) {
+    if (!addTable || !multTable || card == 0) return false;
 
     // Verify associativity and the distributive property
-    for (int i = 0; i < card; i++) {
-	    for (int j = 0; j < card; j++) {
-	        if (addTable[i][j] < 0 || addTable[i][j] > card-1 || multTable[i][j] < 0 || multTable[i][j] > card-1) return false;
-	        for (int k = 0; k < card; k++) {
+    for (size_t i = 0; i < card; i++) {
+	    for (size_t j = 0; j < card; j++) {
+	        if (addTable[i][j] < 0 || (size_t)addTable[i][j] >= card || multTable[i][j] < 0 || (size_t)multTable[i][j] >= card) return false;
+	        for (size_t k = 0; k < card; k++) {
 		        if (addTable[addTable[i][j]][k] != addTable[i][addTable[j][k]]) return false;
 		        if (multTable[multTable[i][j]][k] != multTable[i][multTable[j][k]]) return false;
 		        if (multTable[addTable[i][j]][k] != addTable[multTable[i][k]][multTable[j][k]]) return false;
@@ -130,14 +794,14 @@ bool validateRingTables(int** addTable, int** multTable, int card) {
     }
 
     // Verify additive identity
-    for (int i = 0; i < card; i++) {
+    for (size_t i = 0; i < card; i++) {
 	    if (addTable[i][0] != i || addTable[0][i] != i) return false;
     }
 
     // Verify the existence of additive inverse
-    for (int i = 0; i < card; i++) {
+    for (size_t i = 0; i < card; i++) {
 	bool invExists = false;
-	for (int j = 0; j < card; j++) {
+	for (size_t j = 0; j < card; j++) {
 	    if (addTable[i][j] == addTable[0][0] && addTable[j][i] == addTable[0][0]) {
 		    invExists = true;
 		    goto skip;
@@ -148,14 +812,14 @@ bool validateRingTables(int** addTable, int** multTable, int card) {
     }
 
     // Verify that addition is commutative
-    for (int i = 0; i < card; i++) {
-        for (int j = 0; j < card; j++) {
+    for (size_t i = 0; i < card; i++) {
+        for (size_t j = 0; j < card; j++) {
             if (addTable[i][j] != addTable[j][i]) return false;
         }
     }
 
     // Verify that 0*x = 0
-    for (int i = 0; i < card; i++) {
+    for (size_t i = 0; i < card; i++) {
 	    if (multTable[0][i] != 0 || multTable[i][0] != 0) return false;
     }
     
@@ -163,102 +827,241 @@ bool validateRingTables(int** addTable, int** multTable, int card) {
 }
 
 // Construct a GroupElement
-GroupElement* constructGroupElement(Group* group, char* repr) {
-    if (!repr || repr[0] == '\0') return NULL;
+GroupElement* constructGroupElement(Group* group, void* data) {
+    if (!data) return NULL;
+    if (!group) return constructRawGroupElement(data);
 
-    GroupElement* g = malloc(sizeof(GroupElement));
-    if (!g) return NULL;
-
-    char* newRepr = malloc(strlen(repr)+1);
-    if (!newRepr) {
-	free(g);
-	return NULL;
+    switch (group->type) {
+        case GROUP_CAYLEY:
+            return constructCayleyGroupElement(group, data);
+        case GROUP_ZN:
+            return constructZnGroupElement(group, data);
+        case GROUP_Z:
+            return constructZGroupElement(group, data);
+        case GROUP_SYMMETRIC:
+            return constructSymmetricGroupElement(group, data);
+        case GROUP_ALTERNATING:
+            return constructAlternatingGroupElement(group, data);
+        case GROUP_DIHEDRAL:
+            return constructDihedralGroupElement(group, data);
+        case GROUP_PRODUCT:
+            return constructProductGroupElement(group, data);
+        case GROUP_QUOTIENT:
+            return constructQuotientGroupElement(group, data);
+        case GROUP_MATRIX:
+            return constructMatrixGroupElement(group, data);
     }
-    strcpy(newRepr, repr);
 
-    g->repr = newRepr;
-    g->group = group;
-    g->index = -1;
-    
-    return g;
+    return NULL;
 }
 
-// Construct a Group
-Group* constructGroup(GroupElement** elements, int** table, int tableLen) {
+// Construct a Group by type
+Group* constructGroup(GroupType type, void* data) {
+    switch (type) {
+        case GROUP_CAYLEY: {
+            if (!data) return NULL;
+            TableGroupConstructionData* tableData = data;
+            if (tableData->skipValidate) return constructTableGroupSkipValidate(tableData->elements, tableData->table, tableData->tableLen);
+            return constructTableGroup(tableData->elements, tableData->table, tableData->tableLen);
+        }
+        case GROUP_ZN: {
+            if (!data) return NULL;
+            ZnGroupData* znData = data;
+            return constructZnGroup((int)znData->modulus);
+        }
+        case GROUP_Z: {
+            Group* group = calloc(1, sizeof(Group));
+            if (!group) return NULL;
+            group->type = GROUP_Z;
+            group->isFinite = false;
+            return group;
+        }
+        case GROUP_SYMMETRIC: {
+            if (!data) return NULL;
+            PermutationGroupData* permutationData = data;
+            return constructSymmetricGroup((int)permutationData->degree);
+        }
+        case GROUP_ALTERNATING: {
+            if (!data) return NULL;
+            PermutationGroupData* permutationData = data;
+            return constructAlternatingGroup((int)permutationData->degree);
+        }
+        case GROUP_DIHEDRAL: {
+            if (!data) return NULL;
+            DihedralGroupData* dihedralData = data;
+            return constructDihedralGroup((int)dihedralData->n);
+        }
+        case GROUP_PRODUCT: {
+            if (!data) return NULL;
+            ProductGroupData* productData = data;
+            if (!productData->factors || productData->count < 2) return NULL;
+            Group* product = constructProductGroup(productData->factors[0], productData->factors[1]);
+            if (!product) return NULL;
+            for (size_t i = 2; i < productData->count; i++) {
+                Group* next = constructProductGroup(product, productData->factors[i]);
+                if (!next) {
+                    freeGroup(product);
+                    return NULL;
+                }
+                product = next;
+            }
+            return product;
+        }
+        case GROUP_QUOTIENT: {
+            if (!data) return NULL;
+            QuotientGroupData* quotientData = data;
+            return quotientGroup(quotientData->ambient, quotientData->normal);
+        }
+        case GROUP_MATRIX:
+            return NULL;
+    }
+
+    return NULL;
+}
+
+// Construct a Group from a Cayley table
+Group* constructTableGroup(GroupElement** elements, int** table, int tableLen) {
     if (!elements || !table) return NULL;
     if (tableLen < 1) return NULL;
     if (!validateGroupTable(table, tableLen)) return NULL;
 
-    Group* group = malloc(sizeof(Group));
-    if (!group) return NULL;
-
-    group->elements = elements;
-    group->table = table;
-    group->card = tableLen;
-
-    for (int i = 0; i < tableLen; i++){
-	group->elements[i]->index = i;
-    }
-
-    return group;
+    return constructTableGroupSkipValidate(elements, table, tableLen);
 }
 
-// Construct a Group, skipping the validation step
-Group* constructGroupSkipValidate(GroupElement** elements, int** table, int tableLen) {
+// Construct a Group from a Cayley table, skipping the validation step
+Group* constructTableGroupSkipValidate(GroupElement** elements, int** table, int tableLen) {
     if (!elements || !table) return NULL;
     if (tableLen < 1) return NULL;
 
-    Group* group = malloc(sizeof(Group));
+    Group* group = calloc(1, sizeof(Group));
     if (!group) return NULL;
 
+    group->type = GROUP_CAYLEY;
     group->elements = elements;
-    group->table = table;
-    group->card = tableLen;
+    group->card = (size_t)tableLen;
+    group->isFinite = true;
+    group->data.cayley.elements = elements;
+    group->data.cayley.table = table;
 
     for (int i = 0; i < tableLen; i++){
+	group->elements[i]->group = group;
 	group->elements[i]->index = i;
+	group->elements[i]->type = GROUP_ELEM_INDEXED;
+	group->elements[i]->data.indexValue = i;
     }
 
     return group;
 }
 
 // Construct a RingElement
-RingElement* constructRingElement(Ring* ring, char* repr) {
-    if (!repr || repr[0] == '\0') return NULL;
+RingElement* constructRingElement(Ring* ring, void* data) {
+    if (!data) return NULL;
+    if (!ring) return constructRawRingElement(data);
 
-    RingElement* x = malloc(sizeof(RingElement));
-    if (!x) return NULL;
-
-    char* newRepr = malloc(strlen(repr)+1);
-    if (!newRepr) {
-	free(x);
-	return NULL;
+    switch (ring->type) {
+        case RING_CAYLEY:
+            return constructCayleyRingElement(ring, data);
+        case RING_ZN:
+            return constructZnRingElement(ring, data);
+        case RING_Z:
+            return constructZRingElement(ring, data);
+        case RING_FF:
+            return constructFiniteFieldRingElement(ring, data);
+        case RING_PRODUCT:
+            return constructProductRingElement(ring, data);
+        case RING_QUOTIENT:
+            return constructQuotientRingElement(ring, data);
+        case RING_MATRIX:
+            return constructMatrixRingElement(ring, data);
     }
-    strcpy(newRepr, repr);
 
-    x->repr = newRepr;
-    x->ring = ring;
-    x->index = -1;
-    
-    return x;
+    return NULL;
 }
 
-// Construct a Ring
-Ring* constructRing(RingElement** elements, int** addTable, int** multTable, int tableLen) {
+// Construct a Ring by type
+Ring* constructRing(RingType type, void* data) {
+    switch (type) {
+        case RING_CAYLEY: {
+            if (!data) return NULL;
+            TableRingConstructionData* tableData = data;
+            if (tableData->skipValidate) return constructTableRingSkipValidate(tableData->elements, tableData->addTable, tableData->multTable, tableData->tableLen);
+            return constructTableRing(tableData->elements, tableData->addTable, tableData->multTable, tableData->tableLen);
+        }
+        case RING_ZN: {
+            if (!data) return NULL;
+            ZnRingData* znData = data;
+            return constructZnRing((int)znData->modulus);
+        }
+        case RING_FF: {
+            if (!data) return NULL;
+            FiniteFieldRingData* ffData = data;
+            return constructFiniteField(ffData->p, ffData->degree);
+        }
+        case RING_Z: {
+            Ring* ring = calloc(1, sizeof(Ring));
+            if (!ring) return NULL;
+            ring->type = RING_Z;
+            ring->isFinite = false;
+            return ring;
+        }
+        case RING_PRODUCT: {
+            if (!data) return NULL;
+            ProductRingData* productData = data;
+            if (!productData->factors || productData->count < 2) return NULL;
+            Ring* product = constructProductRing(productData->factors[0], productData->factors[1]);
+            if (!product) return NULL;
+            for (size_t i = 2; i < productData->count; i++) {
+                Ring* next = constructProductRing(product, productData->factors[i]);
+                if (!next) {
+                    freeRing(product);
+                    return NULL;
+                }
+                product = next;
+            }
+            return product;
+        }
+        case RING_QUOTIENT: {
+            if (!data) return NULL;
+            QuotientRingData* quotientData = data;
+            return quotientRing(quotientData->ambient, quotientData->ideal);
+        }
+        case RING_MATRIX:
+            return NULL;
+    }
+
+    return NULL;
+}
+
+// Construct a Ring from Cayley tables
+Ring* constructTableRing(RingElement** elements, int** addTable, int** multTable, int tableLen) {
     if (!elements || !addTable || !multTable) return NULL;
     if (tableLen < 1) return NULL;
     if (!validateRingTables(addTable, multTable, tableLen)) return NULL;
 
-    Ring* ring = malloc(sizeof(Ring));
+    return constructTableRingSkipValidate(elements, addTable, multTable, tableLen);
+}
+
+// Construct a Ring from Cayley tables, skipping the validation step
+Ring* constructTableRingSkipValidate(RingElement** elements, int** addTable, int** multTable, int tableLen) {
+    if (!elements || !addTable || !multTable) return NULL;
+    if (tableLen < 1) return NULL;
+
+    Ring* ring = calloc(1, sizeof(Ring));
     if (!ring) return NULL;
 
+    ring->type = RING_CAYLEY;
     ring->elements = elements;
-    ring->addTable = addTable;
-    ring->multTable = multTable;
-    ring->card = tableLen;
+    ring->card = (size_t)tableLen;
+    ring->isFinite = true;
+    ring->data.cayley.elements = elements;
+    ring->data.cayley.addTable = addTable;
+    ring->data.cayley.multTable = multTable;
 
     for (int i = 0; i < tableLen; i++){
+	ring->elements[i]->ring = ring;
 	ring->elements[i]->index = i;
+	ring->elements[i]->type = RING_ELEM_INDEXED;
+	ring->elements[i]->data.indexValue = i;
     }
 
     return ring;
@@ -379,6 +1182,84 @@ static void polyReprBuf(const int* poly, int k, char* buf, int bufLen) {
 	if (first) snprintf(buf, bufLen, "0");
 }
 
+static char* finiteFieldReprFromIndex(long long index, int p, int degree) {
+    if (p <= 1 || degree < 1) return NULL;
+
+    int* poly = malloc(degree * sizeof(int));
+    if (!poly) return NULL;
+
+    long long n = index;
+    for (int i = 0; i < degree; i++) {
+        poly[i] = (int)(n % p);
+        n /= p;
+    }
+
+    int bufLen = 16 * degree + 16;
+    char* repr = malloc(bufLen);
+    if (!repr) {
+        free(poly);
+        return NULL;
+    }
+
+    polyReprBuf(poly, degree, repr, bufLen);
+    free(poly);
+    return repr;
+}
+
+static int finiteFieldAddIndex(long long left, long long right, int p, int degree) {
+    int index = 0;
+    int place = 1;
+
+    for (int i = 0; i < degree; i++) {
+        int a = (int)(left % p);
+        int b = (int)(right % p);
+        int c = (a + b) % p;
+        index += c * place;
+        place *= p;
+        left /= p;
+        right /= p;
+    }
+
+    return index;
+}
+
+static int finiteFieldMultIndex(long long left, long long right, FiniteFieldRingData* ff) {
+    if (!ff || !ff->modulus || ff->p <= 1 || ff->degree < 1) return -1;
+
+    int p = ff->p;
+    int degree = ff->degree;
+    int* a = calloc(degree, sizeof(int));
+    int* b = calloc(degree, sizeof(int));
+    int* prod = calloc(2 * degree - 1, sizeof(int));
+    int* rem = calloc(degree, sizeof(int));
+    if (!a || !b || !prod || !rem) {
+        free(a); free(b); free(prod); free(rem);
+        return -1;
+    }
+
+    for (int i = 0; i < degree; i++) {
+        a[i] = (int)(left % p);
+        b[i] = (int)(right % p);
+        left /= p;
+        right /= p;
+    }
+
+    for (int i = 0; i < degree; i++) {
+        if (a[i] == 0) continue;
+        for (int j = 0; j < degree; j++) {
+            prod[i + j] = (prod[i + j] + a[i] * b[j]) % p;
+        }
+    }
+
+    polyRemMod(prod, 2 * degree - 1, ff->modulus, degree, p, rem);
+
+    int index = 0;
+    for (int i = degree - 1; i >= 0; i--) index = index * p + rem[i];
+
+    free(a); free(b); free(prod); free(rem);
+    return index;
+}
+
 static void freeGroupConstructionData(GroupElement** elements, int** table, int card) {
     if (elements) {
         for (int i = 0; i < card; i++) freeGroupElement(elements[i]);
@@ -478,55 +1359,29 @@ char* permRepr(int* perm, int n) {
 // Construct the Group Z/Zn = {0, 1, 2, ..., n-1}
 Group* constructZnGroup(int n) {
     if (n < 1) return NULL;
-    if (n == 1) return trivialGroup();
 
-	// Construct the elements and table arrays
-    GroupElement** elements = malloc(n * sizeof(GroupElement*));
-    if (!elements) return NULL;
-    int** table = malloc(n * sizeof(int*));
-    if (!table) {
-		free(elements);
-		return NULL;
+    Group* G = calloc(1, sizeof(Group));
+    if (!G) return NULL;
+    G->type = GROUP_ZN;
+    G->card = (size_t)n;
+    G->isFinite = true;
+    G->data.zn.modulus = n;
+    G->elements = calloc((size_t)n, sizeof(GroupElement*));
+    if (!G->elements) {
+        free(G);
+        return NULL;
     }
 
-	// Fill in the elements and table
     for (int i = 0; i < n; i++) {
-		char* repr = malloc(32);
-		sprintf(repr, "%d", i);
-		elements[i] = constructGroupElement(NULL, repr);
-		if (!elements[i]) {
-	    	for (int j = 0; j < i; j++) freeGroupElement(elements[j]);
-	    	free(elements);
-	    	free(table);
-	    	return NULL;
-		}
-		table[i] = malloc(n * sizeof(int));
-		if (!table[i]) {
-	    	for (int j = 0; j <= i; j++) freeGroupElement(elements[j]);
-	    	for (int j = 0; j < i; j++) free(table[j]);
-	    	free(elements);
-	    	free(table);
-	    	return NULL;
-		}
-    }
-    for (int i = 0; i < n; i++) {
-		for (int j = 0; j < n; j++) {
-	    	table[i][j] = (i + j) % n;
-		}
+        long long value = i;
+        G->elements[i] = constructGroupElement(G, &value);
+        if (!G->elements[i]) {
+            freeGroup(G);
+            return NULL;
+        }
+        G->elements[i]->index = i;
     }
 
-	// Construct the group
-    Group* G = constructGroup(elements, table, n);
-    if (!G) {
-		for (int i = 0; i < n; i++) {
-	    	freeGroupElement(elements[i]);
-	    	free(table[i]);
-		}
-		free(elements);
-		free(table);
-    }
-	for (int i = 0; i < n; i++) elements[i]->group = G;
-	
 	return G;
 }
 
@@ -551,12 +1406,13 @@ Group* constructZnProductGroup(int* vals, int k) {
 	// Construct the cross product recursively
 	Group* product = components[0];
 	for (int i = 1; i < k; i++) {
-		product = constructProductGroup(product, components[i]);
-		if (!product) {
+		Group* next = constructProductGroup(product, components[i]);
+		if (!next) {
 			for (int j = 0; j < k; j++) freeGroup(components[j]);
 			free(components);
 			return NULL;
 		}
+		product = next;
 	}
 
 	// Flatten element reprs to (a,b,c,...) form and set the group pointer
@@ -565,7 +1421,6 @@ Group* constructZnProductGroup(int* vals, int k) {
 		if (flat) { free(product->elements[i]->repr); product->elements[i]->repr = flat; }
 		product->elements[i]->group = product;
 	}
-	for (int i = 0; i < k; i++) freeGroup(components[i]);
 	free(components);
 
 	return product;
@@ -574,19 +1429,34 @@ Group* constructZnProductGroup(int* vals, int k) {
 // Construct the group Sn
 Group* constructSymmetricGroup(int n) {
     if (n < 1) return NULL;
-    if (n == 1) return trivialGroup();
 
     int card = factorial(n);
     if (card < 1) return NULL;
 
+    Group* G = calloc(1, sizeof(Group));
+    if (!G) return NULL;
+    G->type = GROUP_SYMMETRIC;
+    G->card = (size_t)card;
+    G->isFinite = true;
+    G->data.permutation.degree = (size_t)n;
+    G->elements = calloc((size_t)card, sizeof(GroupElement*));
+    if (!G->elements) {
+        free(G);
+        return NULL;
+    }
+
     // Generate all permutations in lexicographic order
     int** perms = malloc(card * sizeof(int*));
-    if (!perms) return NULL;
+    if (!perms) {
+        freeGroup(G);
+        return NULL;
+    }
     for (int p = 0; p < card; p++) {
         perms[p] = malloc(n * sizeof(int));
         if (!perms[p]) {
             for (int j = 0; j < p; j++) free(perms[j]);
             free(perms);
+            freeGroup(G);
             return NULL;
         }
         if (p == 0) {
@@ -597,86 +1467,28 @@ Group* constructSymmetricGroup(int n) {
         }
     }
 
-    // Construct the elements
-    GroupElement** elements = malloc(card * sizeof(GroupElement*));
-    if (!elements) {
+    long long* permData = malloc((size_t)n * sizeof(long long));
+    if (!permData) {
         for (int i = 0; i < card; i++) free(perms[i]);
         free(perms);
+        freeGroup(G);
         return NULL;
     }
     for (int p = 0; p < card; p++) {
-        char* repr = permRepr(perms[p], n);
-        if (!repr) {
-            for (int j = 0; j < p; j++) freeGroupElement(elements[j]);
-            free(elements);
+        for (int i = 0; i < n; i++) permData[i] = perms[p][i];
+        G->elements[p] = constructGroupElement(G, permData);
+        if (!G->elements[p]) {
+            free(permData);
             for (int j = 0; j < card; j++) free(perms[j]);
             free(perms);
+            freeGroup(G);
             return NULL;
         }
-        elements[p] = constructGroupElement(NULL, repr);
-        free(repr);
-        if (!elements[p]) {
-            for (int j = 0; j < p; j++) freeGroupElement(elements[j]);
-            free(elements);
-            for (int j = 0; j < card; j++) free(perms[j]);
-            free(perms);
-            return NULL;
-        }
+        G->elements[p]->index = p;
     }
-
-    // Build the Cayley table
-    int** table = malloc(card * sizeof(int*));
-    if (!table) {
-        for (int i = 0; i < card; i++) freeGroupElement(elements[i]);
-        free(elements);
-        for (int i = 0; i < card; i++) free(perms[i]);
-        free(perms);
-        return NULL;
-    }
-    int* composed = malloc(n * sizeof(int));
-    if (!composed) {
-        free(table);
-        for (int i = 0; i < card; i++) freeGroupElement(elements[i]);
-        free(elements);
-        for (int i = 0; i < card; i++) free(perms[i]);
-        free(perms);
-        return NULL;
-    }
-    for (int a = 0; a < card; a++) {
-        table[a] = malloc(card * sizeof(int));
-        if (!table[a]) {
-            for (int j = 0; j < a; j++) free(table[j]);
-            free(table);
-            free(composed);
-            for (int j = 0; j < card; j++) freeGroupElement(elements[j]);
-            free(elements);
-            for (int j = 0; j < card; j++) free(perms[j]);
-            free(perms);
-            return NULL;
-        }
-        for (int b = 0; b < card; b++) {
-            for (int i = 0; i < n; i++) composed[i] = perms[a][perms[b][i]];
-            table[a][b] = permToIndex(composed, n);
-        }
-    }
-    free(composed);
-
-    // Free permutations
+    free(permData);
     for (int i = 0; i < card; i++) free(perms[i]);
     free(perms);
-
-    // Construct the group
-    Group* G = constructGroupSkipValidate(elements, table, card);
-    if (!G) {
-        for (int i = 0; i < card; i++) {
-            freeGroupElement(elements[i]);
-            free(table[i]);
-        }
-        free(elements);
-        free(table);
-        return NULL;
-    }
-    for (int i = 0; i < card; i++) elements[i]->group = G;
 
     return G;
 }
@@ -684,20 +1496,36 @@ Group* constructSymmetricGroup(int n) {
 // Construct the group An
 Group* constructAlternatingGroup(int n) {
     if (n < 1) return NULL;
-    if (n <= 2) return trivialGroup();
 
     int fullCard = factorial(n);
-    if (fullCard < 2) return NULL;
+    if (fullCard < 1) return NULL;
     int card = fullCard / 2;
+    if (n <= 2) card = 1;
+
+    Group* G = calloc(1, sizeof(Group));
+    if (!G) return NULL;
+    G->type = GROUP_ALTERNATING;
+    G->card = (size_t)card;
+    G->isFinite = true;
+    G->data.permutation.degree = (size_t)n;
+    G->elements = calloc((size_t)card, sizeof(GroupElement*));
+    if (!G->elements) {
+        free(G);
+        return NULL;
+    }
 
     // Generate all permutations in lexicographic order
     int** allPerms = malloc(fullCard * sizeof(int*));
-    if (!allPerms) return NULL;
+    if (!allPerms) {
+        freeGroup(G);
+        return NULL;
+    }
     for (int p = 0; p < fullCard; p++) {
         allPerms[p] = malloc(n * sizeof(int));
         if (!allPerms[p]) {
             for (int j = 0; j < p; j++) free(allPerms[j]);
             free(allPerms);
+            freeGroup(G);
             return NULL;
         }
         if (p == 0) {
@@ -708,125 +1536,38 @@ Group* constructAlternatingGroup(int n) {
         }
     }
 
-    // Build mapping from full permutation index to even permutation index
-    int* evenMap = malloc(fullCard * sizeof(int));
-    if (!evenMap) {
+    long long* permData = malloc((size_t)n * sizeof(long long));
+    if (!permData) {
         for (int i = 0; i < fullCard; i++) free(allPerms[i]);
         free(allPerms);
-        return NULL;
-    }
-    int** perms = malloc(card * sizeof(int*));
-    if (!perms) {
-        free(evenMap);
-        for (int i = 0; i < fullCard; i++) free(allPerms[i]);
-        free(allPerms);
+        freeGroup(G);
         return NULL;
     }
     int evenCount = 0;
     for (int i = 0; i < fullCard; i++) {
         if (permSign(allPerms[i], n) == 0) {
-            evenMap[i] = evenCount;
-            perms[evenCount] = allPerms[i];
+            for (int j = 0; j < n; j++) permData[j] = allPerms[i][j];
+            G->elements[evenCount] = constructGroupElement(G, permData);
+            if (!G->elements[evenCount]) {
+                free(permData);
+                for (int j = 0; j < fullCard; j++) free(allPerms[j]);
+                free(allPerms);
+                freeGroup(G);
+                return NULL;
+            }
+            G->elements[evenCount]->index = evenCount;
             evenCount++;
-        } else {
-            evenMap[i] = -1;
+            if (evenCount == card) break;
         }
     }
-
-    // Construct the elements
-    GroupElement** elements = malloc(card * sizeof(GroupElement*));
-    if (!elements) {
-        free(perms);
-        free(evenMap);
-        for (int i = 0; i < fullCard; i++) free(allPerms[i]);
-        free(allPerms);
-        return NULL;
-    }
-    for (int p = 0; p < card; p++) {
-        char* repr = permRepr(perms[p], n);
-        if (!repr) {
-            for (int j = 0; j < p; j++) freeGroupElement(elements[j]);
-            free(elements);
-            free(perms);
-            free(evenMap);
-            for (int j = 0; j < fullCard; j++) free(allPerms[j]);
-            free(allPerms);
-            return NULL;
-        }
-        elements[p] = constructGroupElement(NULL, repr);
-        free(repr);
-        if (!elements[p]) {
-            for (int j = 0; j < p; j++) freeGroupElement(elements[j]);
-            free(elements);
-            free(perms);
-            free(evenMap);
-            for (int j = 0; j < fullCard; j++) free(allPerms[j]);
-            free(allPerms);
-            return NULL;
-        }
-    }
-
-    // Build the Cayley table
-    int** table = malloc(card * sizeof(int*));
-    if (!table) {
-        for (int i = 0; i < card; i++) freeGroupElement(elements[i]);
-        free(elements);
-        free(perms);
-        free(evenMap);
-        for (int i = 0; i < fullCard; i++) free(allPerms[i]);
-        free(allPerms);
-        return NULL;
-    }
-    int* composed = malloc(n * sizeof(int));
-    if (!composed) {
-        free(table);
-        for (int i = 0; i < card; i++) freeGroupElement(elements[i]);
-        free(elements);
-        free(perms);
-        free(evenMap);
-        for (int i = 0; i < fullCard; i++) free(allPerms[i]);
-        free(allPerms);
-        return NULL;
-    }
-    for (int a = 0; a < card; a++) {
-        table[a] = malloc(card * sizeof(int));
-        if (!table[a]) {
-            for (int j = 0; j < a; j++) free(table[j]);
-            free(table);
-            free(composed);
-            for (int j = 0; j < card; j++) freeGroupElement(elements[j]);
-            free(elements);
-            free(perms);
-            free(evenMap);
-            for (int j = 0; j < fullCard; j++) free(allPerms[j]);
-            free(allPerms);
-            return NULL;
-        }
-        for (int b = 0; b < card; b++) {
-            for (int i = 0; i < n; i++) composed[i] = perms[a][perms[b][i]];
-            table[a][b] = evenMap[permToIndex(composed, n)];
-        }
-    }
-    free(composed);
-
-    // Free permutations and mapping
-    free(perms);
-    free(evenMap);
+    free(permData);
     for (int i = 0; i < fullCard; i++) free(allPerms[i]);
     free(allPerms);
 
-    // Construct the group
-    Group* G = constructGroupSkipValidate(elements, table, card);
-    if (!G) {
-        for (int i = 0; i < card; i++) {
-            freeGroupElement(elements[i]);
-            free(table[i]);
-        }
-        free(elements);
-        free(table);
+    if (evenCount != card) {
+        freeGroup(G);
         return NULL;
     }
-    for (int i = 0; i < card; i++) elements[i]->group = G;
 
     return G;
 }
@@ -834,84 +1575,29 @@ Group* constructAlternatingGroup(int n) {
 // Construct the Dihedral group Dn
 Group* constructDihedralGroup(int n) {
     if (n < 1) return NULL;
-    if (n == 1) {
-        // D1 = Z2 = {e, s}
-        return constructZnGroup(2);
-    }
 
     int card = 2 * n;
+    Group* G = calloc(1, sizeof(Group));
+    if (!G) return NULL;
+    G->type = GROUP_DIHEDRAL;
+    G->card = (size_t)card;
+    G->isFinite = true;
+    G->data.dihedral.n = n;
+    G->elements = calloc((size_t)card, sizeof(GroupElement*));
+    if (!G->elements) {
+        free(G);
+        return NULL;
+    }
 
-    // Construct the elements: r^0=e, r^1, ..., r^(n-1), s, sr, ..., sr^(n-1)
-    GroupElement** elements = malloc(card * sizeof(GroupElement*));
-    if (!elements) return NULL;
     for (int i = 0; i < card; i++) {
-        char repr[32];
-        if (i == 0)           sprintf(repr, "e");
-        else if (i == 1)      sprintf(repr, "r");
-        else if (i < n)       sprintf(repr, "r^%d", i);
-        else if (i == n)      sprintf(repr, "s");
-        else if (i == n + 1)  sprintf(repr, "sr");
-        else                  sprintf(repr, "sr^%d", i - n);
-
-        elements[i] = constructGroupElement(NULL, repr);
-        if (!elements[i]) {
-            for (int j = 0; j < i; j++) freeGroupElement(elements[j]);
-            free(elements);
+        DihedralElementData data = { i % n, i >= n };
+        G->elements[i] = constructGroupElement(G, &data);
+        if (!G->elements[i]) {
+            freeGroup(G);
             return NULL;
         }
+        G->elements[i]->index = i;
     }
-
-    // Build the Cayley table
-    // Index i < n  represents r^i
-    // Index n+i    represents s*r^i
-    int** table = malloc(card * sizeof(int*));
-    if (!table) {
-        for (int i = 0; i < card; i++) freeGroupElement(elements[i]);
-        free(elements);
-        return NULL;
-    }
-    for (int x = 0; x < card; x++) {
-        table[x] = malloc(card * sizeof(int));
-        if (!table[x]) {
-            for (int j = 0; j < x; j++) free(table[j]);
-            free(table);
-            for (int j = 0; j < card; j++) freeGroupElement(elements[j]);
-            free(elements);
-            return NULL;
-        }
-        for (int y = 0; y < card; y++) {
-            int a, b;
-            if (x < n && y < n) {
-                // r^a * r^b
-                table[x][y] = (x + y) % n;
-            } else if (x < n && y >= n) {
-                // r^a * s*r^b
-                a = x; b = y - n;
-                table[x][y] = n + ((b - a) % n + n) % n;
-            } else if (x >= n && y < n) {
-                // s*r^a * r^b
-                a = x - n; b = y;
-                table[x][y] = n + (a + b) % n;
-            } else {
-                // s*r^a * s*r^b
-                a = x - n; b = y - n;
-                table[x][y] = ((b - a) % n + n) % n;
-            }
-        }
-    }
-
-    // Construct the group
-    Group* G = constructGroupSkipValidate(elements, table, card);
-    if (!G) {
-        for (int i = 0; i < card; i++) {
-            freeGroupElement(elements[i]);
-            free(table[i]);
-        }
-        free(elements);
-        free(table);
-        return NULL;
-    }
-    for (int i = 0; i < card; i++) elements[i]->group = G;
 
     return G;
 }
@@ -971,7 +1657,7 @@ Group* constructQ8(void) {
     }
 
     // Construct the group
-    Group* G = constructGroupSkipValidate(elements, table, card);
+    Group* G = constructTableGroupSkipValidate(elements, table, card);
     if (!G) {
         for (int i = 0; i < card; i++) {
             freeGroupElement(elements[i]);
@@ -989,76 +1675,28 @@ Group* constructQ8(void) {
 // Construct the Ring Z/Zn = {0, 1, 2, ..., n-1}
 Ring* constructZnRing(int n) {
     if (n < 1) return NULL;
-    if (n == 1) return trivialRing();
 
-	// Construct the elements and table arrays
-    RingElement** elements = malloc(n * sizeof(RingElement*));
-    if (!elements) return NULL;
-    int** addTable = malloc(n * sizeof(int*));
-    if (!addTable) {
-		free(elements);
-		return NULL;
-    }
-    int** multTable = malloc(n * sizeof(int*));
-    if (!multTable) {
-		free(elements);
-		free(addTable);
-		return NULL;
+    Ring* R = calloc(1, sizeof(Ring));
+    if (!R) return NULL;
+    R->type = RING_ZN;
+    R->card = (size_t)n;
+    R->isFinite = true;
+    R->data.zn.modulus = n;
+    R->elements = calloc((size_t)n, sizeof(RingElement*));
+    if (!R->elements) {
+        free(R);
+        return NULL;
     }
 
-	// Fill in the elements and tables
     for (int i = 0; i < n; i++) {
-		char* repr = malloc(32);
-		sprintf(repr, "%d", i);
-		elements[i] = constructRingElement(NULL, repr);
-		if (!elements[i]) {
-	    	for (int j = 0; j < i; j++) freeRingElement(elements[j]);
-	    	free(elements);
-	    	free(addTable);
-	    	free(multTable);
-	    	return NULL;
-		}
-		addTable[i] = malloc(n * sizeof(int));
-		if (!addTable[i]) {
-	    	for (int j = 0; j <= i; j++) freeRingElement(elements[j]);
-	    	for (int j = 0; j < i; j++) free(addTable[j]);
-	    	free(elements);
-	    	free(addTable);
-	    	free(multTable);
-	    	return NULL;
-		}
-		multTable[i] = malloc(n * sizeof(int));
-		if (!multTable[i]) {
-	    	for (int j = 0; j <= i; j++) freeRingElement(elements[j]);
-	    	for (int j = 0; j <= i; j++) free(addTable[j]);
-	    	for (int j = 0; j < i; j++) free(multTable[j]);
-	    	free(elements);
-	    	free(addTable);
-	    	free(multTable);
-	    	return NULL;
-		}
+        long long value = i;
+        R->elements[i] = constructRingElement(R, &value);
+        if (!R->elements[i]) {
+            freeRing(R);
+            return NULL;
+        }
+        R->elements[i]->index = i;
     }
-    for (int i = 0; i < n; i++) {
-		for (int j = 0; j < n; j++) {
-	    	addTable[i][j] = (i + j) % n;
-	    	multTable[i][j] = (i * j) % n;
-		}
-    }
-
-	// Construct the ring
-    Ring* R = constructRing(elements, addTable, multTable, n);
-    if (!R) {
-		for (int i = 0; i < n; i++) {
-	    	freeRingElement(elements[i]);
-	    	free(addTable[i]);
-	    	free(multTable[i]);
-		}
-		free(elements);
-		free(addTable);
-		free(multTable);
-		return NULL;
-    }
-	for (int i = 0; i < n; i++) elements[i]->ring = R;
 
 	return R;
 }
@@ -1084,12 +1722,13 @@ Ring* constructZnProductRing(int* vals, int k) {
 	// Construct the product ring recursively
 	Ring* product = components[0];
 	for (int i = 1; i < k; i++) {
-		product = constructProductRing(product, components[i]);
-		if (!product) {
+		Ring* next = constructProductRing(product, components[i]);
+		if (!next) {
 			for (int j = 0; j < k; j++) freeRing(components[j]);
 			free(components);
 			return NULL;
 		}
+		product = next;
 	}
 
 	// Flatten element reprs to (a,b,c,...) form and set the ring pointer
@@ -1098,7 +1737,6 @@ Ring* constructZnProductRing(int* vals, int k) {
 		if (flat) { free(product->elements[i]->repr); product->elements[i]->repr = flat; }
 		product->elements[i]->ring = product;
 	}
-	for (int i = 0; i < k; i++) freeRing(components[i]);
 	free(components);
 
 	return product;
@@ -1108,146 +1746,71 @@ Ring* constructZnProductRing(int* vals, int k) {
 Ring* primeFiniteField(int p) {
     if (!isPrime(p)) return NULL;
 
-    return constructZnRing(p);
+    return constructFiniteField(p, 1);
 }
 
 // Construct the finite field F_{p^k} = F_p[x] / (f(x)) for an irreducible f.
 Ring* constructFiniteField(int p, int k) {
-	if (k < 0) return NULL;
 	if (k == 0) return trivialRing();
+	if (k < 1) return NULL;
 	if (!isPrime(p)) return NULL;
-	if (k == 1) return primeFiniteField(p);
 
-	// Find an irreducible monic polynomial f of degree k over F_p
-	int numMonic = intPow(p, k);
 	int* f = malloc((k + 1) * sizeof(int));
 	if (!f) return NULL;
 	f[k] = 1;
-	bool found = false;
-	for (int idx = 0; idx < numMonic; idx++) {
-		int n = idx;
-		for (int i = 0; i < k; i++) { f[i] = n % p; n /= p; }
-		if (isIrreduciblePolyMod(f, k, p)) { found = true; break; }
-	}
-	if (!found) { free(f); return NULL; }
+    if (k == 1) {
+        f[0] = 0;
+    } else {
+	    // Find an irreducible monic polynomial f of degree k over F_p
+	    int numMonic = intPow(p, k);
+	    bool found = false;
+	    for (int idx = 0; idx < numMonic; idx++) {
+		    int n = idx;
+		    for (int i = 0; i < k; i++) { f[i] = n % p; n /= p; }
+		    if (isIrreduciblePolyMod(f, k, p)) { found = true; break; }
+	    }
+	    if (!found) { free(f); return NULL; }
+    }
 
 	int N = intPow(p, k);
+    if (N < 1) { free(f); return NULL; }
 
-	RingElement** elements = malloc(N * sizeof(RingElement*));
-	if (!elements) { free(f); return NULL; }
-	int** addTable = malloc(N * sizeof(int*));
-	if (!addTable) { free(elements); free(f); return NULL; }
-	int** multTable = malloc(N * sizeof(int*));
-	if (!multTable) { free(addTable); free(elements); free(f); return NULL; }
+    Ring* R = calloc(1, sizeof(Ring));
+    if (!R) { free(f); return NULL; }
+    R->type = RING_FF;
+    R->card = (size_t)N;
+    R->isFinite = true;
+    R->data.ff.p = p;
+    R->data.ff.degree = k;
+    R->data.ff.modulus = f;
+    R->elements = calloc((size_t)N, sizeof(RingElement*));
+    if (!R->elements) {
+        freeRing(R);
+        return NULL;
+    }
 
-	// Allocate per-row arrays first so cleanup is uniform on failure
 	for (int i = 0; i < N; i++) {
-		elements[i] = NULL;
-		addTable[i] = NULL;
-		multTable[i] = NULL;
-	}
+        long long value = i;
+        R->elements[i] = constructRingElement(R, &value);
+        if (!R->elements[i]) {
+            freeRing(R);
+            return NULL;
+        }
+        R->elements[i]->index = i;
+    }
 
-	// Build elements
-	int* poly = malloc(k * sizeof(int));
-	if (!poly) {
-		free(elements); free(addTable); free(multTable); free(f);
-		return NULL;
-	}
-	int bufLen = 16 * k + 16;
-	char* buf = malloc(bufLen);
-	if (!buf) {
-		free(poly); free(elements); free(addTable); free(multTable); free(f);
-		return NULL;
-	}
-	for (int i = 0; i < N; i++) {
-		int n = i;
-		for (int j = 0; j < k; j++) { poly[j] = n % p; n /= p; }
-		polyReprBuf(poly, k, buf, bufLen);
-		elements[i] = constructRingElement(NULL, buf);
-		if (!elements[i]) {
-			for (int j = 0; j < i; j++) freeRingElement(elements[j]);
-			free(elements); free(addTable); free(multTable);
-			free(poly); free(buf); free(f);
-			return NULL;
-		}
-		addTable[i] = malloc(N * sizeof(int));
-		multTable[i] = malloc(N * sizeof(int));
-		if (!addTable[i] || !multTable[i]) {
-			for (int j = 0; j <= i; j++) freeRingElement(elements[j]);
-			for (int j = 0; j <= i; j++) { free(addTable[j]); free(multTable[j]); }
-			free(elements); free(addTable); free(multTable);
-			free(poly); free(buf); free(f);
-			return NULL;
-		}
-	}
-	free(poly);
-	free(buf);
-
-	// Fill in tables
-	int* a = malloc(k * sizeof(int));
-	int* b = malloc(k * sizeof(int));
-	int* sum = malloc(k * sizeof(int));
-	int* prod = malloc((2 * k - 1) * sizeof(int));
-	int* rem = malloc(k * sizeof(int));
-	if (!a || !b || !sum || !prod || !rem) {
-		free(a); free(b); free(sum); free(prod); free(rem);
-		for (int j = 0; j < N; j++) {
-			freeRingElement(elements[j]);
-			free(addTable[j]); free(multTable[j]);
-		}
-		free(elements); free(addTable); free(multTable); free(f);
-		return NULL;
-	}
-	for (int i = 0; i < N; i++) {
-		int ni = i;
-		for (int t = 0; t < k; t++) { a[t] = ni % p; ni /= p; }
-		for (int j = 0; j < N; j++) {
-			int nj = j;
-			for (int t = 0; t < k; t++) { b[t] = nj % p; nj /= p; }
-
-			for (int t = 0; t < k; t++) sum[t] = (a[t] + b[t]) % p;
-			int sumIdx = 0;
-			for (int t = k - 1; t >= 0; t--) sumIdx = sumIdx * p + sum[t];
-			addTable[i][j] = sumIdx;
-
-			for (int t = 0; t < 2 * k - 1; t++) prod[t] = 0;
-			for (int u = 0; u < k; u++) {
-				if (a[u] == 0) continue;
-				for (int v = 0; v < k; v++) {
-					prod[u + v] = (prod[u + v] + a[u] * b[v]) % p;
-				}
-			}
-			polyRemMod(prod, 2 * k - 1, f, k, p, rem);
-			int prodIdx = 0;
-			for (int t = k - 1; t >= 0; t--) prodIdx = prodIdx * p + rem[t];
-			multTable[i][j] = prodIdx;
-		}
-	}
-	free(a); free(b); free(sum); free(prod); free(rem); free(f);
-
-	Ring* R = constructRing(elements, addTable, multTable, N);
-	if (!R) {
-		for (int i = 0; i < N; i++) {
-			freeRingElement(elements[i]);
-			free(addTable[i]); free(multTable[i]);
-		}
-		free(elements); free(addTable); free(multTable);
-		return NULL;
-	}
-	for (int i = 0; i < N; i++) elements[i]->ring = R;
 	return R;
 }
 
 // Construct the additive group of a Ring
 Group* constructAddGroup(Ring* R) {
     if (!R) return NULL;
+    if (!R->isFinite || !R->elements) return NULL;
 
     int card = R->card;
-    Group* G = malloc(sizeof(Group));
     GroupElement** elements = calloc((size_t)card, sizeof(GroupElement*));
     int** table = calloc((size_t)card, sizeof(int*));
-    if (!G || !elements || !table) {
-        free(G);
+    if (!elements || !table) {
         freeGroupConstructionData(elements, table, card);
         return NULL;
     }
@@ -1257,26 +1820,53 @@ Group* constructAddGroup(Ring* R) {
         elements[i] = constructGroupElement(NULL, (char*)repr);
         table[i] = malloc((size_t)card * sizeof(int));
         if (!elements[i] || !table[i]) {
-            free(G);
             freeGroupConstructionData(elements, table, card);
             return NULL;
         }
-        for (int j = 0; j < card; j++) table[i][j] = R->addTable[i][j];
+        for (int j = 0; j < card; j++) {
+            RingElement* sum = ringAdd(R->elements[i], R->elements[j]);
+            if (!sum || sum->index < 0 || sum->index >= card) {
+                freeGroupConstructionData(elements, table, card);
+                return NULL;
+            }
+            table[i][j] = sum->index;
+        }
     }
 
-    G->elements = elements;
-    G->table = table;
-    G->card = card;
-    for (int i = 0; i < card; i++) {
-        G->elements[i]->group = G;
-        G->elements[i]->index = i;
+    Group* G = constructTableGroupSkipValidate(elements, table, card);
+    if (!G) {
+        freeGroupConstructionData(elements, table, card);
+        return NULL;
     }
     return G;
 }
 
+static bool ringElementActsAsMultIdentity(Ring* R, RingElement* candidate) {
+    if (!R || !candidate || !R->isFinite || !R->elements) return false;
+
+    for (int i = 0; i < R->card; i++) {
+        RingElement* left = ringMult(candidate, R->elements[i]);
+        RingElement* right = ringMult(R->elements[i], candidate);
+        if (!cmpRingElements(left, R->elements[i]) || !cmpRingElements(right, R->elements[i])) return false;
+    }
+
+    return true;
+}
+
 // Construct the multiplicative unit group of a Ring
 Group* constructUnitGroup(Ring* R) {
-    if (!R || !hasMultIdentity(R)) return NULL;
+    if (!R) return NULL;
+    if (!R->isFinite || !R->elements) return NULL;
+    if (R->card < 2) return NULL;
+
+    int identityIndex = -1;
+    for (int i = 0; i < R->card; i++) {
+        if (ringElementActsAsMultIdentity(R, R->elements[i])) {
+            identityIndex = i;
+            break;
+        }
+    }
+    if (identityIndex < 0) return NULL;
 
     int* unitIndices = malloc((size_t)R->card * sizeof(int));
     int* indexMap = malloc((size_t)R->card * sizeof(int));
@@ -1289,20 +1879,28 @@ Group* constructUnitGroup(Ring* R) {
     for (int i = 0; i < R->card; i++) indexMap[i] = -1;
 
     int unitCount = 0;
-    unitIndices[unitCount] = 1;
-    indexMap[1] = unitCount++;
-    for (int i = 2; i < R->card; i++) {
-        if (hasMultInverse(R->elements[i])) {
+    unitIndices[unitCount] = identityIndex;
+    indexMap[identityIndex] = unitCount++;
+    for (int i = 0; i < R->card; i++) {
+        if (i == identityIndex) continue;
+        bool hasInverse = false;
+        for (int j = 0; j < R->card; j++) {
+            RingElement* left = ringMult(R->elements[i], R->elements[j]);
+            RingElement* right = ringMult(R->elements[j], R->elements[i]);
+            if (left && right && left->index == identityIndex && right->index == identityIndex) {
+                hasInverse = true;
+                break;
+            }
+        }
+        if (hasInverse) {
             indexMap[i] = unitCount;
             unitIndices[unitCount++] = i;
         }
     }
 
-    Group* G = malloc(sizeof(Group));
     GroupElement** elements = calloc((size_t)unitCount, sizeof(GroupElement*));
     int** table = calloc((size_t)unitCount, sizeof(int*));
-    if (!G || !elements || !table) {
-        free(G);
+    if (!elements || !table) {
         free(unitIndices);
         free(indexMap);
         freeGroupConstructionData(elements, table, unitCount);
@@ -1315,16 +1913,21 @@ Group* constructUnitGroup(Ring* R) {
         elements[i] = constructGroupElement(NULL, (char*)repr);
         table[i] = malloc((size_t)unitCount * sizeof(int));
         if (!elements[i] || !table[i]) {
-            free(G);
             free(unitIndices);
             free(indexMap);
             freeGroupConstructionData(elements, table, unitCount);
             return NULL;
         }
         for (int j = 0; j < unitCount; j++) {
-            int product = R->multTable[unitIndices[i]][unitIndices[j]];
+            RingElement* productElement = ringMult(R->elements[unitIndices[i]], R->elements[unitIndices[j]]);
+            if (!productElement) {
+                free(unitIndices);
+                free(indexMap);
+                freeGroupConstructionData(elements, table, unitCount);
+                return NULL;
+            }
+            int product = productElement->index;
             if (product < 0 || product >= R->card || indexMap[product] < 0) {
-                free(G);
                 free(unitIndices);
                 free(indexMap);
                 freeGroupConstructionData(elements, table, unitCount);
@@ -1334,16 +1937,13 @@ Group* constructUnitGroup(Ring* R) {
         }
     }
 
-    G->elements = elements;
-    G->table = table;
-    G->card = unitCount;
-    for (int i = 0; i < unitCount; i++) {
-        G->elements[i]->group = G;
-        G->elements[i]->index = i;
-    }
-
     free(unitIndices);
     free(indexMap);
+    Group* G = constructTableGroupSkipValidate(elements, table, unitCount);
+    if (!G) {
+        freeGroupConstructionData(elements, table, unitCount);
+        return NULL;
+    }
     return G;
 }
 
@@ -1370,8 +1970,11 @@ bool cmpSubgroups(SubGroup* H, SubGroup* K) {
     if (!H || !K) return false;
     if (H->ambient != K->ambient) return false;
     if (H->card != K->card) return false;
+    if (H->type != SUBGROUP_INDEXED || K->type != SUBGROUP_INDEXED) return false;
 
-    for (int i = 0; i < H->card; i++) if (H->indices[i] != K->indices[i]) return false;
+    for (int i = 0; i < H->card; i++) {
+        if (!indexInList(H->data.indexed.indices[i], K->data.indexed.indices, (int)K->card)) return false;
+    }
     return true;
 }
 
@@ -1385,7 +1988,7 @@ bool cmpGroupCosets(GroupCoset* A, GroupCoset* B) {
     for (int i = 0; i < A->subgroup->card; i++) {
         bool found = false;
         for (int j = 0; j < B->subgroup->card; j++) {
-            if (A->indices[i] == B->indices[j]) {
+            if (A->data.indexed.indices[i] == B->data.indexed.indices[j]) {
                 found = true;
                 break;
             }
@@ -1417,6 +2020,7 @@ bool cmpRings(Ring* R, Ring* S) {
 // Return true if g is in G, else false
 bool isInGroup(Group* G, GroupElement* g) {
     if (!G || !g) return false;
+    if (!G->isFinite || !G->elements) return false;
 
     for (int i = 0; i < G->card; i++) {
         if (cmpGroupElements(g, G->elements[i])) return true;
@@ -1428,6 +2032,8 @@ bool isInGroup(Group* G, GroupElement* g) {
 // Return true if g is the identity of G, else false
 bool isGroupIdentity(Group* G, GroupElement* g) {
     if (!G || !g) return false;
+    if (g->group != G) return false;
+    if (G->isFinite) return g->index == 0;
 
     return g == G->elements[0];
 }
@@ -1435,6 +2041,7 @@ bool isGroupIdentity(Group* G, GroupElement* g) {
 // Return the identity element of G
 GroupElement* groupIdentity(Group* G) {
     if (!G) return NULL;
+    if (!G->elements) return NULL;
 
     return G->elements[0];
 }
@@ -1456,32 +2063,29 @@ RingElement* ringAddIdentity(Ring* R) {
 // Return true if R has a mult identity, else false
 bool hasMultIdentity(Ring* R) {
     if (!R) return false;
-    if (R->card == 1) return false;
-
-    RingElement* candidate = R->elements[1];
-    if (!candidate) return false;
     for (int i = 0; i < R->card; i++) {
-	    if (R->multTable[candidate->index][R->elements[i]->index] != R->elements[i]->index) return false;
-	    if (R->multTable[R->elements[i]->index][candidate->index] != R->elements[i]->index) return false;
+        if (ringElementActsAsMultIdentity(R, R->elements[i])) return true;
     }
 
-    return true;
+    return false;
 }
 
 // Return true if x is the additive identity of R, else false
 bool isRingMultIdentity(Ring* R, RingElement* x) {
     if (!R || !x) return false;
-	
-    if (!hasMultIdentity(R)) return false;
-    return x == R->elements[1];
+
+    return ringElementActsAsMultIdentity(R, x);
 }
 
 // Return the additive identity element of R
 RingElement* ringMultIdentity(Ring* R) {
     if (!R) return NULL;
 
-    if (!hasMultIdentity(R)) return NULL;
-    return R->elements[1];
+    for (int i = 0; i < R->card; i++) {
+        if (ringElementActsAsMultIdentity(R, R->elements[i])) return R->elements[i];
+    }
+
+    return NULL;
 }
 
 // Return true if g and h commute, else false
@@ -1559,8 +2163,8 @@ int multiplicativeOrder(Ring* R, RingElement* x) {
 // Return true if G is simple, false otherwise
 bool isSimple(Group* G) {
     if (!G) return false;
-    if (G->card == 1) return false;  
-    
+    if (G->card == 1) return false;
+
     // Iterate over all subgroups and check that the only normal ones are trivial and the whole group
     int count = 0;
     SubGroup** subgroups = listAllSubgroups(G, &count);
@@ -1583,12 +2187,205 @@ bool isSimple(Group* G) {
 
 /* ---------- Basic operations ---------- */
 
+static GroupElement* cayleyGroupMult(GroupElement* g, GroupElement* h) {
+    Group* G = g->group;
+    int index = G->data.cayley.table[g->index][h->index];
+    return G->elements[index];
+}
+
+static GroupElement* znGroupMult(GroupElement* g, GroupElement* h) {
+    long long value = normalizeMod(g->data.znVal + h->data.znVal, g->group->data.zn.modulus);
+    return g->group->elements[value];
+}
+
+static GroupElement* zGroupMult(GroupElement* g, GroupElement* h) {
+    long long value = g->data.integer + h->data.integer;
+    return constructGroupElement(g->group, &value);
+}
+
+static GroupElement* permutationGroupMult(GroupElement* g, GroupElement* h) {
+    size_t degree = g->group->data.permutation.degree;
+    long long* perm = malloc(degree * sizeof(long long));
+    if (!perm) return NULL;
+
+    for (size_t i = 0; i < degree; i++) {
+        long long hi = h->data.perm[i];
+        if (hi < 0 || (size_t)hi >= degree) {
+            free(perm);
+            return NULL;
+        }
+        perm[i] = g->data.perm[hi];
+    }
+
+    GroupElement* product = constructGroupElement(g->group, perm);
+    free(perm);
+    return canonicalGroupElement(g->group, product);
+}
+
+static GroupElement* dihedralGroupMult(GroupElement* g, GroupElement* h) {
+    long long n = g->group->data.dihedral.n;
+    DihedralElementData value;
+    value.b = g->data.dihedral.b ^ h->data.dihedral.b;
+    if (h->data.dihedral.b) value.a = normalizeMod(h->data.dihedral.a - g->data.dihedral.a, n);
+    else value.a = normalizeMod(g->data.dihedral.a + h->data.dihedral.a, n);
+
+    return canonicalGroupElement(g->group, constructGroupElement(g->group, &value));
+}
+
+static GroupElement* productGroupMult(GroupElement* g, GroupElement* h) {
+    if (g->data.product.count != h->data.product.count) return NULL;
+
+    size_t count = g->data.product.count;
+    GroupElement** factors = malloc(count * sizeof(GroupElement*));
+    if (!factors) return NULL;
+
+    for (size_t i = 0; i < count; i++) {
+        factors[i] = groupMult(g->data.product.factors[i], h->data.product.factors[i]);
+        if (!factors[i]) {
+            free(factors);
+            return NULL;
+        }
+    }
+
+    ProductGroupElementData data = { factors, count };
+    GroupElement* product = constructGroupElement(g->group, &data);
+    free(factors);
+    return canonicalGroupElement(g->group, product);
+}
+
+static GroupElement* matrixGroupMult(GroupElement* g, GroupElement* h) {
+    Matrix* productMatrix = multiplyMatrices(g->data.matrix, h->data.matrix);
+    if (!productMatrix) return NULL;
+
+    return constructGroupElement(g->group, productMatrix);
+}
+
+static RingElement* cayleyRingAdd(RingElement* x, RingElement* y) {
+    Ring* R = x->ring;
+    int index = R->data.cayley.addTable[x->index][y->index];
+    return R->elements[index];
+}
+
+static RingElement* cayleyRingMult(RingElement* x, RingElement* y) {
+    Ring* R = x->ring;
+    int index = R->data.cayley.multTable[x->index][y->index];
+    return R->elements[index];
+}
+
+static RingElement* znRingAdd(RingElement* x, RingElement* y) {
+    long long value = normalizeMod(x->data.znVal + y->data.znVal, x->ring->data.zn.modulus);
+    return x->ring->elements[value];
+}
+
+static RingElement* znRingMult(RingElement* x, RingElement* y) {
+    long long value = normalizeMod(x->data.znVal * y->data.znVal, x->ring->data.zn.modulus);
+    return x->ring->elements[value];
+}
+
+static RingElement* zRingAdd(RingElement* x, RingElement* y) {
+    long long value = x->data.integer + y->data.integer;
+    return constructRingElement(x->ring, &value);
+}
+
+static RingElement* zRingMult(RingElement* x, RingElement* y) {
+    long long value = x->data.integer * y->data.integer;
+    return constructRingElement(x->ring, &value);
+}
+
+static RingElement* finiteFieldRingAdd(RingElement* x, RingElement* y) {
+    long long value = finiteFieldAddIndex(x->data.znVal, y->data.znVal, x->ring->data.ff.p, x->ring->data.ff.degree);
+    return x->ring->elements[value];
+}
+
+static RingElement* finiteFieldRingMult(RingElement* x, RingElement* y) {
+    int value = finiteFieldMultIndex(x->data.znVal, y->data.znVal, &x->ring->data.ff);
+    if (value < 0) return NULL;
+    return x->ring->elements[value];
+}
+
+static RingElement* productRingAdd(RingElement* x, RingElement* y) {
+    if (x->data.product.count != y->data.product.count) return NULL;
+
+    size_t count = x->data.product.count;
+    RingElement** factors = malloc(count * sizeof(RingElement*));
+    if (!factors) return NULL;
+
+    for (size_t i = 0; i < count; i++) {
+        factors[i] = ringAdd(x->data.product.factors[i], y->data.product.factors[i]);
+        if (!factors[i]) {
+            free(factors);
+            return NULL;
+        }
+    }
+
+    ProductRingElementData data = { factors, count };
+    RingElement* sum = constructRingElement(x->ring, &data);
+    free(factors);
+    return canonicalRingElement(x->ring, sum);
+}
+
+static RingElement* productRingMult(RingElement* x, RingElement* y) {
+    if (x->data.product.count != y->data.product.count) return NULL;
+
+    size_t count = x->data.product.count;
+    RingElement** factors = malloc(count * sizeof(RingElement*));
+    if (!factors) return NULL;
+
+    for (size_t i = 0; i < count; i++) {
+        factors[i] = ringMult(x->data.product.factors[i], y->data.product.factors[i]);
+        if (!factors[i]) {
+            free(factors);
+            return NULL;
+        }
+    }
+
+    ProductRingElementData data = { factors, count };
+    RingElement* product = constructRingElement(x->ring, &data);
+    free(factors);
+    return canonicalRingElement(x->ring, product);
+}
+
+static RingElement* matrixRingAdd(RingElement* x, RingElement* y) {
+    Matrix* sumMatrix = addMatrices(x->data.matrix, y->data.matrix);
+    if (!sumMatrix) return NULL;
+
+    return constructRingElement(x->ring, sumMatrix);
+}
+
+static RingElement* matrixRingMult(RingElement* x, RingElement* y) {
+    Matrix* productMatrix = multiplyMatrices(x->data.matrix, y->data.matrix);
+    if (!productMatrix) return NULL;
+
+    return constructRingElement(x->ring, productMatrix);
+}
+
 // Return the product of two elements of a Group
 GroupElement* groupMult(GroupElement* g, GroupElement* h) {
     if (!g || !h) return NULL;
+    if (!g->group) return NULL;
     if (g->group != h->group) return NULL;
 
-    return g->group->elements[g->group->table[g->index][h->index]];
+    switch (g->group->type) {
+        case GROUP_CAYLEY:
+            return cayleyGroupMult(g, h);
+        case GROUP_ZN:
+            return znGroupMult(g, h);
+        case GROUP_Z:
+            return zGroupMult(g, h);
+        case GROUP_SYMMETRIC:
+        case GROUP_ALTERNATING:
+            return permutationGroupMult(g, h);
+        case GROUP_DIHEDRAL:
+            return dihedralGroupMult(g, h);
+        case GROUP_PRODUCT:
+            return productGroupMult(g, h);
+        case GROUP_QUOTIENT:
+            return cayleyGroupMult(g, h);
+        case GROUP_MATRIX:
+            return matrixGroupMult(g, h);
+    }
+
+    return NULL;
 }
 
 // Return the sum of two elements of a Ring
@@ -1596,7 +2393,24 @@ RingElement* ringAdd(RingElement* x, RingElement* y) {
     if (!x || !y) return NULL;
     if (x->ring != y->ring) return NULL;
 
-    return x->ring->elements[x->ring->addTable[x->index][y->index]];
+    switch (x->ring->type) {
+        case RING_CAYLEY:
+            return cayleyRingAdd(x, y);
+        case RING_ZN:
+            return znRingAdd(x, y);
+        case RING_Z:
+            return zRingAdd(x, y);
+        case RING_FF:
+            return finiteFieldRingAdd(x, y);
+        case RING_PRODUCT:
+            return productRingAdd(x, y);
+        case RING_QUOTIENT:
+            return cayleyRingAdd(x, y);
+        case RING_MATRIX:
+            return matrixRingAdd(x, y);
+    }
+
+    return NULL;
 }
 
 // Return the product of two elements of a Ring
@@ -1604,7 +2418,24 @@ RingElement* ringMult(RingElement* x, RingElement* y) {
     if (!x || !y) return NULL;
     if (x->ring != y->ring) return NULL;
 
-    return x->ring->elements[x->ring->multTable[x->index][y->index]];
+    switch (x->ring->type) {
+        case RING_CAYLEY:
+            return cayleyRingMult(x, y);
+        case RING_ZN:
+            return znRingMult(x, y);
+        case RING_Z:
+            return zRingMult(x, y);
+        case RING_FF:
+            return finiteFieldRingMult(x, y);
+        case RING_PRODUCT:
+            return productRingMult(x, y);
+        case RING_QUOTIENT:
+            return cayleyRingMult(x, y);
+        case RING_MATRIX:
+            return matrixRingMult(x, y);
+    }
+
+    return NULL;
 }
 
 // Return the inverse of an element of a Group
@@ -1612,6 +2443,7 @@ GroupElement* groupInverse(GroupElement* g) {
     if (!g) return NULL;
 
     Group* G = g->group;
+    if (!G || !G->isFinite || !G->elements) return NULL;
     for (int i = 0; i < G->card; i++) {
 	    if (cmpGroupElements(groupMult(g, G->elements[i]), groupIdentity(G)) && cmpGroupElements(groupMult(G->elements[i], g), groupIdentity(G))) return G->elements[i];
     }
@@ -1805,7 +2637,7 @@ Group* trivialGroup() {
 	}
 	table[0][0] = 0;
 
-	Group* G = constructGroup(elements, table, 1);
+	Group* G = constructTableGroupSkipValidate(elements, table, 1);
 	if (!G) {
 		free(table[0]);
 		free(table);
@@ -1878,7 +2710,7 @@ Ring* trivialRing() {
 	}
 	multTable[0][0] = 0;
 
-	Ring* R = constructRing(elements, addTable, multTable, 1);
+	Ring* R = constructTableRingSkipValidate(elements, addTable, multTable, 1);
 	if (!R) {
 		free(multTable[0]);
 		free(multTable);
@@ -1900,12 +2732,15 @@ Ring* trivialRing() {
 SubGroup* constructSubgroup(Group* G, int* indices, int indicesLen) {
     if (!G || !indices) return NULL;
     if (indicesLen < 1) return NULL;
+    if (!G->isFinite || !G->elements) return NULL;
 
     // Check that all indices are valid
     for (int i = 0; i < indicesLen; i++) {
-        if (indices[i] < 0 || indices[i] >= G->card) return NULL;
+        if (indices[i] < 0 || (size_t)indices[i] >= G->card) return NULL;
     }
 
+    if (hasDuplicateIndices(indices, indicesLen)) return NULL;
+    sortIndices(indices, indicesLen);
 
     // Check that the potential subgroup contains identity
     bool containsId = false;
@@ -1920,25 +2755,28 @@ SubGroup* constructSubgroup(Group* G, int* indices, int indicesLen) {
     // Check that, for each x, y in the subgroup, xy^{-1} is in the subgroup
     for (int i = 0; i < indicesLen; i++) {
         for (int j = 0; j < indicesLen; j++) {
-            GroupElement* g = groupMult(G->elements[indices[i]], groupInverse(G->elements[indices[j]]));
-            bool found = false;
-            for (int k = 0; k < indicesLen; k++) {
-                if (cmpGroupElements(G->elements[indices[k]], g)) {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) return NULL;
+            GroupElement* inv = groupInverse(G->elements[indices[j]]);
+            if (!inv || inv->index < 0) return NULL;
+            GroupElement* prod = groupMult(G->elements[indices[i]], inv);
+            if (!prod || prod->index < 0) return NULL;
+            if (!indexInList(prod->index, indices, indicesLen)) return NULL;
         }
     }
 
-    SubGroup* H = malloc(sizeof(SubGroup));
+    GroupElement** elements = subgroupElementView(G, indices, indicesLen);
+    if (!elements) return NULL;
+
+    SubGroup* H = calloc(1, sizeof(SubGroup));
     if (!H) {
+        free(elements);
         return NULL;
     }
     H->ambient = G;
-    H->indices = indices;
-    H->card = indicesLen;
+    H->card = (size_t)indicesLen;
+    H->isFinite = true;
+    H->elements = elements;
+    H->type = SUBGROUP_INDEXED;
+    H->data.indexed.indices = indices;
 
     return H;
 }
@@ -1954,15 +2792,17 @@ bool isSubgroup(Group* G, SubGroup* H) {
 bool isNormalSubgroup(Group* G, SubGroup* H) {
     if (!G || !H) return false;
     if (!isSubgroup(G, H)) return false;
+    if (H->type != SUBGROUP_INDEXED) return false;
 
     for (int i = 0; i < G->card; i++) {
 		for (int j = 0; j < H->card; j++) {
 			GroupElement* g = G->elements[i];
-			GroupElement* h = G->elements[H->indices[j]];
+			GroupElement* h = G->elements[H->data.indexed.indices[j]];
 			GroupElement* conj = groupMult(groupMult(g, h), groupInverse(g));
+			if (!conj || conj->index < 0 || (size_t)conj->index >= G->card) return false;
 			bool found = false;
 			for (int k = 0; k < H->card; k++) {
-				if (cmpGroupElements(G->elements[H->indices[k]], conj)) {
+				if (cmpGroupElements(G->elements[H->data.indexed.indices[k]], conj)) {
 					found = true;
 					break;
 				}
@@ -1977,6 +2817,7 @@ bool isNormalSubgroup(Group* G, SubGroup* H) {
 // Return the subgroup generated by elements G->elements[i] for i in genIndices
 SubGroup* subgroupGeneratedBy(Group* G, int* genIndices, int genIndicesLen) {
     if (!G || !genIndices || genIndicesLen < 0) return NULL;
+    if (!G->isFinite || !G->elements) return NULL;
 
     // Use a boolean array to track which elements are in the subgroup
     bool* inSubgroup = calloc(G->card, sizeof(bool));
@@ -2006,7 +2847,12 @@ SubGroup* subgroupGeneratedBy(Group* G, int* genIndices, int genIndicesLen) {
             if (!inSubgroup[i]) continue;
             for (int j = 0; j < G->card; j++) {
                 if (!inSubgroup[j]) continue;
-                int prodIndex = G->table[i][j];
+                GroupElement* prod = groupMult(G->elements[i], G->elements[j]);
+                if (!prod || prod->index < 0) {
+                    free(inSubgroup);
+                    return NULL;
+                }
+                int prodIndex = prod->index;
                 if (!inSubgroup[prodIndex]) {
                     inSubgroup[prodIndex] = true;
                     card++;
@@ -2059,6 +2905,7 @@ bool isTrivialSubgroup(SubGroup* H) {
 // Return the center of G
 SubGroup* groupCenter(Group* G) {
     if (!G) return NULL;
+    if (!G->isFinite || !G->elements) return NULL;
 
     if (isCommutativeGroup(G)) {
 	    int* indices = malloc(G->card * sizeof(int));
@@ -2090,6 +2937,7 @@ SubGroup* groupCenter(Group* G) {
 SubGroup* groupCentralizer(Group* G, GroupElement* g) {
     if (!G || !g) return NULL;
     if (!cmpGroups(g->group, G)) return NULL;
+    if (!G->isFinite || !G->elements) return NULL;
 
     int* indices = malloc(G->card * sizeof(int));
     if (!indices) return NULL;
@@ -2106,7 +2954,7 @@ SubGroup* groupCentralizer(Group* G, GroupElement* g) {
 int* conjugacyClass(GroupElement* g, int* count) {
     if (!g || !count) return NULL;
     Group* G = g->group;
-    if (!G) return NULL;
+    if (!G || !G->isFinite || !G->elements) return NULL;
 
     bool* seen = calloc(G->card, sizeof(bool));
     if (!seen) return NULL;
@@ -2114,6 +2962,10 @@ int* conjugacyClass(GroupElement* g, int* count) {
     int n = 0;
     for (int i = 0; i < G->card; i++) {
         GroupElement* conj = groupElementConjugate(G->elements[i], g);
+        if (!conj || conj->index < 0 || (size_t)conj->index >= G->card) {
+            free(seen);
+            return NULL;
+        }
         if (!seen[conj->index]) {
             seen[conj->index] = true;
             n++;
@@ -2137,6 +2989,7 @@ SubGroup* groupNormalizer(SubGroup* H) {
     if (!H) return NULL;
     Group* G = H->ambient;
     if (!G) return NULL;
+    if (H->type != SUBGROUP_INDEXED) return NULL;
 
     int* indices = malloc(G->card * sizeof(int));
     if (!indices) return NULL;
@@ -2146,11 +2999,15 @@ SubGroup* groupNormalizer(SubGroup* H) {
         GroupElement* g = G->elements[i];
         bool preserved = true;
         for (int j = 0; j < H->card; j++) {
-            GroupElement* h = G->elements[H->indices[j]];
+            GroupElement* h = G->elements[H->data.indexed.indices[j]];
             GroupElement* conj = groupElementConjugate(g, h);
+            if (!conj || conj->index < 0 || (size_t)conj->index >= G->card) {
+                free(indices);
+                return NULL;
+            }
             bool inH = false;
             for (int m = 0; m < H->card; m++) {
-                if (conj->index == H->indices[m]) { inH = true; break; }
+                if (conj->index == H->data.indexed.indices[m]) { inH = true; break; }
             }
             if (!inH) { 
                 preserved = false; 
@@ -2170,6 +3027,7 @@ SubGroup* normalClosure(SubGroup* H) {
     if (!H) return NULL;
     Group* G = H->ambient;
     if (!G) return NULL;
+    if (H->type != SUBGROUP_INDEXED) return NULL;
 
     // Collect all conjugates ghg^{-1} for g in G, h in H
     bool* inSet = calloc(G->card, sizeof(bool));
@@ -2178,8 +3036,8 @@ SubGroup* normalClosure(SubGroup* H) {
 
     for (int i = 0; i < G->card; i++) {
         for (int j = 0; j < H->card; j++) {
-            GroupElement* conj = groupElementConjugate(G->elements[i], G->elements[H->indices[j]]);
-            if (!conj) {
+            GroupElement* conj = groupElementConjugate(G->elements[i], G->elements[H->data.indexed.indices[j]]);
+            if (!conj || conj->index < 0 || (size_t)conj->index >= G->card) {
                 free(inSet);
                 return NULL;
             }
@@ -2256,7 +3114,7 @@ bool isInSubgroup(SubGroup* H, GroupElement* g) {
 	if (!cmpGroups(H->ambient, g->group)) return false;
 
 	for (int i = 0; i < H->card; i++) {
-		if (cmpGroupElements(g, H->ambient->elements[H->indices[i]])) return true;
+		if (cmpGroupElements(g, H->ambient->elements[H->data.indexed.indices[i]])) return true;
 	}
 
 	return false;
@@ -2280,7 +3138,7 @@ bool subgroupContains(SubGroup* H, SubGroup* K) {
 	for (int i = 0; i < K->card; i++) {
 		bool found = false;
 		for (int j = 0; j < H->card; j++) {
-			if (K->indices[i] == H->indices[j]) {
+			if (K->data.indexed.indices[i] == H->data.indexed.indices[j]) {
 				found = true;
 				break;
 			}
@@ -2301,22 +3159,18 @@ int subgroupIndex(SubGroup* H) {
 // Returns the conjugate of a subgroup, i.e. gHg^{-1} for g in G and H a subgroup of G
 SubGroup* subgroupConjugate(GroupElement* g, SubGroup* H) {
 	if (!g || !H) return NULL;
-	if (!cmpGroups(g->group, H->ambient)) return NULL;
+		if (!cmpGroups(g->group, H->ambient)) return NULL;
+    if (H->type != SUBGROUP_INDEXED) return NULL;
 
 	int* indices = malloc(H->card * sizeof(int));
 	if (!indices) return NULL;
 	for (int i = 0; i < H->card; i++) {
-	    GroupElement* conj = groupElementConjugate(g, H->ambient->elements[H->indices[i]]);
-		if (!conj) {
+	    GroupElement* conj = groupElementConjugate(g, H->ambient->elements[H->data.indexed.indices[i]]);
+		if (!conj || conj->index < 0 || (size_t)conj->index >= H->ambient->card) {
 			free(indices);
 			return NULL;
 		}
-	    for (int j = 0; j < g->group->card; j++) {
-		    if (cmpGroupElements(conj, g->group->elements[j])) {
-			    indices[i] = j;
-			    break;
-		    }
-	    }
+	    indices[i] = conj->index;
 	}
 
 	SubGroup* K = constructSubgroup(H->ambient, indices, H->card);
@@ -2328,6 +3182,7 @@ SubGroup* subgroupConjugate(GroupElement* g, SubGroup* H) {
 // Caller is responsible for calling freeSubgroup on each and free on the array.
 SubGroup** listAllSubgroups(Group* G, int* count) {
     if (!G || !count) return NULL;
+    if (!G->isFinite || !G->elements) return NULL;
 
     // Start with a dynamic array of subgroups, initialized with the trivial subgroup {e}
     int capacity = 16;
@@ -2353,7 +3208,7 @@ SubGroup** listAllSubgroups(Group* G, int* count) {
                 // Skip if g is already in H
                 bool inH = false;
                 for (int k = 0; k < H->card; k++) {
-                    if (H->indices[k] == gi) { inH = true; break; }
+                    if (H->data.indexed.indices[k] == gi) { inH = true; break; }
                 }
                 if (inH) continue;
 
@@ -2365,7 +3220,7 @@ SubGroup** listAllSubgroups(Group* G, int* count) {
                     free(subgroups);
                     return NULL;
                 }
-                for (int k = 0; k < H->card; k++) gens[k] = H->indices[k];
+                for (int k = 0; k < H->card; k++) gens[k] = H->data.indexed.indices[k];
                 gens[H->card] = gi;
 
                 SubGroup* K = subgroupGeneratedBy(G, gens, genLen);
@@ -2482,16 +3337,17 @@ SubGroup** listAllMaximalSubgroups(Group* G, int* count) {
 // fixed by all conjugations.  (core = intersection of all conjugates of H)
 static bool hasTrivialCore(SubGroup* H) {
     Group* G = H->ambient;
+    if (!G || H->type != SUBGROUP_INDEXED) return false;
     for (int hi = 0; hi < H->card; hi++) {
-        if (H->indices[hi] == 0) continue; // skip identity
-        GroupElement* h = G->elements[H->indices[hi]];
+        if (H->data.indexed.indices[hi] == 0) continue; // skip identity
+        GroupElement* h = G->elements[H->data.indexed.indices[hi]];
         bool inAllConjugates = true;
         for (int gi = 0; gi < G->card; gi++) {
             GroupElement* conj = groupElementConjugate(G->elements[gi], h);
-            if (!conj) return false;
+            if (!conj || conj->index < 0 || (size_t)conj->index >= G->card) return false;
             bool inH = false;
             for (int m = 0; m < H->card; m++) {
-                if (conj->index == H->indices[m]) { inH = true; break; }
+                if (conj->index == H->data.indexed.indices[m]) { inH = true; break; }
             }
             if (!inH) { inAllConjugates = false; break; }
         }
@@ -2529,26 +3385,27 @@ SubGroup* largestCoreFreeSubgroup(Group* G) {
 }
 
 // Realise a SubGroup H of G as a standalone Group, with elements indexed so that
-// the identity is at position 0 and the rest follow H->indices' order. The
+// the identity is at position 0 and the rest follow H->data.indexed.indices' order. The
 // multiplication table is the restriction of G's table to H.
 Group* subgroupAsGroup(SubGroup* H) {
     if (!H || !H->ambient) return NULL;
     Group* G = H->ambient;
     int n = H->card;
     if (n < 1) return NULL;
+    if (H->type != SUBGROUP_INDEXED) return NULL;
 
-    // Permute H->indices so the ambient identity (index 0) comes first
+    // Permute H->data.indexed.indices so the ambient identity (index 0) comes first
     int* localToAmbient = malloc(n * sizeof(int));
     if (!localToAmbient) return NULL;
     int idPos = -1;
     for (int i = 0; i < n; i++) {
-        if (H->indices[i] == 0) { idPos = i; break; }
+        if (H->data.indexed.indices[i] == 0) { idPos = i; break; }
     }
     if (idPos < 0) { free(localToAmbient); return NULL; }
     localToAmbient[0] = 0;
     int next = 1;
     for (int i = 0; i < n; i++) {
-        if (i != idPos) localToAmbient[next++] = H->indices[i];
+        if (i != idPos) localToAmbient[next++] = H->data.indexed.indices[i];
     }
 
     GroupElement** elements = calloc(n, sizeof(GroupElement*));
@@ -2581,7 +3438,16 @@ Group* subgroupAsGroup(SubGroup* H) {
             return NULL;
         }
         for (int j = 0; j < n; j++) {
-            int prodAmbient = G->table[localToAmbient[i]][localToAmbient[j]];
+            GroupElement* prod = groupMult(G->elements[localToAmbient[i]], G->elements[localToAmbient[j]]);
+            if (!prod || prod->index < 0) {
+                for (int kk = 0; kk <= i; kk++) free(table[kk]);
+                free(table);
+                for (int kk = 0; kk < n; kk++) freeGroupElement(elements[kk]);
+                free(elements);
+                free(localToAmbient);
+                return NULL;
+            }
+            int prodAmbient = prod->index;
             int pos = -1;
             for (int k = 0; k < n; k++) {
                 if (localToAmbient[k] == prodAmbient) { pos = k; break; }
@@ -2600,7 +3466,7 @@ Group* subgroupAsGroup(SubGroup* H) {
 
     free(localToAmbient);
 
-    Group* Hg = constructGroupSkipValidate(elements, table, n);
+    Group* Hg = constructTableGroupSkipValidate(elements, table, n);
     if (!Hg) {
         for (int i = 0; i < n; i++) { freeGroupElement(elements[i]); free(table[i]); }
         free(elements);
@@ -2630,7 +3496,7 @@ bool isCyclicSubgroup(SubGroup* H) {
 	if (!isSubgroup(H->ambient, H)) return false;
 
 	for (int i = 0; i < H->card; i++) {
-		if (elementOrder(H->ambient, H->ambient->elements[H->indices[i]]) == H->card) return true;
+		if (elementOrder(H->ambient, H->ambient->elements[H->data.indexed.indices[i]]) == H->card) return true;
 	}
 
 	return false;
@@ -2681,7 +3547,7 @@ bool isInGroupCoset(GroupCoset* coset, GroupElement* g) {
 	if (!cmpGroups(coset->group, g->group)) return false;
 
 	for (int i = 0; i < coset->subgroup->card; i++) {
-		if (g->index == coset->indices[i]) return true;
+		if (g->index == coset->data.indexed.indices[i]) return true;
 	}
 
 	return false;
@@ -2691,32 +3557,48 @@ bool isInGroupCoset(GroupCoset* coset, GroupElement* g) {
 GroupCoset* generateLeftGroupCoset(SubGroup* H, GroupElement* g) {
 	if (!H || !g) return NULL;
 	if (!cmpGroups(g->group, H->ambient)) return NULL;
-
-	int* indices = malloc(H->card * sizeof(int));
-    if (!indices) return NULL;
-	for (int i = 0; i < H->card; i++) {
-	    GroupElement* prod = groupMult(g, g->group->elements[H->indices[i]]);
-        if (!prod) {
-            free(indices);
+    switch (H->type) {
+        case SUBGROUP_INDEXED:
+            break;
+        case SUBGROUP_GENERATED:
+        case SUBGROUP_EXPLICIT:
+        case SUBGROUP_PREDICATE:
             return NULL;
-        }
-	    for (int j = 0; j < g->group->card; j++) {
-		    if (cmpGroupElements(prod, g->group->elements[j])) {
-			    indices[i] = j;
-			    break;
-		    }
-	    }
-	}
+    }
+	    if (g->index < 0 || (size_t)g->index >= H->ambient->card) return NULL;
 
-	GroupCoset* coset = malloc(sizeof(GroupCoset));
+		int* indices = malloc(H->card * sizeof(int));
+	    if (!indices) return NULL;
+		for (int i = 0; i < H->card; i++) {
+	        GroupElement* prod = groupMult(g, H->ambient->elements[H->data.indexed.indices[i]]);
+	        if (!prod || prod->index < 0) {
+	            free(indices);
+	            return NULL;
+	        }
+	        indices[i] = prod->index;
+		}
+
+    GroupElement** elements = subgroupElementView(g->group, indices, H->card);
+    if (!elements) {
+        free(indices);
+        return NULL;
+    }
+
+	GroupCoset* coset = calloc(1, sizeof(GroupCoset));
     if (!coset) {
+        free(elements);
         free(indices);
         return NULL;
     }
     coset->group = H->ambient;
 	coset->subgroup = H;
-	coset->indices = indices;
+    coset->card = H->card;
+    coset->isFinite = true;
 	coset->isLeft = true;
+    coset->elements = elements;
+    coset->representative = g;
+    coset->type = GROUP_COSET_INDEXED;
+	coset->data.indexed.indices = indices;
 
 	return coset;
 }
@@ -2724,33 +3606,49 @@ GroupCoset* generateLeftGroupCoset(SubGroup* H, GroupElement* g) {
 // Generate the coset Hg of a subgroup H
 GroupCoset* generateRightGroupCoset(SubGroup* H, GroupElement* g) {
 	if (!H || !g) return NULL;
-	if (!cmpGroups(g->group, H->ambient)) return NULL;
-
-	int* indices = malloc(H->card * sizeof(int));
-    if (!indices) return NULL;
-	for (int i = 0; i < H->card; i++) {
-	    GroupElement* prod = groupMult(g->group->elements[H->indices[i]], g);
-        if (!prod) {
-            free(indices);
+		if (!cmpGroups(g->group, H->ambient)) return NULL;
+    switch (H->type) {
+        case SUBGROUP_INDEXED:
+            break;
+        case SUBGROUP_GENERATED:
+        case SUBGROUP_EXPLICIT:
+        case SUBGROUP_PREDICATE:
             return NULL;
-        }
-	    for (int j = 0; j < g->group->card; j++) {
-		    if (cmpGroupElements(prod, g->group->elements[j])) {
-			    indices[i] = j;
-			    break;
-		    }
-	    }
-	}
+    }
+	    if (g->index < 0 || (size_t)g->index >= H->ambient->card) return NULL;
 
-	GroupCoset* coset = malloc(sizeof(GroupCoset));
+		int* indices = malloc(H->card * sizeof(int));
+	    if (!indices) return NULL;
+		for (int i = 0; i < H->card; i++) {
+	        GroupElement* prod = groupMult(H->ambient->elements[H->data.indexed.indices[i]], g);
+	        if (!prod || prod->index < 0) {
+	            free(indices);
+	            return NULL;
+	        }
+	        indices[i] = prod->index;
+		}
+
+    GroupElement** elements = subgroupElementView(g->group, indices, H->card);
+    if (!elements) {
+        free(indices);
+        return NULL;
+    }
+
+	GroupCoset* coset = calloc(1, sizeof(GroupCoset));
     if (!coset) {
+        free(elements);
         free(indices);
         return NULL;
     }
     coset->group = H->ambient;
 	coset->subgroup = H;
-	coset->indices = indices;
+    coset->card = H->card;
+    coset->isFinite = true;
 	coset->isLeft = false;
+    coset->elements = elements;
+    coset->representative = g;
+    coset->type = GROUP_COSET_INDEXED;
+	coset->data.indexed.indices = indices;
 
 	return coset;
 }
@@ -2773,7 +3671,7 @@ GroupCoset** getLeftGroupCosets(SubGroup* H) {
 			if (!coset) { for (int m = 0; m < k; m++) freeGroupCoset(cosets[m]); free(visited); free(cosets); return NULL; }
 			cosets[k++] = coset;
 			for (int j = 0; j < coset->subgroup->card; j++)
-				visited[coset->indices[j]] = true;
+				visited[coset->data.indexed.indices[j]] = true;
 		}
 	}
 
@@ -2799,7 +3697,7 @@ GroupCoset** getRightGroupCosets(SubGroup* H) {
 			if (!coset) { for (int m = 0; m < k; m++) freeGroupCoset(cosets[m]); free(visited); free(cosets); return NULL; }
 			cosets[k++] = coset;
 			for (int j = 0; j < coset->subgroup->card; j++)
-				visited[coset->indices[j]] = true;
+				visited[coset->data.indexed.indices[j]] = true;
 		}
 	}
 
@@ -2834,7 +3732,7 @@ Group* quotientGroup(Group* G, SubGroup* N) {
 			free(cosetList);
 			return NULL;
 		}
-		snprintf(repr, 32, "%sN", G->elements[cosetList[i]->indices[0]]->repr);
+		snprintf(repr, 32, "%sN", G->elements[cosetList[i]->data.indexed.indices[0]]->repr);
 		elements[i] = constructGroupElement(NULL, repr);
 		free(repr);
 		if (!elements[i]) {
@@ -2867,19 +3765,39 @@ Group* quotientGroup(Group* G, SubGroup* N) {
 			return NULL;
 		}
 		for (int j = 0; j < numCosets; j++) {
-			GroupElement* prod = groupMult(G->elements[cosetList[i]->indices[0]], G->elements[cosetList[j]->indices[0]]);
+			GroupElement* prod = groupMult(G->elements[cosetList[i]->data.indexed.indices[0]], G->elements[cosetList[j]->data.indexed.indices[0]]);
+			if (!prod || prod->index < 0 || (size_t)prod->index >= G->card) {
+				for (int k = 0; k <= i; k++) free(table[k]);
+				free(table);
+				for (int k = 0; k < numCosets; k++) freeGroupElement(elements[k]);
+				free(elements);
+				for (int k = 0; k < numCosets; k++) freeGroupCoset(cosetList[k]);
+				free(cosetList);
+				return NULL;
+			}
+			bool found = false;
 			for (int k = 0; k < numCosets; k++) {
 				if (isInGroupCoset(cosetList[k], prod)) {
 					table[i][j] = k;
+					found = true;
 					break;
 				}
+			}
+			if (!found) {
+				for (int k = 0; k <= i; k++) free(table[k]);
+				free(table);
+				for (int k = 0; k < numCosets; k++) freeGroupElement(elements[k]);
+				free(elements);
+				for (int k = 0; k < numCosets; k++) freeGroupCoset(cosetList[k]);
+				free(cosetList);
+				return NULL;
 			}
 		}
 	}
 
 	for (int j = 0; j < numCosets; j++) freeGroupCoset(cosetList[j]);
 	free(cosetList);
-	Group* H = constructGroup(elements, table, numCosets);
+	Group* H = constructTableGroupSkipValidate(elements, table, numCosets);
 	if (!H) {
 		for (int i = 0; i < numCosets; i++) {
 			freeGroupElement(elements[i]);
@@ -2898,80 +3816,38 @@ Group* quotientGroup(Group* G, SubGroup* N) {
 // Construct the direct product of two groups
 Group* constructProductGroup(Group* G, Group* H) {
     if (!G || !H) return NULL;
+    if (!G->isFinite || !H->isFinite || !G->elements || !H->elements) return NULL;
 
     int newCard = G->card * H->card;
-
-    // Allocate elements array
-    GroupElement** elements = calloc(newCard, sizeof(GroupElement*));
-    if (!elements) return NULL;
+    Group* P = calloc(1, sizeof(Group));
+    if (!P) return NULL;
+    P->type = GROUP_PRODUCT;
+    P->card = (size_t)newCard;
+    P->isFinite = true;
+    P->data.product.count = 2;
+    P->data.product.factors = malloc(2 * sizeof(Group*));
+    P->elements = calloc((size_t)newCard, sizeof(GroupElement*));
+    if (!P->data.product.factors || !P->elements) {
+        freeGroup(P);
+        return NULL;
+    }
+    P->data.product.factors[0] = G;
+    P->data.product.factors[1] = H;
 
     // Build element representations as "(g,h)"
     for (int i = 0; i < G->card; i++) {
         for (int j = 0; j < H->card; j++) {
             int index = i * H->card + j;
-
-            // Msut be size+4 for "(", ",", ")", and null terminator
-            int reprLen = strlen(G->elements[i]->repr) + strlen(H->elements[j]->repr) + 4;
-            char* repr = malloc(reprLen);
-            if (!repr) {
-                for (int m = 0; m < index; m++) freeGroupElement(elements[m]);
-                free(elements);
+            GroupElement* factors[2] = { G->elements[i], H->elements[j] };
+            ProductGroupElementData data = { factors, 2 };
+            P->elements[index] = constructGroupElement(P, &data);
+            if (!P->elements[index]) {
+                freeGroup(P);
                 return NULL;
             }
-            snprintf(repr, reprLen, "(%s,%s)", G->elements[i]->repr, H->elements[j]->repr);
-
-            elements[index] = constructGroupElement(NULL, repr);
-            free(repr);
-            if (!elements[index]) {
-                for (int m = 0; m < index; m++) freeGroupElement(elements[m]);
-                free(elements);
-                return NULL;
-            }
+            P->elements[index]->index = index;
         }
     }
-
-    // Build the Cayley table
-    int** table = malloc(newCard * sizeof(int*));
-    if (!table) {
-        for (int m = 0; m < newCard; m++) freeGroupElement(elements[m]);
-        free(elements);
-        return NULL;
-    }
-
-    for (int a = 0; a < newCard; a++) {
-        table[a] = malloc(newCard * sizeof(int));
-        if (!table[a]) {
-            for (int m = 0; m < a; m++) free(table[m]);
-            free(table);
-            for (int m = 0; m < newCard; m++) freeGroupElement(elements[m]);
-            free(elements);
-            return NULL;
-        }
-
-        int i = a / H->card;   // G-component of left operand
-        int j = a % H->card;   // H-component of left operand
-
-        for (int b = 0; b < newCard; b++) {
-            int k = b / H->card;   // G-component of right operand
-            int l = b % H->card;   // H-component of right operand
-
-            int gProdindex = G->table[i][k];
-            int hProdindex = H->table[j][l];
-            table[a][b] = gProdindex * H->card + hProdindex;
-        }
-    }
-
-    Group* P = constructGroupSkipValidate(elements, table, newCard);
-    if (!P) {
-        for (int m = 0; m < newCard; m++) free(table[m]);
-        free(table);
-        for (int m = 0; m < newCard; m++) freeGroupElement(elements[m]);
-        free(elements);
-        return NULL;
-    }
-
-    // Assign the group pointer to each element
-    for (int m = 0; m < newCard; m++) elements[m]->group = P;
 
     return P;
 }
@@ -2993,7 +3869,6 @@ Group* kfoldProductGroup(Group* G, int k) {
             freeGroup(prod);
             return NULL;
         }
-        freeGroup(prod);
         prod = next;
     }
 
@@ -3023,7 +3898,6 @@ Ring* kfoldProductRing(Ring* R, int k) {
             freeRing(prod);
             return NULL;
         }
-        freeRing(prod);
         prod = next;
     }
 
@@ -3039,104 +3913,38 @@ Ring* kfoldProductRing(Ring* R, int k) {
 // Construct the direct product of two rings
 Ring* constructProductRing(Ring* R, Ring* S) {
     if (!R || !S) return NULL;
+    if (!R->isFinite || !S->isFinite || !R->elements || !S->elements) return NULL;
 
     int newCard = R->card * S->card;
-
-    // Allocate elements array
-    RingElement** elements = calloc(newCard, sizeof(RingElement*));
-    if (!elements) return NULL;
+    Ring* P = calloc(1, sizeof(Ring));
+    if (!P) return NULL;
+    P->type = RING_PRODUCT;
+    P->card = (size_t)newCard;
+    P->isFinite = true;
+    P->data.product.count = 2;
+    P->data.product.factors = malloc(2 * sizeof(Ring*));
+    P->elements = calloc((size_t)newCard, sizeof(RingElement*));
+    if (!P->data.product.factors || !P->elements) {
+        freeRing(P);
+        return NULL;
+    }
+    P->data.product.factors[0] = R;
+    P->data.product.factors[1] = S;
 
     // Build element representations as "(x,y)"
     for (int i = 0; i < R->card; i++) {
         for (int j = 0; j < S->card; j++) {
             int index = i * S->card + j;
-
-            // Must be size+4 for "(", ",", ")", and null terminator
-            int reprLen = strlen(R->elements[i]->repr) + strlen(S->elements[j]->repr) + 4;
-            char* repr = malloc(reprLen);
-            if (!repr) {
-                for (int m = 0; m < index; m++) freeRingElement(elements[m]);
-                free(elements);
+            RingElement* factors[2] = { R->elements[i], S->elements[j] };
+            ProductRingElementData data = { factors, 2 };
+            P->elements[index] = constructRingElement(P, &data);
+            if (!P->elements[index]) {
+                freeRing(P);
                 return NULL;
             }
-            snprintf(repr, reprLen, "(%s,%s)", R->elements[i]->repr, S->elements[j]->repr);
-
-            elements[index] = constructRingElement(NULL, repr);
-            free(repr);
-            if (!elements[index]) {
-                for (int m = 0; m < index; m++) freeRingElement(elements[m]);
-                free(elements);
-                return NULL;
-            }
+            P->elements[index]->index = index;
         }
     }
-
-    // Build the addition and multiplication tables
-    int** addTable = malloc(newCard * sizeof(int*));
-    if (!addTable) {
-        for (int m = 0; m < newCard; m++) freeRingElement(elements[m]);
-        free(elements);
-        return NULL;
-    }
-    int** multTable = malloc(newCard * sizeof(int*));
-    if (!multTable) {
-        free(addTable);
-        for (int m = 0; m < newCard; m++) freeRingElement(elements[m]);
-        free(elements);
-        return NULL;
-    }
-
-    for (int a = 0; a < newCard; a++) {
-        addTable[a] = malloc(newCard * sizeof(int));
-        if (!addTable[a]) {
-            for (int m = 0; m < a; m++) free(addTable[m]);
-            free(addTable);
-            free(multTable);
-            for (int m = 0; m < newCard; m++) freeRingElement(elements[m]);
-            free(elements);
-            return NULL;
-        }
-        multTable[a] = malloc(newCard * sizeof(int));
-        if (!multTable[a]) {
-            for (int m = 0; m <= a; m++) free(addTable[m]);
-            for (int m = 0; m < a; m++) free(multTable[m]);
-            free(addTable);
-            free(multTable);
-            for (int m = 0; m < newCard; m++) freeRingElement(elements[m]);
-            free(elements);
-            return NULL;
-        }
-
-        int i = a / S->card;   // R-component of left operand
-        int j = a % S->card;   // S-component of left operand
-
-        for (int b = 0; b < newCard; b++) {
-            int k = b / S->card;   // R-component of right operand
-            int l = b % S->card;   // S-component of right operand
-
-            int rAddIndex = R->addTable[i][k];
-            int sAddIndex = S->addTable[j][l];
-            addTable[a][b] = rAddIndex * S->card + sAddIndex;
-
-            int rMultIndex = R->multTable[i][k];
-            int sMultIndex = S->multTable[j][l];
-            multTable[a][b] = rMultIndex * S->card + sMultIndex;
-        }
-    }
-
-    Ring* P = constructRing(elements, addTable, multTable, newCard);
-    if (!P) {
-        for (int m = 0; m < newCard; m++) free(addTable[m]);
-        free(addTable);
-        for (int m = 0; m < newCard; m++) free(multTable[m]);
-        free(multTable);
-        for (int m = 0; m < newCard; m++) freeRingElement(elements[m]);
-        free(elements);
-        return NULL;
-    }
-
-    // Assign the ring pointer to each element
-    for (int m = 0; m < newCard; m++) elements[m]->ring = P;
 
     return P;
 }
@@ -3147,21 +3955,27 @@ Ring* constructProductRing(Ring* R, Ring* S) {
 GroupHomomorphism* constructGroupHomomorphism(Group* domain, Group* codomain, int* indicesMapping, int indicesMappingSize) {
     if (!domain || !codomain || !indicesMapping) return NULL;
     if (indicesMappingSize != domain->card) return NULL;
+    if (!domain->isFinite || !codomain->isFinite) return NULL;
+    if (!domain->elements || !codomain->elements) return NULL;
 
     // Validate that indicesMapping is a valid homomorphism
     for (int i = 0; i < domain->card; i++) {
+        if (indicesMapping[i] < 0 || (size_t)indicesMapping[i] >= codomain->card) return NULL;
         for (int j = 0; j < domain->card; j++) {
-            if (!cmpGroupElements(groupMult(codomain->elements[indicesMapping[i]], codomain->elements[indicesMapping[j]]), codomain->elements[indicesMapping[groupMult(domain->elements[i], domain->elements[j])->index]])) {
-                return NULL;
-            }
+            GroupElement* domainProd = groupMult(domain->elements[i], domain->elements[j]);
+            GroupElement* codomainProd = groupMult(codomain->elements[indicesMapping[i]], codomain->elements[indicesMapping[j]]);
+            if (!domainProd || !codomainProd || domainProd->index < 0 || codomainProd->index < 0) return NULL;
+            if (codomainProd->index != indicesMapping[domainProd->index]) return NULL;
         }
     }
 
-    GroupHomomorphism* homo = malloc(sizeof(GroupHomomorphism));
+    GroupHomomorphism* homo = calloc(1, sizeof(GroupHomomorphism));
     if (!homo) return NULL;
     homo->domain = domain;
     homo->codomain = codomain;
-    homo->mapping = indicesMapping;
+    homo->type = GROUP_HOM_INDEXED;
+    homo->data.indexed.mapping = indicesMapping;
+    homo->data.indexed.count = (size_t)indicesMappingSize;
     return homo;
 }
 
@@ -3173,7 +3987,7 @@ SubGroup* groupHomomorphismKernel(GroupHomomorphism* homo) {
     if (!indices) return NULL;
     int k = 0;
     for (int i = 0; i < homo->domain->card; i++) {
-        if (homo->mapping[i] == 0) indices[k++] = i;
+        if (homo->data.indexed.mapping[i] == 0) indices[k++] = i;
     }
     SubGroup* ker = constructSubgroup(homo->domain, indices, k);
     if (!ker) {
@@ -3189,7 +4003,7 @@ GroupElement* groupElementImage(GroupHomomorphism* homo, GroupElement* g) {
     if (!homo || !g) return NULL;
     if (!cmpGroups(homo->domain, g->group)) return NULL;
 
-    return homo->codomain->elements[homo->mapping[g->index]];
+    return homo->codomain->elements[homo->data.indexed.mapping[g->index]];
 }
 
 // Returns the image of a GroupHomomorphism as a Group
@@ -3202,7 +4016,7 @@ Group* groupHomomorphismImage(GroupHomomorphism* homo) {
     if (!seen) return NULL;
     for (int i = 0; i < maxCard; i++) seen[i] = false;
     for (int i = 0; i < homo->domain->card; i++) {
-        seen[homo->mapping[i]] = true;
+        seen[homo->data.indexed.mapping[i]] = true;
     }
 
     // Generate a list of the indices of elements in Im(homo)
@@ -3235,9 +4049,25 @@ Group* groupHomomorphismImage(GroupHomomorphism* homo) {
     }
     for (int i = 0; i < k; i++) {
         for (int j = 0; j < k; j++) {
-            int prodCodIndex = homo->codomain->table[indices[i]][indices[j]];
+            GroupElement* prod = groupMult(homo->codomain->elements[indices[i]], homo->codomain->elements[indices[j]]);
+            if (!prod || prod->index < 0) {
+                free(seen);
+                free(indices);
+                for (int m = 0; m < k; m++) free(table[m]);
+                free(table);
+                return NULL;
+            }
+            int prodCodIndex = prod->index;
+            bool found = false;
             for (int m = 0; m < k; m++) {
-                if (indices[m] == prodCodIndex) { table[i][j] = m; break; }
+                if (indices[m] == prodCodIndex) { table[i][j] = m; found = true; break; }
+            }
+            if (!found) {
+                free(seen);
+                free(indices);
+                for (int m = 0; m < k; m++) free(table[m]);
+                free(table);
+                return NULL;
             }
         }
     }
@@ -3264,7 +4094,7 @@ Group* groupHomomorphismImage(GroupHomomorphism* homo) {
         }
     }
 
-    Group* image = constructGroup(elements, table, k);
+    Group* image = constructTableGroupSkipValidate(elements, table, k);
     free(seen);
     free(indices);
     if (!image) {
@@ -3285,7 +4115,7 @@ bool isGroupIsomorphism(GroupHomomorphism* homo) {
     if (homo->domain->card != homo->codomain->card) return false;
     
     for (int i = 1; i < homo->domain->card; i++) {
-        if (homo->mapping[i] == 0) return false;
+        if (homo->data.indexed.mapping[i] == 0) return false;
     }
     return true;
 }
@@ -3295,10 +4125,12 @@ bool isGroupIsomorphism(GroupHomomorphism* homo) {
 // Construct a SubRing of a Ring
 SubRing* constructSubring(Ring* R, int* indices, int indicesLen) {
     if (!R || !indices) return NULL;
+    if (indicesLen < 1) return NULL;
+    if (!R->isFinite || !R->elements) return NULL;
 
     // Check that all indices are valid
     for (int i = 0; i < indicesLen; i++) {
-        if (indices[i] < 0 || indices[i] >= R->card) return NULL;
+        if (indices[i] < 0 || (size_t)indices[i] >= R->card) return NULL;
     }
 
 
@@ -3315,40 +4147,37 @@ SubRing* constructSubring(Ring* R, int* indices, int indicesLen) {
     // Check that, for each x, y in the subring, x - y is in the subring
     for (int i = 0; i < indicesLen; i++) {
         for (int j = 0; j < indicesLen; j++) {
-            RingElement* x = ringAdd(R->elements[indices[i]], ringAddInverse(R->elements[indices[j]]));
-            bool found = false;
-            for (int k = 0; k < indicesLen; k++) {
-                if (cmpRingElements(R->elements[indices[k]], x)) {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) return NULL;
+            RingElement* inv = ringAddInverse(R->elements[indices[j]]);
+            if (!inv || inv->index < 0) return NULL;
+            RingElement* diff = ringAdd(R->elements[indices[i]], inv);
+            if (!diff || diff->index < 0) return NULL;
+            if (!indexInList(diff->index, indices, indicesLen)) return NULL;
         }
     }
 
     // Check that the subring is closed under multiplication
     for (int i = 0; i < indicesLen; i++) {
         for (int j = 0; j < indicesLen; j++) {
-            RingElement* x = ringMult(R->elements[indices[i]], R->elements[indices[j]]);
-            bool found = false;
-            for (int k = 0; k < indicesLen; k++) {
-                if (cmpRingElements(R->elements[indices[k]], x)) {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) return NULL;
+            RingElement* prod = ringMult(R->elements[indices[i]], R->elements[indices[j]]);
+            if (!prod || prod->index < 0) return NULL;
+            if (!indexInList(prod->index, indices, indicesLen)) return NULL;
         }
     }
 
-    SubRing* S = malloc(sizeof(SubRing));
+    RingElement** elements = subringElementView(R, indices, indicesLen);
+    if (!elements) return NULL;
+
+    SubRing* S = calloc(1, sizeof(SubRing));
     if (!S) {
+        free(elements);
         return NULL;
     }
     S->ambient = R;
-    S->indices = indices;
-    S->card = indicesLen;
+    S->card = (size_t)indicesLen;
+    S->isFinite = true;
+    S->elements = elements;
+    S->type = SUBRING_INDEXED;
+    S->data.indexed.indices = indices;
 
     return S;
 }
@@ -3359,7 +4188,7 @@ bool cmpSubrings(SubRing* S, SubRing* T) {
     if (!cmpRings(S->ambient, T->ambient)) return false;
     if (S->card != T->card) return false;
 
-    for (int i = 0; i < S->card; i++) if (S->indices[i] != T->indices[i]) return false;
+    for (int i = 0; i < S->card; i++) if (S->data.indexed.indices[i] != T->data.indexed.indices[i]) return false;
     return true;
 }
 
@@ -3381,10 +4210,11 @@ bool isWholeRing(SubRing* S) {
 Ideal* constructLeftIdeal(Ring* R, int* indices, int indicesLen) {
     if (!R || !indices) return NULL;
     if (indicesLen < 1) return NULL;
+    if (!R->isFinite || !R->elements) return NULL;
 
     // Check that all indices are valid
     for (int i = 0; i < indicesLen; i++) {
-        if (indices[i] < 0 || indices[i] >= R->card) return NULL;
+        if (indices[i] < 0 || (size_t)indices[i] >= R->card) return NULL;
     }
 
 
@@ -3401,41 +4231,38 @@ Ideal* constructLeftIdeal(Ring* R, int* indices, int indicesLen) {
     // Check that, for each x, y in the Ideal, x - y is in the Ideal (additive subgroup)
     for (int i = 0; i < indicesLen; i++) {
         for (int j = 0; j < indicesLen; j++) {
-            RingElement* x = ringAdd(R->elements[indices[i]], ringAddInverse(R->elements[indices[j]]));
-            bool found = false;
-            for (int k = 0; k < indicesLen; k++) {
-                if (cmpRingElements(R->elements[indices[k]], x)) {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) return NULL;
+            RingElement* inv = ringAddInverse(R->elements[indices[j]]);
+            if (!inv || inv->index < 0) return NULL;
+            RingElement* diff = ringAdd(R->elements[indices[i]], inv);
+            if (!diff || diff->index < 0) return NULL;
+            if (!indexInList(diff->index, indices, indicesLen)) return NULL;
         }
     }
 
     // Check that, for all r in R and x in I, rx is in I
     for (int i = 0; i < indicesLen; i++) {
         for (int j = 0; j < R->card; j++) {
-            RingElement* x = ringMult(R->elements[j], R->elements[indices[i]]);
-            bool found = false;
-            for (int k = 0; k < indicesLen; k++) {
-                if (cmpRingElements(R->elements[indices[k]], x)) {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) return NULL;
+            RingElement* prod = ringMult(R->elements[j], R->elements[indices[i]]);
+            if (!prod || prod->index < 0) return NULL;
+            if (!indexInList(prod->index, indices, indicesLen)) return NULL;
         }
     }
 
-    Ideal* I = malloc(sizeof(Ideal));
+    RingElement** elements = subringElementView(R, indices, indicesLen);
+    if (!elements) return NULL;
+
+    Ideal* I = calloc(1, sizeof(Ideal));
     if (!I) {
+        free(elements);
         return NULL;
     }
     I->ring = R;
-    I->indices = indices;
-    I->card = indicesLen;
-    I->isLeft = true;
+    I->card = (size_t)indicesLen;
+    I->isFinite = true;
+    I->elements = elements;
+    I->side = IDEAL_LEFT;
+    I->type = IDEAL_INDEXED;
+    I->data.indexed.indices = indices;
 
     return I;
 }
@@ -3444,10 +4271,11 @@ Ideal* constructLeftIdeal(Ring* R, int* indices, int indicesLen) {
 Ideal* constructRightIdeal(Ring* R, int* indices, int indicesLen) {
     if (!R || !indices) return NULL;
     if (indicesLen < 1) return NULL;
+    if (!R->isFinite || !R->elements) return NULL;
 
     // Check that all indices are valid
     for (int i = 0; i < indicesLen; i++) {
-        if (indices[i] < 0 || indices[i] >= R->card) return NULL;
+        if (indices[i] < 0 || (size_t)indices[i] >= R->card) return NULL;
     }
 
     // Check that the potential subring contains additive identity
@@ -3463,41 +4291,38 @@ Ideal* constructRightIdeal(Ring* R, int* indices, int indicesLen) {
     // Check that, for each x, y in the Ideal, x - y is in the Ideal (additive subgroup)
     for (int i = 0; i < indicesLen; i++) {
         for (int j = 0; j < indicesLen; j++) {
-            RingElement* x = ringAdd(R->elements[indices[i]], ringAddInverse(R->elements[indices[j]]));
-            bool found = false;
-            for (int k = 0; k < indicesLen; k++) {
-                if (cmpRingElements(R->elements[indices[k]], x)) {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) return NULL;
+            RingElement* inv = ringAddInverse(R->elements[indices[j]]);
+            if (!inv || inv->index < 0) return NULL;
+            RingElement* diff = ringAdd(R->elements[indices[i]], inv);
+            if (!diff || diff->index < 0) return NULL;
+            if (!indexInList(diff->index, indices, indicesLen)) return NULL;
         }
     }
 
     // Check that, for all r in R and x in I, xr is in I
     for (int i = 0; i < indicesLen; i++) {
         for (int j = 0; j < R->card; j++) {
-            RingElement* x = ringMult(R->elements[indices[i]], R->elements[j]);
-            bool found = false;
-            for (int k = 0; k < indicesLen; k++) {
-                if (cmpRingElements(R->elements[indices[k]], x)) {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) return NULL;
+            RingElement* prod = ringMult(R->elements[indices[i]], R->elements[j]);
+            if (!prod || prod->index < 0) return NULL;
+            if (!indexInList(prod->index, indices, indicesLen)) return NULL;
         }
     }
 
-    Ideal* I = malloc(sizeof(Ideal));
+    RingElement** elements = subringElementView(R, indices, indicesLen);
+    if (!elements) return NULL;
+
+    Ideal* I = calloc(1, sizeof(Ideal));
     if (!I) {
+        free(elements);
         return NULL;
     }
     I->ring = R;
-    I->indices = indices;
-    I->card = indicesLen;
-    I->isLeft = false;
+    I->card = (size_t)indicesLen;
+    I->isFinite = true;
+    I->elements = elements;
+    I->side = IDEAL_RIGHT;
+    I->type = IDEAL_INDEXED;
+    I->data.indexed.indices = indices;
 
     return I;
 }
@@ -3507,9 +4332,9 @@ bool cmpIdeals(Ideal* I, Ideal* J) {
     if (!I || !J) return false;
     if (!cmpRings(I->ring, J->ring)) return false;
     if (I->card != J->card) return false;
-    if (I->isLeft != J->isLeft) return false;
+    if (I->side != J->side) return false;
 
-    for (int i = 0; i < I->card; i++) if (I->indices[i] != J->indices[i]) return false;
+    for (int i = 0; i < I->card; i++) if (I->data.indexed.indices[i] != J->data.indexed.indices[i]) return false;
     return true;
 }
 
@@ -3517,7 +4342,7 @@ bool cmpIdeals(Ideal* I, Ideal* J) {
 Ideal* addIdeals(Ideal* I, Ideal* J) {
     if (!I || !J) return NULL;
     if (!cmpRings(I->ring, J->ring)) return NULL;
-    if (I->isLeft != J->isLeft) return NULL;
+    if (I->side != J->side) return NULL;
 
     Ring* R = I->ring;
     int* newIndices = malloc(I->card * J->card * sizeof(int));
@@ -3526,7 +4351,7 @@ Ideal* addIdeals(Ideal* I, Ideal* J) {
     int newCard = 0;
     for (int i = 0; i < I->card; i++) {
         for (int j = 0; j < J->card; j++) {
-            int index = ringAdd(R->elements[I->indices[i]], R->elements[J->indices[j]])->index;
+            int index = ringAdd(R->elements[I->data.indexed.indices[i]], R->elements[J->data.indexed.indices[j]])->index;
             bool found = false;
             for (int k = 0; k < newCard; k++) {
                 if (newIndices[k] == index) {
@@ -3538,7 +4363,7 @@ Ideal* addIdeals(Ideal* I, Ideal* J) {
     }
 
     Ideal* K;
-    if (I->isLeft) K = constructLeftIdeal(R, newIndices, newCard);
+    if (I->side == IDEAL_LEFT) K = constructLeftIdeal(R, newIndices, newCard);
     else K = constructRightIdeal(R, newIndices, newCard);
     if (!K) {
         free(newIndices);
@@ -3546,7 +4371,7 @@ Ideal* addIdeals(Ideal* I, Ideal* J) {
     }
 
     K->ring = R;
-    K->isLeft = I->isLeft;
+    K->side = I->side;
 
     return K;
 }
@@ -3555,7 +4380,7 @@ Ideal* addIdeals(Ideal* I, Ideal* J) {
 Ideal* multIdeals(Ideal* I, Ideal* J) {
     if (!I || !J) return NULL;
     if (!cmpRings(I->ring, J->ring)) return NULL;
-    if (I->isLeft != J->isLeft) return NULL;
+    if (I->side != J->side) return NULL;
 
     Ring* R = I->ring;
     int* newIndices = malloc(I->card * J->card * sizeof(int));
@@ -3564,7 +4389,7 @@ Ideal* multIdeals(Ideal* I, Ideal* J) {
     int newCard = 0;
     for (int i = 0; i < I->card; i++) {
         for (int j = 0; j < J->card; j++) {
-            int index = ringMult(R->elements[I->indices[i]], R->elements[J->indices[j]])->index;
+            int index = ringMult(R->elements[I->data.indexed.indices[i]], R->elements[J->data.indexed.indices[j]])->index;
             bool found = false;
             for (int k = 0; k < newCard; k++) {
                 if (newIndices[k] == index) {
@@ -3576,7 +4401,7 @@ Ideal* multIdeals(Ideal* I, Ideal* J) {
     }
 
     Ideal* K;
-    if (I->isLeft) K = constructLeftIdeal(R, newIndices, newCard);
+    if (I->side == IDEAL_LEFT) K = constructLeftIdeal(R, newIndices, newCard);
     else K = constructRightIdeal(R, newIndices, newCard);
     if (!K) {
         free(newIndices);
@@ -3584,7 +4409,7 @@ Ideal* multIdeals(Ideal* I, Ideal* J) {
     }
 
     K->ring = R;
-    K->isLeft = I->isLeft;
+    K->side = I->side;
 
     return K;
 }
@@ -3597,12 +4422,15 @@ Ring* quotientRing(Ring* R, Ideal* I) {
 	// Verify I is two-sided (required for the quotient to be well-defined)
 	for (int i = 0; i < I->card; i++) {
 		for (int j = 0; j < R->card; j++) {
-			int lp = R->multTable[j][I->indices[i]];
-			int rp = R->multTable[I->indices[i]][j];
+			RingElement* left = ringMult(R->elements[j], R->elements[I->data.indexed.indices[i]]);
+			RingElement* right = ringMult(R->elements[I->data.indexed.indices[i]], R->elements[j]);
+			if (!left || !right || left->index < 0 || right->index < 0) return NULL;
+			int lp = left->index;
+			int rp = right->index;
 			bool foundL = false, foundR = false;
 			for (int m = 0; m < I->card; m++) {
-				if (I->indices[m] == lp) foundL = true;
-				if (I->indices[m] == rp) foundR = true;
+				if (I->data.indexed.indices[m] == lp) foundL = true;
+				if (I->data.indexed.indices[m] == rp) foundR = true;
 			}
 			if (!foundL || !foundR) return NULL;
 		}
@@ -3625,7 +4453,9 @@ Ring* quotientRing(Ring* R, Ideal* I) {
 		if (assigned >= numCosets) { free(cosetOf); free(reps); return NULL; }
 		reps[assigned] = x;
 		for (int t = 0; t < I->card; t++) {
-			int y = R->addTable[x][I->indices[t]];
+			RingElement* yElement = ringAdd(R->elements[x], R->elements[I->data.indexed.indices[t]]);
+			if (!yElement || yElement->index < 0) { free(cosetOf); free(reps); return NULL; }
+			int y = yElement->index;
 			cosetOf[y] = assigned;
 		}
 		assigned++;
@@ -3674,8 +4504,17 @@ Ring* quotientRing(Ring* R, Ideal* I) {
 			return NULL;
 		}
 		for (int j = 0; j < numCosets; j++) {
-			int sumIdx = R->addTable[reps[i]][reps[j]];
-			int prodIdx = R->multTable[reps[i]][reps[j]];
+			RingElement* sum = ringAdd(R->elements[reps[i]], R->elements[reps[j]]);
+			RingElement* prod = ringMult(R->elements[reps[i]], R->elements[reps[j]]);
+			if (!sum || !prod || sum->index < 0 || prod->index < 0) {
+				for (int k = 0; k <= i; k++) { free(addTable[k]); free(multTable[k]); }
+				free(addTable); free(multTable);
+				for (int k = 0; k < numCosets; k++) freeRingElement(elements[k]);
+				free(elements); free(cosetOf); free(reps);
+				return NULL;
+			}
+			int sumIdx = sum->index;
+			int prodIdx = prod->index;
 			addTable[i][j] = cosetOf[sumIdx];
 			multTable[i][j] = cosetOf[prodIdx];
 		}
@@ -3683,7 +4522,7 @@ Ring* quotientRing(Ring* R, Ideal* I) {
 
 	free(cosetOf); free(reps);
 
-	Ring* Q = constructRing(elements, addTable, multTable, numCosets);
+	Ring* Q = constructTableRingSkipValidate(elements, addTable, multTable, numCosets);
 	if (!Q) {
 		for (int i = 0; i < numCosets; i++) {
 			freeRingElement(elements[i]);
@@ -3702,21 +4541,31 @@ Ring* quotientRing(Ring* R, Ideal* I) {
 RingHomomorphism* constructRingHomomorphism(Ring* domain, Ring* codomain, int* indicesMapping, int indicesMappingSize) {
     if (!domain || !codomain || !indicesMapping) return NULL;
     if (indicesMappingSize != domain->card) return NULL;
+    if (!domain->isFinite || !codomain->isFinite) return NULL;
+    if (!domain->elements || !codomain->elements) return NULL;
 
     // Validate that indicesMapping is a valid homomorphism
     for (int i = 0; i < domain->card; i++) {
+        if (indicesMapping[i] < 0 || (size_t)indicesMapping[i] >= codomain->card) return NULL;
         for (int j = 0; j < domain->card; j++) {
-            if (!cmpRingElements(ringAdd(codomain->elements[indicesMapping[i]], codomain->elements[indicesMapping[j]]), codomain->elements[indicesMapping[ringAdd(domain->elements[i], domain->elements[j])->index]]) || !cmpRingElements(ringMult(codomain->elements[indicesMapping[i]], codomain->elements[indicesMapping[j]]), codomain->elements[indicesMapping[ringMult(domain->elements[i], domain->elements[j])->index]])) {
-                return NULL;
-            }
+            RingElement* domainSum = ringAdd(domain->elements[i], domain->elements[j]);
+            RingElement* domainProd = ringMult(domain->elements[i], domain->elements[j]);
+            RingElement* codomainSum = ringAdd(codomain->elements[indicesMapping[i]], codomain->elements[indicesMapping[j]]);
+            RingElement* codomainProd = ringMult(codomain->elements[indicesMapping[i]], codomain->elements[indicesMapping[j]]);
+            if (!domainSum || !domainProd || !codomainSum || !codomainProd) return NULL;
+            if (domainSum->index < 0 || domainProd->index < 0 || codomainSum->index < 0 || codomainProd->index < 0) return NULL;
+            if (codomainSum->index != indicesMapping[domainSum->index]) return NULL;
+            if (codomainProd->index != indicesMapping[domainProd->index]) return NULL;
         }
     }
 
-    RingHomomorphism* homo = malloc(sizeof(RingHomomorphism));
+    RingHomomorphism* homo = calloc(1, sizeof(RingHomomorphism));
     if (!homo) return NULL;
     homo->domain = domain;
     homo->codomain = codomain;
-    homo->mapping = indicesMapping;
+    homo->type = RING_HOM_INDEXED;
+    homo->data.indexed.mapping = indicesMapping;
+    homo->data.indexed.count = (size_t)indicesMappingSize;
     return homo;
 }
 
@@ -3728,7 +4577,7 @@ Ideal* ringHomomorphismKernel(RingHomomorphism* homo) {
     if (!indices) return NULL;
     int k = 0;
     for (int i = 0; i < homo->domain->card; i++) {
-        if (homo->mapping[i] == 0) indices[k++] = i;
+        if (homo->data.indexed.mapping[i] == 0) indices[k++] = i;
     }
     Ideal* ker = constructLeftIdeal(homo->domain, indices, k);
     if (!ker) {
@@ -3744,7 +4593,7 @@ RingElement* ringElementImage(RingHomomorphism* homo, RingElement* x) {
     if (!homo || !x) return NULL;
     if (!cmpRings(homo->domain, x->ring)) return NULL;
 
-    return homo->codomain->elements[homo->mapping[x->index]];
+    return homo->codomain->elements[homo->data.indexed.mapping[x->index]];
 }
 
 // Returns the image of a RingHomomorphism as an Ideal
@@ -3757,7 +4606,7 @@ Ring* ringHomomorphismImage(RingHomomorphism* homo) {
     if (!seen) return NULL;
     for (int i = 0; i < maxCard; i++) seen[i] = false;
     for (int i = 0; i < homo->domain->card; i++) {
-        seen[homo->mapping[i]] = true;
+        seen[homo->data.indexed.mapping[i]] = true;
     }
 
     // Generate a list of the indices of elements in Im(homo)
@@ -3790,11 +4639,28 @@ Ring* ringHomomorphismImage(RingHomomorphism* homo) {
     }
     for (int i = 0; i < k; i++) {
         for (int j = 0; j < k; j++) {
-            int prodCodIndex = homo->codomain->addTable[indices[i]][indices[j]];
+            RingElement* sum = ringAdd(homo->codomain->elements[indices[i]], homo->codomain->elements[indices[j]]);
+            if (!sum || sum->index < 0) {
+                free(seen);
+                free(indices);
+                for (int m = 0; m < k; m++) free(addTable[m]);
+                free(addTable);
+                return NULL;
+            }
+            int prodCodIndex = sum->index;
+            bool found = false;
             for (int m = 0; m < k; m++) {
                 if (indices[m] == prodCodIndex) {
                     addTable[i][j] = m;
+                    found = true;
                     break; }
+            }
+            if (!found) {
+                free(seen);
+                free(indices);
+                for (int m = 0; m < k; m++) free(addTable[m]);
+                free(addTable);
+                return NULL;
             }
         }
     }
@@ -3805,7 +4671,7 @@ Ring* ringHomomorphismImage(RingHomomorphism* homo) {
         free(seen);
         free(indices);
         for (int j = 0; j < k; j++) free(addTable[j]);
-        free(addTable);        
+        free(addTable);
         return NULL;
     }
     for (int i = 0; i < k; i++) {
@@ -3822,11 +4688,32 @@ Ring* ringHomomorphismImage(RingHomomorphism* homo) {
     }
     for (int i = 0; i < k; i++) {
         for (int j = 0; j < k; j++) {
-            int prodCodIndex = homo->codomain->multTable[indices[i]][indices[j]];
+            RingElement* prod = ringMult(homo->codomain->elements[indices[i]], homo->codomain->elements[indices[j]]);
+            if (!prod || prod->index < 0) {
+                free(seen);
+                free(indices);
+                for (int m = 0; m < k; m++) free(addTable[m]);
+                free(addTable);
+                for (int m = 0; m < k; m++) free(multTable[m]);
+                free(multTable);
+                return NULL;
+            }
+            int prodCodIndex = prod->index;
+            bool found = false;
             for (int m = 0; m < k; m++) {
                 if (indices[m] == prodCodIndex) {
                     multTable[i][j] = m;
+                    found = true;
                     break; }
+            }
+            if (!found) {
+                free(seen);
+                free(indices);
+                for (int m = 0; m < k; m++) free(addTable[m]);
+                free(addTable);
+                for (int m = 0; m < k; m++) free(multTable[m]);
+                free(multTable);
+                return NULL;
             }
         }
     }
@@ -3857,7 +4744,7 @@ Ring* ringHomomorphismImage(RingHomomorphism* homo) {
         }
     }
 
-    Ring* image = constructRing(elements, addTable, multTable, k);
+    Ring* image = constructTableRingSkipValidate(elements, addTable, multTable, k);
     free(seen);
     free(indices);
     if (!image) {
@@ -3880,7 +4767,7 @@ bool isRingIsomorphism(RingHomomorphism* homo) {
     if (homo->domain->card != homo->codomain->card) return false;
 
     for (int i = 1; i < homo->domain->card; i++) {
-        if (homo->mapping[i] == 0) return false;
+        if (homo->data.indexed.mapping[i] == 0) return false;
     }
     return true;
 }
@@ -3907,7 +4794,8 @@ bool isInverse(GroupElement* g, GroupElement* h) {
     if (!g || !h) return false;
     if (!cmpGroups(g->group, h->group)) return false;
 
-    return (g->group->table[g->index][h->index] == g->group->elements[0]->index);
+    GroupElement* identity = groupIdentity(g->group);
+    return cmpGroupElements(groupMult(g, h), identity) && cmpGroupElements(groupMult(h, g), identity);
 }
 
 // Returns true if x is the additive inverse of y, otherwise false
@@ -3915,18 +4803,19 @@ bool isAddInverse(RingElement* x, RingElement* y) {
     if (!x || !y) return false;
     if (!cmpRings(x->ring, y->ring)) return false;
 
-    return (x->ring->addTable[x->index][y->index] == x->ring->elements[0]->index);
+    RingElement* zero = ringAddIdentity(x->ring);
+    return cmpRingElements(ringAdd(x, y), zero) && cmpRingElements(ringAdd(y, x), zero);
 }
 
 // Returns true if x is the multplicative inverse of y, otherwise false
 bool isMultInverse(RingElement* x, RingElement* y) {
     if (!x || !y) return false;
     if (!cmpRings(x->ring, y->ring)) return false;
-    if (!hasMultIdentity(x->ring)) return false;
+    RingElement* one = ringMultIdentity(x->ring);
+    if (!one) return false;
     if (cmpRingElements(x, x->ring->elements[0]) || cmpRingElements(y, y->ring->elements[0])) return false;
 
-    return (x->ring->multTable[x->index][y->index] == x->ring->elements[1]->index) &&
-           (x->ring->multTable[y->index][x->index] == x->ring->elements[1]->index);
+    return cmpRingElements(ringMult(x, y), one) && cmpRingElements(ringMult(y, x), one);
 }
 
 // Returns true if an element of a ring has mult inverse, otherwise false

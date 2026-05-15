@@ -290,7 +290,7 @@ $(BINDIR)/test_sokko$(EXEEXT): $(OBJDIR)/tests/test_sokko.o $(OBJDIR)/src/beasts
 $(BINDIR)/test_quaternionic$(EXEEXT): $(OBJDIR)/tests/test_quaternionic.o $(CORE_OBJS) $(BEAST_OBJS) | $(BINDIR)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ $(LDLIBS)
 
-$(BINDIR)/test_usagi$(EXEEXT): $(OBJDIR)/tests/test_usagi.o $(OBJDIR)/src/beasts/usagi.o | $(BINDIR)
+$(BINDIR)/test_usagi$(EXEEXT): $(OBJDIR)/tests/test_usagi.o $(OBJDIR)/src/beasts/usagi.o $(OBJDIR)/src/beasts/sokko.o $(OBJDIR)/src/beasts/hebi.o | $(BINDIR)
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $^ -lm
 
 $(BINDIR)/test_poni$(EXEEXT): $(OBJDIR)/tests/test_poni.o $(OBJDIR)/src/beasts/poni.o $(OBJDIR)/src/beasts/sokko.o $(OBJDIR)/src/beasts/hebi.o | $(BINDIR)

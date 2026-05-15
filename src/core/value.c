@@ -423,9 +423,10 @@ static void printInlineSubgroup(SubGroup* subgroup) {
     printInlineGroup(subgroup->ambient);
     printf("; card=%d; elements=[", subgroup->card);
     int limit = subgroup->card < 6 ? subgroup->card : 6;
+    int* indices = subgroup->type == SUBGROUP_INDEXED ? subgroup->data.indexed.indices : NULL;
     for (int i = 0; i < limit; i++) {
         if (i) printf(", ");
-        int idx = subgroup->indices ? subgroup->indices[i] : -1;
+        int idx = indices ? indices[i] : -1;
         GroupElement* element = (subgroup->ambient && idx >= 0 && idx < subgroup->ambient->card)
             ? subgroup->ambient->elements[idx]
             : NULL;
@@ -444,9 +445,10 @@ static void printInlineCoset(GroupCoset* coset) {
     printInlineSubgroup(coset->subgroup);
     printf("; elements=[");
     int limit = (coset->subgroup && coset->subgroup->card < 6) ? coset->subgroup->card : 6;
+    int* indices = coset->type == GROUP_COSET_INDEXED ? coset->data.indexed.indices : NULL;
     for (int i = 0; i < limit; i++) {
         if (i) printf(", ");
-        int idx = coset->indices ? coset->indices[i] : -1;
+        int idx = indices ? indices[i] : -1;
         GroupElement* element = (coset->group && idx >= 0 && idx < coset->group->card)
             ? coset->group->elements[idx]
             : NULL;
@@ -465,9 +467,10 @@ static void printInlineSubring(SubRing* subring) {
     printInlineRing(subring->ambient);
     printf("; card=%d; elements=[", subring->card);
     int limit = subring->card < 6 ? subring->card : 6;
+    int* indices = subring->type == SUBRING_INDEXED ? subring->data.indexed.indices : NULL;
     for (int i = 0; i < limit; i++) {
         if (i) printf(", ");
-        int idx = subring->indices ? subring->indices[i] : -1;
+        int idx = indices ? indices[i] : -1;
         RingElement* element = (subring->ambient && idx >= 0 && idx < subring->ambient->card)
             ? subring->ambient->elements[idx]
             : NULL;
@@ -482,13 +485,15 @@ static void printInlineIdeal(Ideal* ideal) {
         printf("<ideal null>");
         return;
     }
-    printf("<%sIdeal of ", ideal->isLeft ? "left" : "right");
+    const char* side = ideal->side == IDEAL_LEFT ? "left" : (ideal->side == IDEAL_RIGHT ? "right" : "two-sided");
+    printf("<%sIdeal of ", side);
     printInlineRing(ideal->ring);
     printf("; card=%d; elements=[", ideal->card);
     int limit = ideal->card < 6 ? ideal->card : 6;
+    int* indices = ideal->type == IDEAL_INDEXED ? ideal->data.indexed.indices : NULL;
     for (int i = 0; i < limit; i++) {
         if (i) printf(", ");
-        int idx = ideal->indices ? ideal->indices[i] : -1;
+        int idx = indices ? indices[i] : -1;
         RingElement* element = (ideal->ring && idx >= 0 && idx < ideal->ring->card)
             ? ideal->ring->elements[idx]
             : NULL;
