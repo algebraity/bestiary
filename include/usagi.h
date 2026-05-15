@@ -34,6 +34,7 @@ typedef enum {
     GROUP_SYMMETRIC,
     GROUP_ALTERNATING,
     GROUP_DIHEDRAL,
+    GROUP_Q8,
     GROUP_PRODUCT,
     GROUP_QUOTIENT,
     GROUP_MATRIX
@@ -105,6 +106,10 @@ typedef struct {
 typedef struct {
     Group* ambient;
     SubGroup* normal;
+    int* normalIndices;
+    size_t normalCard;
+    int* representativeIndices;
+    size_t quotientCard;
 } QuotientGroupData;
 
 typedef struct {
@@ -515,6 +520,7 @@ Ring* constructZnRing(int n);
 Ring* constructZnProductRing(int* vals, int k);
 Ring* primeFiniteField(int p);
 Ring* constructFiniteField(int p, int k);
+Ring* constructFiniteFieldOfOrder(int q);
 Group* constructAddGroup(Ring* R);
 Group* constructUnitGroup(Ring* R);
 bool isPrime(int p);

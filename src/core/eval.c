@@ -385,6 +385,7 @@ static const BuiltinDoc BUILTIN_DOCS[] = {
     { "ZnProductRing", "Constructs a direct product of modular rings.", "Vector of integer moduli, each >= 1", "Ring" },
     { "primeField", "Constructs the prime finite field F_p.", "prime Int p >= 2", "Ring" },
     { "finiteField", "Constructs a finite field F_{p^k}.", "prime Int p >= 2 and Int k >= 0", "Ring" },
+    { "FFRing", "Constructs a finite field ring F_{p^n}.", "prime-power Int q >= 2, or prime Int p >= 2 and Int n >= 0", "Ring" },
     { "addGroup", "Constructs the additive group of a ring.", "Ring", "Group" },
     { "unitGroup", "Constructs the multiplicative unit group of a ring.", "Ring with multiplicative identity", "Group" },
     { "Q8", "Constructs the quaternion group Q8.", "no values", "Group" },
@@ -10226,11 +10227,11 @@ static Value bi_SymmetricGroup(EvalContext* c, Value* a, size_t n) {
     int degree;
     if (!valueToUsagiInt(a[0], &degree)) {
         valFree(a[0]);
-        return valError("\\SymmetricGroup expects one integer degree");
+        return valError("\\Sn expects one integer degree");
     }
     Group* out = constructSymmetricGroup(degree);
     valFree(a[0]);
-    if (!out) return valError("\\SymmetricGroup requires degree >= 1");
+    if (!out) return valError("\\Sn requires degree >= 1");
     return valPtr(VAL_GROUP, out);
 }
 
@@ -10239,11 +10240,11 @@ static Value bi_AlternatingGroup(EvalContext* c, Value* a, size_t n) {
     int degree;
     if (!valueToUsagiInt(a[0], &degree)) {
         valFree(a[0]);
-        return valError("\\AlternatingGroup expects one integer degree");
+        return valError("\\An expects one integer degree");
     }
     Group* out = constructAlternatingGroup(degree);
     valFree(a[0]);
-    if (!out) return valError("\\AlternatingGroup requires degree >= 1");
+    if (!out) return valError("\\An requires degree >= 1");
     return valPtr(VAL_GROUP, out);
 }
 
@@ -10252,11 +10253,11 @@ static Value bi_DihedralGroup(EvalContext* c, Value* a, size_t n) {
     int degree;
     if (!valueToUsagiInt(a[0], &degree)) {
         valFree(a[0]);
-        return valError("\\dihedralGroup expects one integer degree");
+        return valError("\\Dn expects one integer degree");
     }
     Group* out = constructDihedralGroup(degree);
     valFree(a[0]);
-    if (!out) return valError("\\dihedralGroup requires degree >= 1");
+    if (!out) return valError("\\Dn requires degree >= 1");
     return valPtr(VAL_GROUP, out);
 }
 
@@ -10293,11 +10294,11 @@ static Value bi_primeFiniteField(EvalContext* c, Value* a, size_t n) {
     int p;
     if (!valueToUsagiInt(a[0], &p)) {
         valFree(a[0]);
-        return valError("\\primeFiniteField expects one integer prime");
+        return valError("\\primeField expects one integer prime");
     }
     Ring* out = primeFiniteField(p);
     valFree(a[0]);
-    if (!out) return valError("\\primeFiniteField requires a prime p >= 2");
+    if (!out) return valError("\\primeField requires a prime p >= 2");
     return valPtr(VAL_RING, out);
 }
 
@@ -10314,10 +10315,40 @@ static Value bi_finiteField(EvalContext* c, Value* a, size_t n) {
     return valPtr(VAL_RING, out);
 }
 
+static Value bi_FFRing(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    if (n != 1 && n != 2) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\FFRing expects either q or p,n");
+    }
+
+    int p, k, q;
+    Ring* out = NULL;
+    if (n == 1) {
+        if (!valueToUsagiInt(a[0], &q)) {
+            valFree(a[0]);
+            return valError("\\FFRing expects a prime-power integer order");
+        }
+        out = constructFiniteFieldOfOrder(q);
+        valFree(a[0]);
+        if (!out) return valError("\\FFRing requires q to be a prime power >= 2");
+        return valPtr(VAL_RING, out);
+    }
+
+    if (!valueToUsagiInt(a[0], &p) || !valueToUsagiInt(a[1], &k)) {
+        valFree(a[0]); valFree(a[1]);
+        return valError("\\FFRing expects a prime p and a nonnegative integer n");
+    }
+    out = constructFiniteField(p, k);
+    valFree(a[0]); valFree(a[1]);
+    if (!out) return valError("\\FFRing requires a prime p >= 2 and n >= 0");
+    return valPtr(VAL_RING, out);
+}
+
 static Value bi_quaternionGroup(EvalContext* c, Value* a, size_t n) {
     (void)c; (void)a; (void)n;
     Group* out = constructQ8();
-    if (!out) return valError("\\quaternionGroup failed");
+    if (!out) return valError("\\Q8 failed");
     return valPtr(VAL_GROUP, out);
 }
 
@@ -12697,6 +12728,7 @@ void registerBuiltins(void) {
     registerCommand("ZnProductRing",  1, bi_ZnProductRing);
     registerCommand("primeField",  1, bi_primeFiniteField);
     registerCommand("finiteField",  2, bi_finiteField);
+    registerCommand("FFRing", -1, bi_FFRing);
     registerCommand("addGroup",  1, bi_addGroup_cmd);
     registerCommand("unitGroup",  1, bi_unitGroup_cmd);
     registerCommand("Q8",  0, bi_quaternionGroup);

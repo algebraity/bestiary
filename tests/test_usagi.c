@@ -784,6 +784,8 @@ static void test_quotient_group(Group* V4, Group* S3) {
 
     Group* QS3 = quotientGroup(S3, N);
     CHECK(QS3 != NULL,                     "S3/{e,r,r^2} constructed successfully");
+    CHECK(QS3 != NULL && QS3->type == GROUP_QUOTIENT,
+          "S3/{e,r,r^2} uses the quotient group type");
     CHECK(QS3->card == 2,                  "S3/{e,r,r^2} has order 2");
     CHECK(isCommutativeGroup(QS3) == true, "S3/{e,r,r^2} is abelian (≅ Z/2Z)");
     GroupElement* qe = groupIdentity(QS3);
@@ -798,6 +800,8 @@ static void test_quotient_group(Group* V4, Group* S3) {
 
     Group* QV4 = quotientGroup(V4, H);
     CHECK(QV4 != NULL,                     "V4/{e,a} constructed successfully");
+    CHECK(QV4 != NULL && QV4->type == GROUP_QUOTIENT,
+          "V4/{e,a} uses the quotient group type");
     CHECK(QV4->card == 2,                  "V4/{e,a} has order 2");
     CHECK(isCommutativeGroup(QV4) == true, "V4/{e,a} is abelian (≅ Z/2Z)");
 
@@ -1942,6 +1946,7 @@ static void test_constructQ8_constructor(void) {
 
     Group* Q = constructQ8();
     CHECK(Q != NULL, "constructQ8() non-NULL");
+    CHECK(Q != NULL && Q->type == GROUP_Q8, "Q8 uses the Q8 group type");
     CHECK(Q->card == 8, "Q8 has order 8");
     CHECK(!isCommutativeGroup(Q), "Q8 is non-abelian");
     CHECK(!isCyclicGroup(Q), "Q8 is not cyclic");
@@ -2060,11 +2065,24 @@ static void test_constructFiniteField(void) {
     CHECK(isField(F25), "F_25 is a field");
     freeRing(F25);
 
+    Ring* F8ByOrder = constructFiniteFieldOfOrder(8);
+    CHECK(F8ByOrder != NULL, "constructFiniteFieldOfOrder(8) non-NULL");
+    CHECK(F8ByOrder && F8ByOrder->card == 8, "constructFiniteFieldOfOrder(8) has order 8");
+    CHECK(isField(F8ByOrder), "constructFiniteFieldOfOrder(8) is a field");
+    freeRing(F8ByOrder);
+
+    Ring* F9ByOrder = constructFiniteFieldOfOrder(9);
+    CHECK(F9ByOrder != NULL, "constructFiniteFieldOfOrder(9) non-NULL");
+    CHECK(F9ByOrder && F9ByOrder->card == 9, "constructFiniteFieldOfOrder(9) has order 9");
+    CHECK(isField(F9ByOrder), "constructFiniteFieldOfOrder(9) is a field");
+    freeRing(F9ByOrder);
+
     /* Invalid inputs */
     CHECK(constructFiniteField(4, 2) == NULL, "constructFiniteField(4,2) NULL (p not prime)");
     CHECK(constructFiniteField(6, 3) == NULL, "constructFiniteField(6,3) NULL (p not prime)");
     CHECK(constructFiniteField(2, -1) == NULL, "constructFiniteField(2,-1) NULL");
     CHECK(constructFiniteField(1, 2) == NULL, "constructFiniteField(1,2) NULL (p=1)");
+    CHECK(constructFiniteFieldOfOrder(12) == NULL, "constructFiniteFieldOfOrder(12) NULL (not a prime power)");
 }
 
 static void test_quotientRing(void) {
@@ -2854,6 +2872,10 @@ static GroupElement* fresh_identity_element(Group* G) {
             DihedralElementData data = {0, false};
             return constructGroupElement(G, &data);
         }
+        case GROUP_Q8: {
+            int index = 0;
+            return constructGroupElement(G, &index);
+        }
         case GROUP_PRODUCT: {
             size_t count = G->data.product.count;
             GroupElement** factors = malloc(count * sizeof(GroupElement*));
@@ -3071,6 +3093,10 @@ static void test_finite_group_methods_all_constructors(void) {
     check_finite_group_methods(dihedral, "direct D(4)");
     freeGroup(dihedral);
 
+    Group* q8 = constructQ8();
+    check_finite_group_methods(q8, "direct Q8");
+    freeGroup(q8);
+
     Group* z2 = constructZnGroup(2);
     Group* z3 = constructZnGroup(3);
     Group* product = constructProductGroup(z2, z3);
@@ -3110,6 +3136,10 @@ static void test_finite_group_methods_all_constructors(void) {
     check_finite_group_methods(genericDihedral, "constructGroup GROUP_DIHEDRAL");
     freeGroup(genericDihedral);
 
+    Group* genericQ8 = constructGroup(GROUP_Q8, NULL);
+    check_finite_group_methods(genericQ8, "constructGroup GROUP_Q8");
+    freeGroup(genericQ8);
+
     Group* productZ2 = constructZnGroup(2);
     Group* productZ3 = constructZnGroup(3);
     Group* productFactors[] = {productZ2, productZ3};
@@ -3122,7 +3152,7 @@ static void test_finite_group_methods_all_constructors(void) {
 
     Group* quotientAmbient = constructSymmetricGroup(3);
     SubGroup* quotientNormal = commutatorSubgroup(quotientAmbient);
-    QuotientGroupData quotientData = {quotientAmbient, quotientNormal};
+    QuotientGroupData quotientData = {.ambient = quotientAmbient, .normal = quotientNormal};
     Group* genericQuotient = constructGroup(GROUP_QUOTIENT, &quotientData);
     check_finite_group_methods(genericQuotient, "constructGroup GROUP_QUOTIENT");
     freeGroup(genericQuotient);

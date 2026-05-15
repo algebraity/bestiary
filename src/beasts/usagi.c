@@ -85,12 +85,16 @@ static void freeGroupData(Group* group) {
         case GROUP_PRODUCT:
             free(group->data.product.factors);
             break;
+        case GROUP_QUOTIENT:
+            free(group->data.quotient.normalIndices);
+            free(group->data.quotient.representativeIndices);
+            break;
         case GROUP_ZN:
         case GROUP_Z:
         case GROUP_SYMMETRIC:
         case GROUP_ALTERNATING:
         case GROUP_DIHEDRAL:
-        case GROUP_QUOTIENT:
+        case GROUP_Q8:
         case GROUP_MATRIX:
             break;
     }
@@ -311,6 +315,43 @@ static long long normalizeMod(long long value, long long modulus) {
     return result;
 }
 
+static const char* q8ReprFromIndex(int index) {
+    static const char* reprs[] = {"1", "-1", "i", "-i", "j", "-j", "k", "-k"};
+    if (index < 0 || index >= 8) return NULL;
+    return reprs[index];
+}
+
+static int q8IndexFromSignedBasis(int sign, int basis) {
+    if (basis < 0 || basis > 3) return -1;
+    return 2 * basis + (sign < 0 ? 1 : 0);
+}
+
+static int q8BasisProduct(int left, int right, int* sign) {
+    if (!sign || left < 0 || left > 3 || right < 0 || right > 3) return -1;
+
+    if (left == 0) return right;
+    if (right == 0) return left;
+    if (left == right) {
+        *sign = -*sign;
+        return 0;
+    }
+
+    if ((left == 1 && right == 2) || (left == 2 && right == 3) || (left == 3 && right == 1)) {
+        return 6 - left - right;
+    }
+
+    *sign = -*sign;
+    return 6 - left - right;
+}
+
+static int q8MultIndex(int left, int right) {
+    if (left < 0 || left >= 8 || right < 0 || right >= 8) return -1;
+
+    int sign = ((left % 2) ? -1 : 1) * ((right % 2) ? -1 : 1);
+    int basis = q8BasisProduct(left / 2, right / 2, &sign);
+    return q8IndexFromSignedBasis(sign, basis);
+}
+
 static GroupElement* allocateGroupElement(Group* group, GroupElementType type, int index, const char* repr) {
     if (!repr || repr[0] == '\0') return NULL;
 
@@ -497,6 +538,20 @@ static GroupElement* constructDihedralGroupElement(Group* group, void* data) {
     return element;
 }
 
+static GroupElement* constructQ8GroupElement(Group* group, void* data) {
+    if (!group || !data) return NULL;
+
+    int index = *(int*)data;
+    const char* repr = q8ReprFromIndex(index);
+    if (!repr) return NULL;
+
+    GroupElement* element = allocateGroupElement(group, GROUP_ELEM_INDEXED, index, repr);
+    if (!element) return NULL;
+
+    element->data.indexValue = index;
+    return element;
+}
+
 static GroupElement* constructProductGroupElement(Group* group, void* data) {
     if (!group || !data) return NULL;
 
@@ -540,7 +595,16 @@ static GroupElement* constructProductGroupElement(Group* group, void* data) {
 }
 
 static GroupElement* constructQuotientGroupElement(Group* group, void* data) {
-    return constructCayleyGroupElement(group, data);
+    if (!group || !data || !group->isFinite || !group->elements) return NULL;
+
+    int index = *(int*)data;
+    if (index < 0 || (size_t)index >= group->card || !group->elements[index]) return NULL;
+
+    GroupElement* element = allocateGroupElement(group, GROUP_ELEM_INDEXED, index, group->elements[index]->repr);
+    if (!element) return NULL;
+
+    element->data.indexValue = group->elements[index]->data.indexValue;
+    return element;
 }
 
 static GroupElement* constructMatrixGroupElement(Group* group, void* data) {
@@ -844,6 +908,8 @@ GroupElement* constructGroupElement(Group* group, void* data) {
             return constructAlternatingGroupElement(group, data);
         case GROUP_DIHEDRAL:
             return constructDihedralGroupElement(group, data);
+        case GROUP_Q8:
+            return constructQ8GroupElement(group, data);
         case GROUP_PRODUCT:
             return constructProductGroupElement(group, data);
         case GROUP_QUOTIENT:
@@ -891,6 +957,8 @@ Group* constructGroup(GroupType type, void* data) {
             DihedralGroupData* dihedralData = data;
             return constructDihedralGroup((int)dihedralData->n);
         }
+        case GROUP_Q8:
+            return constructQ8();
         case GROUP_PRODUCT: {
             if (!data) return NULL;
             ProductGroupData* productData = data;
@@ -1606,68 +1674,25 @@ Group* constructDihedralGroup(int n) {
 Group* constructQ8(void) {
     int card = 8;
 
-    const char* reprs[] = {"1", "-1", "i", "-i", "j", "-j", "k", "-k"};
+    Group* G = calloc(1, sizeof(Group));
+    if (!G) return NULL;
+    G->type = GROUP_Q8;
+    G->card = (size_t)card;
+    G->isFinite = true;
+    G->elements = calloc((size_t)card, sizeof(GroupElement*));
+    if (!G->elements) {
+        free(G);
+        return NULL;
+    }
 
-    GroupElement** elements = malloc(card * sizeof(GroupElement*));
-    if (!elements) return NULL;
     for (int i = 0; i < card; i++) {
-        elements[i] = constructGroupElement(NULL, (char*)reprs[i]);
-        if (!elements[i]) {
-            for (int j = 0; j < i; j++) freeGroupElement(elements[j]);
-            free(elements);
+        G->elements[i] = constructGroupElement(G, &i);
+        if (!G->elements[i]) {
+            freeGroup(G);
             return NULL;
         }
+        G->elements[i]->index = i;
     }
-
-    // Build the Cayley table
-    int neg[] = {1, 0, 3, 2, 5, 4, 7, 6};
-
-    // Multiplication by i,j,k on each basis element (from the left)
-    int imult[] = {2, 3, 1, 0, 6, 7, 5, 4};
-    int jmult[] = {4, 5, 7, 6, 1, 0, 2, 3};
-    int kmult[] = {6, 7, 4, 5, 3, 2, 1, 0};
-
-    int** table = malloc(card * sizeof(int*));
-    if (!table) {
-        for (int i = 0; i < card; i++) freeGroupElement(elements[i]);
-        free(elements);
-        return NULL;
-    }
-    for (int a = 0; a < card; a++) {
-        table[a] = malloc(card * sizeof(int));
-        if (!table[a]) {
-            for (int j = 0; j < a; j++) free(table[j]);
-            free(table);
-            for (int j = 0; j < card; j++) freeGroupElement(elements[j]);
-            free(elements);
-            return NULL;
-        }
-        for (int b = 0; b < card; b++) {
-            switch (a) {
-                case 0: table[a][b] = b;              break;
-                case 1: table[a][b] = neg[b];         break;
-                case 2: table[a][b] = imult[b];       break;
-                case 3: table[a][b] = neg[imult[b]];  break;
-                case 4: table[a][b] = jmult[b];       break;
-                case 5: table[a][b] = neg[jmult[b]];  break;
-                case 6: table[a][b] = kmult[b];       break;
-                case 7: table[a][b] = neg[kmult[b]];  break;
-            }
-        }
-    }
-
-    // Construct the group
-    Group* G = constructTableGroupSkipValidate(elements, table, card);
-    if (!G) {
-        for (int i = 0; i < card; i++) {
-            freeGroupElement(elements[i]);
-            free(table[i]);
-        }
-        free(elements);
-        free(table);
-        return NULL;
-    }
-    for (int i = 0; i < card; i++) elements[i]->group = G;
 
     return G;
 }
@@ -1800,6 +1825,28 @@ Ring* constructFiniteField(int p, int k) {
     }
 
 	return R;
+}
+
+// Construct the finite field of order q when q is a prime power
+Ring* constructFiniteFieldOfOrder(int q) {
+    if (q < 2) return NULL;
+    if (isPrime(q)) return constructFiniteField(q, 1);
+
+    for (int p = 2; p <= q / p; p++) {
+        if (q % p != 0) continue;
+        if (!isPrime(p)) return NULL;
+
+        int degree = 0;
+        int remaining = q;
+        while (remaining % p == 0) {
+            remaining /= p;
+            degree++;
+        }
+        if (remaining == 1) return constructFiniteField(p, degree);
+        return NULL;
+    }
+
+    return NULL;
 }
 
 // Construct the additive group of a Ring
@@ -2232,6 +2279,13 @@ static GroupElement* dihedralGroupMult(GroupElement* g, GroupElement* h) {
     return canonicalGroupElement(g->group, constructGroupElement(g->group, &value));
 }
 
+static GroupElement* q8GroupMult(GroupElement* g, GroupElement* h) {
+    int index = q8MultIndex(g->index, h->index);
+    if (index < 0) return NULL;
+
+    return g->group->elements[index];
+}
+
 static GroupElement* productGroupMult(GroupElement* g, GroupElement* h) {
     if (g->data.product.count != h->data.product.count) return NULL;
 
@@ -2251,6 +2305,43 @@ static GroupElement* productGroupMult(GroupElement* g, GroupElement* h) {
     GroupElement* product = constructGroupElement(g->group, &data);
     free(factors);
     return canonicalGroupElement(g->group, product);
+}
+
+static int quotientGroupElementIndexForAmbientElement(Group* quotient, GroupElement* element) {
+    if (!quotient || quotient->type != GROUP_QUOTIENT || !element) return -1;
+
+    Group* ambient = quotient->data.quotient.ambient;
+    if (!ambient || element->group != ambient || element->index < 0) return -1;
+    if (!quotient->data.quotient.representativeIndices || !quotient->data.quotient.normalIndices) return -1;
+
+    for (size_t i = 0; i < quotient->card; i++) {
+        int repIndex = quotient->data.quotient.representativeIndices[i];
+        if (repIndex < 0 || (size_t)repIndex >= ambient->card) return -1;
+        for (size_t j = 0; j < quotient->data.quotient.normalCard; j++) {
+            int normalIndex = quotient->data.quotient.normalIndices[j];
+            if (normalIndex < 0 || (size_t)normalIndex >= ambient->card) return -1;
+            GroupElement* candidate = groupMult(ambient->elements[repIndex], ambient->elements[normalIndex]);
+            if (candidate && candidate->index == element->index) return (int)i;
+        }
+    }
+
+    return -1;
+}
+
+static GroupElement* quotientGroupMult(GroupElement* g, GroupElement* h) {
+    Group* quotient = g->group;
+    Group* ambient = quotient->data.quotient.ambient;
+    if (!ambient || !quotient->data.quotient.representativeIndices) return NULL;
+
+    int leftRep = g->data.indexValue;
+    int rightRep = h->data.indexValue;
+    if (leftRep < 0 || rightRep < 0 || (size_t)leftRep >= ambient->card || (size_t)rightRep >= ambient->card) return NULL;
+
+    GroupElement* ambientProduct = groupMult(ambient->elements[leftRep], ambient->elements[rightRep]);
+    int index = quotientGroupElementIndexForAmbientElement(quotient, ambientProduct);
+    if (index < 0) return NULL;
+
+    return quotient->elements[index];
 }
 
 static GroupElement* matrixGroupMult(GroupElement* g, GroupElement* h) {
@@ -2377,10 +2468,12 @@ GroupElement* groupMult(GroupElement* g, GroupElement* h) {
             return permutationGroupMult(g, h);
         case GROUP_DIHEDRAL:
             return dihedralGroupMult(g, h);
+        case GROUP_Q8:
+            return q8GroupMult(g, h);
         case GROUP_PRODUCT:
             return productGroupMult(g, h);
         case GROUP_QUOTIENT:
-            return cayleyGroupMult(g, h);
+            return quotientGroupMult(g, h);
         case GROUP_MATRIX:
             return matrixGroupMult(g, h);
     }
@@ -3714,101 +3807,59 @@ Group* quotientGroup(Group* G, SubGroup* N) {
 	if (!cosetList) return NULL;
 	int numCosets = G->card / N->card;
 
-	// calloc so uninitialized slots are NULL — safe to freeGroupElement in cleanup
-	GroupElement** elements = calloc(numCosets, sizeof(GroupElement*));
-	if (!elements) {
+	Group* Q = calloc(1, sizeof(Group));
+	if (!Q) {
 		for (int j = 0; j < numCosets; j++) freeGroupCoset(cosetList[j]);
 		free(cosetList);
 		return NULL;
 	}
+	Q->type = GROUP_QUOTIENT;
+	Q->card = (size_t)numCosets;
+	Q->isFinite = true;
+	Q->data.quotient.ambient = G;
+	Q->data.quotient.normal = NULL;
+	Q->data.quotient.normalCard = N->card;
+	Q->data.quotient.quotientCard = (size_t)numCosets;
+	Q->data.quotient.normalIndices = malloc(N->card * sizeof(int));
+	Q->data.quotient.representativeIndices = malloc((size_t)numCosets * sizeof(int));
+	Q->elements = calloc((size_t)numCosets, sizeof(GroupElement*));
+	if (!Q->data.quotient.normalIndices || !Q->data.quotient.representativeIndices || !Q->elements) {
+		for (int j = 0; j < numCosets; j++) freeGroupCoset(cosetList[j]);
+		free(cosetList);
+		freeGroup(Q);
+		return NULL;
+	}
 
-	// Generate the representatives for the quotient group
+	for (size_t i = 0; i < N->card; i++) Q->data.quotient.normalIndices[i] = N->data.indexed.indices[i];
+
 	for (int i = 0; i < numCosets; i++) {
-		char* repr = malloc(32 * sizeof(char));
+		int repIndex = cosetList[i]->data.indexed.indices[0];
+		Q->data.quotient.representativeIndices[i] = repIndex;
+
+		const char* repRepr = G->elements[repIndex]->repr;
+		size_t reprLen = strlen(repRepr) + 2;
+		char* repr = malloc(reprLen);
 		if (!repr) {
-			for (int j = 0; j < i; j++) freeGroupElement(elements[j]);
-			free(elements);
 			for (int j = 0; j < numCosets; j++) freeGroupCoset(cosetList[j]);
 			free(cosetList);
+			freeGroup(Q);
 			return NULL;
 		}
-		snprintf(repr, 32, "%sN", G->elements[cosetList[i]->data.indexed.indices[0]]->repr);
-		elements[i] = constructGroupElement(NULL, repr);
+		snprintf(repr, reprLen, "%sN", repRepr);
+		Q->elements[i] = allocateGroupElement(Q, GROUP_ELEM_INDEXED, i, repr);
 		free(repr);
-		if (!elements[i]) {
-			for (int j = 0; j < i; j++) freeGroupElement(elements[j]);
-			free(elements);
+		if (!Q->elements[i]) {
 			for (int j = 0; j < numCosets; j++) freeGroupCoset(cosetList[j]);
 			free(cosetList);
+			freeGroup(Q);
 			return NULL;
 		}
-	}
-
-	// Generate the multiplication table for the quotient group
-	int** table = malloc(numCosets * sizeof(int*));
-	if (!table) {
-		for (int j = 0; j < numCosets; j++) freeGroupElement(elements[j]);
-		free(elements);
-		for (int j = 0; j < numCosets; j++) freeGroupCoset(cosetList[j]);
-		free(cosetList);
-		return NULL;
-	}
-	for (int i = 0; i < numCosets; i++) {
-		table[i] = malloc(numCosets * sizeof(int));
-		if (!table[i]) {
-			for (int j = 0; j < i; j++) free(table[j]);
-			free(table);
-			for (int j = 0; j < numCosets; j++) freeGroupElement(elements[j]);
-			free(elements);
-			for (int j = 0; j < numCosets; j++) freeGroupCoset(cosetList[j]);
-			free(cosetList);
-			return NULL;
-		}
-		for (int j = 0; j < numCosets; j++) {
-			GroupElement* prod = groupMult(G->elements[cosetList[i]->data.indexed.indices[0]], G->elements[cosetList[j]->data.indexed.indices[0]]);
-			if (!prod || prod->index < 0 || (size_t)prod->index >= G->card) {
-				for (int k = 0; k <= i; k++) free(table[k]);
-				free(table);
-				for (int k = 0; k < numCosets; k++) freeGroupElement(elements[k]);
-				free(elements);
-				for (int k = 0; k < numCosets; k++) freeGroupCoset(cosetList[k]);
-				free(cosetList);
-				return NULL;
-			}
-			bool found = false;
-			for (int k = 0; k < numCosets; k++) {
-				if (isInGroupCoset(cosetList[k], prod)) {
-					table[i][j] = k;
-					found = true;
-					break;
-				}
-			}
-			if (!found) {
-				for (int k = 0; k <= i; k++) free(table[k]);
-				free(table);
-				for (int k = 0; k < numCosets; k++) freeGroupElement(elements[k]);
-				free(elements);
-				for (int k = 0; k < numCosets; k++) freeGroupCoset(cosetList[k]);
-				free(cosetList);
-				return NULL;
-			}
-		}
+		Q->elements[i]->data.indexValue = repIndex;
 	}
 
 	for (int j = 0; j < numCosets; j++) freeGroupCoset(cosetList[j]);
 	free(cosetList);
-	Group* H = constructTableGroupSkipValidate(elements, table, numCosets);
-	if (!H) {
-		for (int i = 0; i < numCosets; i++) {
-			freeGroupElement(elements[i]);
-			free(table[i]);
-		}
-		free(elements);
-		free(table);
-		return NULL;
-	}
-	for (int i = 0; i < numCosets; i++) elements[i]->group = H;
-	return H;
+	return Q;
 }
 
 /* ---------- Product groups ---------- */

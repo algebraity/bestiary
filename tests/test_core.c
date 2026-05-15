@@ -1125,6 +1125,38 @@ static void testCompoundAssignments(void) {
     evalCtxFree(ctx);
 }
 
+static void testUsagiCommands(void) {
+    SECTION("USAGI commands");
+    EvalContext* ctx = evalCtxNew();
+
+    Value out = evalLine(ctx, "F = \\FFRing{2}{3}; \\cardinality{F}");
+    CHECK(out.kind == VAL_INT && out.as.i == 8, "FFRing p,n form constructs F_8");
+    valFree(out);
+
+    out = evalLine(ctx, "K = \\FFRing{2^3}; \\cardinality{K}");
+    CHECK(out.kind == VAL_INT && out.as.i == 8, "FFRing prime-power form constructs F_8");
+    valFree(out);
+
+    out = evalLine(ctx, "\\FFRing{12}");
+    CHECK(out.kind == VAL_ERROR, "FFRing rejects non-prime-power orders");
+    valFree(out);
+
+    out = evalLine(ctx, "G = \\Q8; H = \\groupCenter{G}; Q = G / H; \\cardinality{Q}");
+    CHECK(out.kind == VAL_INT && out.as.i == 4, "Q8 quotient command constructs order-4 quotient");
+    valFree(out);
+
+    out = evalLine(ctx, "\\isCommutativeGroup{Q}");
+    CHECK(out.kind == VAL_BOOL && out.as.b, "Q8 center quotient is commutative");
+    valFree(out);
+
+    out = evalLine(ctx, "\\help{FFRing}");
+    CHECK(out.kind == VAL_STRING && strstr(out.as.str, "prime-power") != NULL,
+          "help documents FFRing forms");
+    valFree(out);
+
+    evalCtxFree(ctx);
+}
+
 #if 0
 static void testQuaternionicCommands(void) {
     SECTION("Quaternionic commands");
@@ -1434,6 +1466,7 @@ int main(void) {
     testPrintCommand();
     testLoops();
     testCompoundAssignments();
+    testUsagiCommands();
     testUserFunctions();
 
     printf("\nCore tests: %d/%d passed\n", testsPassed, testsRun);

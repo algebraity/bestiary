@@ -113,6 +113,7 @@ static constexpr Section kSections[] = {
         "USAGI (group and ring theory)",
         "USAGI: Utility Suite for Algebra and Group Invariants",
         "* define a group and ring: `G = \\ZnGroup{6}` and `R = \\ZnRing{12}`\n"
+        "* define a finite field ring: `F = \\FFRing{2}{3}` or `F = \\FFRing{2^3}`\n"
         "* define elements: `g = \\getElement{G,\"2\"}` and `a = \\getElement{R,\"4\"}`\n"
         "* define a subgroup: `H = \\subgroupGeneratedBy{G,g}`\n"
         "* define a subring and ideals: `S = \\subring{a}`, `I = \\leftIdeal{a}`, and `J = \\rightIdeal{a}`\n"
@@ -467,6 +468,7 @@ static constexpr Command kCommands[] = {
     HELP_CMD("ZnProductRing", 1, Beast::Usagi, "Constructs a direct product of modular rings.", "Vector of integer moduli, each >= 1", "Ring"),
     HELP_CMD("primeField", 1, Beast::Usagi, "Constructs the prime finite field F_p.", "prime Int p >= 2", "Ring"),
     HELP_CMD("finiteField", 2, Beast::Usagi, "Constructs a finite field F_{p^k}.", "prime Int p >= 2 and Int k >= 0", "Ring"),
+    HELP_CMD("FFRing", -1, Beast::Usagi, "Constructs a finite field ring F_{p^n}.", "prime-power Int q >= 2, or prime Int p >= 2 and Int n >= 0", "Ring"),
     HELP_CMD("addGroup", 1, Beast::Usagi, "Constructs the additive group of a ring.", "Ring", "Group"),
     HELP_CMD("unitGroup", 1, Beast::Usagi, "Constructs the multiplicative unit group of a ring.", "Ring with multiplicative identity", "Group"),
     HELP_CMD("Q8", 0, Beast::Usagi, "Constructs the quaternion group Q8.", "no values", "Group"),
