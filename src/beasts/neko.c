@@ -523,6 +523,73 @@ long double nekoEvalExpr2D(const NekoExpr* expr, const char* xvar, long double x
     return NAN;
 }
 
+// Evaluate an expression numerically at three variable values
+long double nekoEvalExpr3D(const NekoExpr* expr, const char* xvar, long double x,
+                           const char* yvar, long double y,
+                           const char* zvar, long double z) {
+    // Invalid expressions evaluate to NAN
+    if (!expr) return NAN;
+
+    // Dispatch recursively according to expression kind
+    switch (expr->kind) {
+        case NEKO_EXPR_CONST:
+            return expr->as.constant;
+        case NEKO_EXPR_VAR:
+            if (expr->as.var && xvar && strcmp(expr->as.var, xvar) == 0) return x;
+            if (expr->as.var && yvar && strcmp(expr->as.var, yvar) == 0) return y;
+            if (expr->as.var && zvar && strcmp(expr->as.var, zvar) == 0) return z;
+            return NAN;
+        case NEKO_EXPR_ADD:
+            return nekoEvalExpr3D(expr->as.binary.lhs, xvar, x, yvar, y, zvar, z)
+                 + nekoEvalExpr3D(expr->as.binary.rhs, xvar, x, yvar, y, zvar, z);
+        case NEKO_EXPR_SUB:
+            return nekoEvalExpr3D(expr->as.binary.lhs, xvar, x, yvar, y, zvar, z)
+                 - nekoEvalExpr3D(expr->as.binary.rhs, xvar, x, yvar, y, zvar, z);
+        case NEKO_EXPR_MUL:
+            return nekoEvalExpr3D(expr->as.binary.lhs, xvar, x, yvar, y, zvar, z)
+                 * nekoEvalExpr3D(expr->as.binary.rhs, xvar, x, yvar, y, zvar, z);
+        case NEKO_EXPR_DIV:
+            return nekoEvalExpr3D(expr->as.binary.lhs, xvar, x, yvar, y, zvar, z)
+                 / nekoEvalExpr3D(expr->as.binary.rhs, xvar, x, yvar, y, zvar, z);
+        case NEKO_EXPR_POW:
+            return powl(nekoEvalExpr3D(expr->as.binary.lhs, xvar, x, yvar, y, zvar, z),
+                        nekoEvalExpr3D(expr->as.binary.rhs, xvar, x, yvar, y, zvar, z));
+        case NEKO_EXPR_NEG:
+            return -nekoEvalExpr3D(expr->as.unary.arg, xvar, x, yvar, y, zvar, z);
+        case NEKO_EXPR_SIN:
+            return sinl(nekoEvalExpr3D(expr->as.unary.arg, xvar, x, yvar, y, zvar, z));
+        case NEKO_EXPR_COS:
+            return cosl(nekoEvalExpr3D(expr->as.unary.arg, xvar, x, yvar, y, zvar, z));
+        case NEKO_EXPR_TAN:
+            return tanl(nekoEvalExpr3D(expr->as.unary.arg, xvar, x, yvar, y, zvar, z));
+        case NEKO_EXPR_ASIN:
+            return asinl(nekoEvalExpr3D(expr->as.unary.arg, xvar, x, yvar, y, zvar, z));
+        case NEKO_EXPR_ACOS:
+            return acosl(nekoEvalExpr3D(expr->as.unary.arg, xvar, x, yvar, y, zvar, z));
+        case NEKO_EXPR_ATAN:
+            return atanl(nekoEvalExpr3D(expr->as.unary.arg, xvar, x, yvar, y, zvar, z));
+        case NEKO_EXPR_EXP:
+            return expl(nekoEvalExpr3D(expr->as.unary.arg, xvar, x, yvar, y, zvar, z));
+        case NEKO_EXPR_LOG:
+            return logl(nekoEvalExpr3D(expr->as.unary.arg, xvar, x, yvar, y, zvar, z));
+        case NEKO_EXPR_SQRT:
+            return sqrtl(nekoEvalExpr3D(expr->as.unary.arg, xvar, x, yvar, y, zvar, z));
+        case NEKO_EXPR_ABS:
+            return fabsl(nekoEvalExpr3D(expr->as.unary.arg, xvar, x, yvar, y, zvar, z));
+        case NEKO_EXPR_ERF:
+            return realErf(nekoEvalExpr3D(expr->as.unary.arg, xvar, x, yvar, y, zvar, z));
+        case NEKO_EXPR_EI:
+            return realEi(nekoEvalExpr3D(expr->as.unary.arg, xvar, x, yvar, y, zvar, z));
+        case NEKO_EXPR_STEP: {
+            long double v = nekoEvalExpr3D(expr->as.unary.arg, xvar, x, yvar, y, zvar, z);
+            return v >= 0.0L ? 1.0L : 0.0L;
+        }
+        case NEKO_EXPR_CALL:
+            return NAN;
+    }
+    return NAN;
+}
+
 // Sample an explicit graph y = f(x) over an interval
 NekoExplicitGraphSample nekoSampleExplicitGraph(const NekoExpr* expr, long double xmin, long double xmax, size_t samples) {
     NekoExplicitGraphSample out = { .status = NEKO_OK, .points = NULL, .count = 0 };
@@ -692,6 +759,250 @@ NekoImplicitGraphSample nekoSampleImplicitGraph(const NekoExpr* expr, long doubl
     return out;
 }
 
+// Sample an explicit surface z = f(x, yvar) over a rectangle
+NekoExplicitGraph3DSample nekoSampleExplicitGraph3D(const NekoExpr* expr, const char* yvar,
+                                                   long double xmin, long double xmax,
+                                                   long double ymin, long double ymax,
+                                                   size_t xsamples, size_t ysamples) {
+    NekoExplicitGraph3DSample out = { .status = NEKO_OK, .points = NULL, .xcount = 0, .ycount = 0 };
+
+    // Validate the expression, viewport, and grid size
+    if (!expr || !isfinite(xmin) || !isfinite(xmax) || !isfinite(ymin) || !isfinite(ymax)
+            || xmin == xmax || ymin == ymax || xsamples < 2 || ysamples < 2) {
+        out.status = NEKO_ERR_INVALID_ARG;
+        return out;
+    }
+
+    // Allocate the regular surface grid
+    size_t total = 0;
+    if (!checkedSizeMul(xsamples, ysamples, &total)) {
+        out.status = NEKO_ERR_INVALID_ARG;
+        return out;
+    }
+    out.points = calloc(total, sizeof(NekoGraphPoint3D));
+    if (!out.points) {
+        out.status = NEKO_ERR_INVALID_ARG;
+        return out;
+    }
+    out.xcount = xsamples;
+    out.ycount = ysamples;
+
+    // Evaluate the expression on an evenly spaced grid
+    const char* secondVar = yvar && *yvar ? yvar : "y";
+    long double hx = (xmax - xmin) / (long double)(xsamples - 1);
+    long double hy = (ymax - ymin) / (long double)(ysamples - 1);
+    for (size_t j = 0; j < ysamples; j++) {
+        long double y = ymin + (long double)j * hy;
+        for (size_t i = 0; i < xsamples; i++) {
+            long double x = xmin + (long double)i * hx;
+            long double z = nekoEvalExpr2D(expr, "x", x, secondVar, y);
+            out.points[j * xsamples + i] = (NekoGraphPoint3D){
+                .x = x, .y = y, .z = z, .valid = isfinite(z)
+            };
+        }
+    }
+    return out;
+}
+
+// Append a triangle to an implicit 3D graph sample
+static bool graphTrianglePush(NekoImplicitGraph3DSample* sample, size_t* cap, NekoGraphTriangle3D triangle) {
+    // Reject missing sample storage
+    if (!sample || !cap) return false;
+
+    // Grow the triangle buffer when it is full
+    if (sample->count == *cap) {
+        size_t nextCap = *cap ? *cap * 2 : 128;
+        NekoGraphTriangle3D* next = realloc(sample->triangles, nextCap * sizeof(NekoGraphTriangle3D));
+        if (!next) return false;
+        sample->triangles = next;
+        *cap = nextCap;
+    }
+
+    // Store the new triangle
+    sample->triangles[sample->count++] = triangle;
+    return true;
+}
+
+// Interpolate a zero crossing along a 3D cell edge
+static NekoGraphPoint3D graphEdgePoint3D(NekoGraphPoint3D a, long double va,
+                                         NekoGraphPoint3D b, long double vb) {
+    // Use linear interpolation, with a midpoint fallback for nearly equal values
+    long double denom = va - vb;
+    long double t = fabsl(denom) > 1e-18L ? va / denom : 0.5L;
+    if (!isfinite(t)) t = 0.5L;
+    if (t < 0.0L) t = 0.0L;
+    if (t > 1.0L) t = 1.0L;
+
+    // Return the interpolated point on the edge
+    return (NekoGraphPoint3D){
+        .x = a.x + t * (b.x - a.x),
+        .y = a.y + t * (b.y - a.y),
+        .z = a.z + t * (b.z - a.z),
+        .valid = true
+    };
+}
+
+// Test whether two 3D points are too close to make a stable triangle edge
+static bool graphPoint3DClose(NekoGraphPoint3D a, NekoGraphPoint3D b) {
+    return fabsl(a.x - b.x) < 1e-12L
+        && fabsl(a.y - b.y) < 1e-12L
+        && fabsl(a.z - b.z) < 1e-12L;
+}
+
+// Append one nondegenerate triangle
+static bool graphTrianglePushChecked(NekoImplicitGraph3DSample* out, size_t* cap,
+                                     NekoGraphPoint3D a, NekoGraphPoint3D b, NekoGraphPoint3D c) {
+    if (graphPoint3DClose(a, b) || graphPoint3DClose(a, c) || graphPoint3DClose(b, c)) return true;
+    return graphTrianglePush(out, cap, (NekoGraphTriangle3D){ .a = a, .b = b, .c = c });
+}
+
+// Add zero-surface triangles for one tetrahedron
+static bool sampleImplicitTetra3D(NekoImplicitGraph3DSample* out, size_t* cap,
+                                  const NekoGraphPoint3D* p, const long double* v) {
+    static const int edges[6][2] = {
+        {0, 1}, {0, 2}, {0, 3}, {1, 2}, {1, 3}, {2, 3}
+    };
+    NekoGraphPoint3D cuts[4];
+    int count = 0;
+
+    // Skip tetrahedra with any nonfinite corner
+    for (int i = 0; i < 4; i++) {
+        if (!isfinite(v[i])) return true;
+    }
+
+    // Collect strict sign-crossing edge intersections
+    for (int i = 0; i < 6; i++) {
+        int a = edges[i][0];
+        int b = edges[i][1];
+        if ((v[a] < 0.0L && v[b] > 0.0L) || (v[a] > 0.0L && v[b] < 0.0L)) {
+            if (count < 4) cuts[count++] = graphEdgePoint3D(p[a], v[a], p[b], v[b]);
+        }
+    }
+
+    // Marching tetrahedra produces either one triangle or one quad split in two
+    if (count == 3) {
+        return graphTrianglePushChecked(out, cap, cuts[0], cuts[1], cuts[2]);
+    }
+    if (count == 4) {
+        return graphTrianglePushChecked(out, cap, cuts[0], cuts[1], cuts[2])
+            && graphTrianglePushChecked(out, cap, cuts[0], cuts[2], cuts[3]);
+    }
+    return true;
+}
+
+// Sample an implicit surface F(x, y, z) = 0 over a box
+NekoImplicitGraph3DSample nekoSampleImplicitGraph3D(const NekoExpr* expr,
+                                                   long double xmin, long double xmax,
+                                                   long double ymin, long double ymax,
+                                                   long double zmin, long double zmax,
+                                                   size_t xsteps, size_t ysteps, size_t zsteps) {
+    NekoImplicitGraph3DSample out = { .status = NEKO_OK, .triangles = NULL, .count = 0 };
+
+    // Validate the expression, viewport, and grid size
+    if (!expr || !isfinite(xmin) || !isfinite(xmax) || !isfinite(ymin) || !isfinite(ymax)
+            || !isfinite(zmin) || !isfinite(zmax) || xmin == xmax || ymin == ymax || zmin == zmax
+            || xsteps < 2 || ysteps < 2 || zsteps < 2) {
+        out.status = NEKO_ERR_INVALID_ARG;
+        return out;
+    }
+
+    // Allocate the sampled scalar field
+    size_t nx = xsteps + 1;
+    size_t ny = ysteps + 1;
+    size_t nz = zsteps + 1;
+    size_t xy = 0;
+    size_t total = 0;
+    if (!checkedSizeMul(nx, ny, &xy) || !checkedSizeMul(xy, nz, &total)) {
+        out.status = NEKO_ERR_INVALID_ARG;
+        return out;
+    }
+    long double* values = malloc(total * sizeof(long double));
+    if (!values) {
+        out.status = NEKO_ERR_INVALID_ARG;
+        return out;
+    }
+
+    // Evaluate F(x, y, z) at each grid point
+    long double hx = (xmax - xmin) / (long double)xsteps;
+    long double hy = (ymax - ymin) / (long double)ysteps;
+    long double hz = (zmax - zmin) / (long double)zsteps;
+    for (size_t k = 0; k < nz; k++) {
+        long double z = zmin + (long double)k * hz;
+        for (size_t j = 0; j < ny; j++) {
+            long double y = ymin + (long double)j * hy;
+            for (size_t i = 0; i < nx; i++) {
+                long double x = xmin + (long double)i * hx;
+                long double value = nekoEvalExpr3D(expr, "x", x, "y", y, "z", z);
+                if (isfinite(value) && fabsl(value) < 1e-18L) value = 1e-18L;
+                values[(k * ny + j) * nx + i] = value;
+            }
+        }
+    }
+
+    // Run marching tetrahedra through each grid cell
+    static const int tets[6][4] = {
+        {0, 5, 1, 6},
+        {0, 1, 2, 6},
+        {0, 2, 3, 6},
+        {0, 3, 7, 6},
+        {0, 7, 4, 6},
+        {0, 4, 5, 6}
+    };
+    size_t cap = 0;
+    for (size_t k = 0; k < zsteps; k++) {
+        long double z0 = zmin + (long double)k * hz;
+        long double z1 = z0 + hz;
+        for (size_t j = 0; j < ysteps; j++) {
+            long double y0 = ymin + (long double)j * hy;
+            long double y1 = y0 + hy;
+            for (size_t i = 0; i < xsteps; i++) {
+                long double x0 = xmin + (long double)i * hx;
+                long double x1 = x0 + hx;
+                NekoGraphPoint3D corners[8] = {
+                    { .x = x0, .y = y0, .z = z0, .valid = true },
+                    { .x = x1, .y = y0, .z = z0, .valid = true },
+                    { .x = x1, .y = y1, .z = z0, .valid = true },
+                    { .x = x0, .y = y1, .z = z0, .valid = true },
+                    { .x = x0, .y = y0, .z = z1, .valid = true },
+                    { .x = x1, .y = y0, .z = z1, .valid = true },
+                    { .x = x1, .y = y1, .z = z1, .valid = true },
+                    { .x = x0, .y = y1, .z = z1, .valid = true }
+                };
+                long double cv[8] = {
+                    values[(k * ny + j) * nx + i],
+                    values[(k * ny + j) * nx + i + 1],
+                    values[(k * ny + j + 1) * nx + i + 1],
+                    values[(k * ny + j + 1) * nx + i],
+                    values[((k + 1) * ny + j) * nx + i],
+                    values[((k + 1) * ny + j) * nx + i + 1],
+                    values[((k + 1) * ny + j + 1) * nx + i + 1],
+                    values[((k + 1) * ny + j + 1) * nx + i]
+                };
+                for (int t = 0; t < 6; t++) {
+                    NekoGraphPoint3D tp[4];
+                    long double tv[4];
+                    for (int m = 0; m < 4; m++) {
+                        tp[m] = corners[tets[t][m]];
+                        tv[m] = cv[tets[t][m]];
+                    }
+                    if (!sampleImplicitTetra3D(&out, &cap, tp, tv)) {
+                        free(values);
+                        free(out.triangles);
+                        out.triangles = NULL;
+                        out.count = 0;
+                        out.status = NEKO_ERR_INVALID_ARG;
+                        return out;
+                    }
+                }
+            }
+        }
+    }
+
+    // Release the temporary scalar field
+    free(values);
+    return out;
+}
+
 // Free explicit graph sample storage
 void nekoFreeExplicitGraphSample(NekoExplicitGraphSample sample) {
     // Release the owned point array
@@ -702,6 +1013,18 @@ void nekoFreeExplicitGraphSample(NekoExplicitGraphSample sample) {
 void nekoFreeImplicitGraphSample(NekoImplicitGraphSample sample) {
     // Release the owned segment array
     free(sample.segments);
+}
+
+// Free explicit 3D graph sample storage
+void nekoFreeExplicitGraph3DSample(NekoExplicitGraph3DSample sample) {
+    // Release the owned point grid
+    free(sample.points);
+}
+
+// Free implicit 3D graph sample storage
+void nekoFreeImplicitGraph3DSample(NekoImplicitGraph3DSample sample) {
+    // Release the owned triangle array
+    free(sample.triangles);
 }
 
 /* ---------- Simplification ---------- */

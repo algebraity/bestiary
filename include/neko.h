@@ -156,6 +156,13 @@ typedef struct NekoGraphPoint {
     bool valid;
 } NekoGraphPoint;
 
+typedef struct NekoGraphPoint3D {
+    long double x;
+    long double y;
+    long double z;
+    bool valid;
+} NekoGraphPoint3D;
+
 typedef struct NekoGraphSegment {
     long double x1;
     long double y1;
@@ -163,17 +170,36 @@ typedef struct NekoGraphSegment {
     long double y2;
 } NekoGraphSegment;
 
+typedef struct NekoGraphTriangle3D {
+    NekoGraphPoint3D a;
+    NekoGraphPoint3D b;
+    NekoGraphPoint3D c;
+} NekoGraphTriangle3D;
+
 typedef struct NekoExplicitGraphSample {
     NekoStatus status;
     NekoGraphPoint* points;
     size_t count;
 } NekoExplicitGraphSample;
 
+typedef struct NekoExplicitGraph3DSample {
+    NekoStatus status;
+    NekoGraphPoint3D* points;
+    size_t xcount;
+    size_t ycount;
+} NekoExplicitGraph3DSample;
+
 typedef struct NekoImplicitGraphSample {
     NekoStatus status;
     NekoGraphSegment* segments;
     size_t count;
 } NekoImplicitGraphSample;
+
+typedef struct NekoImplicitGraph3DSample {
+    NekoStatus status;
+    NekoGraphTriangle3D* triangles;
+    size_t count;
+} NekoImplicitGraph3DSample;
 
 struct NekoOde {
     NekoOdeKind kind;
@@ -249,6 +275,7 @@ char* nekoSerializeExpr(const NekoExpr* expr);
 NekoExpr* nekoDeserializeExpr(const char* text);
 long double nekoEvalExpr(const NekoExpr* expr, const char* var, long double x);
 long double nekoEvalExpr2D(const NekoExpr* expr, const char* xvar, long double x, const char* yvar, long double y);
+long double nekoEvalExpr3D(const NekoExpr* expr, const char* xvar, long double x, const char* yvar, long double y, const char* zvar, long double z);
 NekoExpr* nekoSimplify(NekoExpr* expr);
 NekoDiffResult nekoDifferentiateExpr(const NekoExpr* expr, const char* var);
 NekoFunc* nekoFuncFromExpr(const NekoExpr* expr);
@@ -257,8 +284,12 @@ void nekoFreeFunc(NekoFunc* func);
 long double nekoEvalFunc(const NekoFunc* func, long double x);
 NekoExplicitGraphSample nekoSampleExplicitGraph(const NekoExpr* expr, long double xmin, long double xmax, size_t samples);
 NekoImplicitGraphSample nekoSampleImplicitGraph(const NekoExpr* expr, long double xmin, long double xmax, long double ymin, long double ymax, size_t xsteps, size_t ysteps);
+NekoExplicitGraph3DSample nekoSampleExplicitGraph3D(const NekoExpr* expr, const char* yvar, long double xmin, long double xmax, long double ymin, long double ymax, size_t xsamples, size_t ysamples);
+NekoImplicitGraph3DSample nekoSampleImplicitGraph3D(const NekoExpr* expr, long double xmin, long double xmax, long double ymin, long double ymax, long double zmin, long double zmax, size_t xsteps, size_t ysteps, size_t zsteps);
 void nekoFreeExplicitGraphSample(NekoExplicitGraphSample sample);
 void nekoFreeImplicitGraphSample(NekoImplicitGraphSample sample);
+void nekoFreeExplicitGraph3DSample(NekoExplicitGraph3DSample sample);
+void nekoFreeImplicitGraph3DSample(NekoImplicitGraph3DSample sample);
 
 /* ---------- Integration and applications ---------- */
 bool nekoCanIntegrateUSub(const NekoExpr* expr, const char* var);

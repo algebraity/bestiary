@@ -172,7 +172,8 @@ static int evalScriptChunk(EvalContext* ctx,
 
     Value value = valNone();
     if (options->skipGraphCommands && ast->kind == AST_CALL
-            && strcmp(ast->as.call.name, "graph") == 0) {
+            && (strcmp(ast->as.call.name, "graph") == 0
+                || strcmp(ast->as.call.name, "graph3D") == 0)) {
         value = valNone();
     } else if (options->lazyAssignments && ast->kind == AST_ASSIGN) {
         value = evalCtxSetLazyAssignment(ctx, ast->as.assign.name, ast->as.assign.rhs)
@@ -182,7 +183,8 @@ static int evalScriptChunk(EvalContext* ctx,
         for (size_t i = 0; i < ast->as.seq.n; i++) {
             AstNode* stmt = ast->as.seq.stmts[i];
             if (options->skipGraphCommands && stmt->kind == AST_CALL
-                    && strcmp(stmt->as.call.name, "graph") == 0) {
+                    && (strcmp(stmt->as.call.name, "graph") == 0
+                        || strcmp(stmt->as.call.name, "graph3D") == 0)) {
                 continue;
             }
             if (stmt->kind == AST_ASSIGN) {

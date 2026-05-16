@@ -39,6 +39,7 @@ static char* dupstr(const char* s) {
 }
 
 static Value evalGraphCall(EvalContext* ctx, AstNode* node);
+static Value evalGraph3DCall(EvalContext* ctx, AstNode* node);
 static ProbabilityDistribution* valueAsDistribution(Value value);
 static void sanitizeGraphField(char* text);
 static void evalCtxDropLastInputIfCommand(EvalContext* ctx, const char* command);
@@ -210,6 +211,7 @@ static const BuiltinDoc BUILTIN_DOCS[] = {
     { "run", "Runs a text file as a Bestiary script, evaluating each nonblank line in the current context.", "String filename, or an unquoted filename in braces such as \\run{script.bsy}", "String summary, or Error if the file cannot be opened" },
     { "export", "Exports the current shell input history to a Bestiary script.", "String filename, Symbol filename, or an unquoted filename in braces such as \\export{session.bsy}", "String summary, or Error if the file cannot be written" },
     { "graph", "Opens a GUI graph tab for an explicit, vertical, or implicit graph.", "NEKO expression, numeric value, x = real constant, or expression in x and y; optionally followed by a positive Graph tab number", "String summary" },
+    { "graph3D", "Opens a GUI 3D graph tab for an explicit or implicit surface.", "NEKO expression in x,y or x,t; equation using z; implicit expression in x,y,z; optionally followed by a positive 3D Graph tab number", "String summary" },
     { "list", "Constructs a dynamic Bestiary list.", "zero or more values", "List" },
     { "len", "Returns the length of a dynamic Bestiary list.", "List", "Int" },
     { "copy", "Creates an independently owned copy of a supported value.", "scalar, String, Symbol, List, Matrix, Vector, CombSet, Field, FieldElement, CD algebra, CD element, NEKO expression, KUMA distribution, KUMA random variable, or supported TORA value", "same kind as input" },
@@ -855,6 +857,12 @@ static Value bi_graph(EvalContext* ctx, Value* args, size_t nargs) {
     (void)ctx;
     for (size_t i = 0; i < nargs; i++) valFree(args[i]);
     return valError("\\graph must be evaluated from its raw expression form");
+}
+
+static Value bi_graph3D(EvalContext* ctx, Value* args, size_t nargs) {
+    (void)ctx;
+    for (size_t i = 0; i < nargs; i++) valFree(args[i]);
+    return valError("\\graph3D must be evaluated from its raw expression form");
 }
 
 /* ---------- Eval context ---------- */
@@ -2928,6 +2936,7 @@ Value eval(EvalContext* ctx, AstNode* node) {
             if (strcmp(node->as.call.name, "for") == 0) return evalForCall(ctx, node);
             if (strcmp(node->as.call.name, "def") == 0) return defineUserFunction(ctx, node);
             if (strcmp(node->as.call.name, "graph") == 0) return evalGraphCall(ctx, node);
+            if (strcmp(node->as.call.name, "graph3D") == 0) return evalGraph3DCall(ctx, node);
             if (strcmp(node->as.call.name, "mathbb") == 0) {
                 if (node->as.call.nargs != 1) return valError("\\mathbb expects one argument");
                 AstNode* arg = firstLogicalCallArg(node);
@@ -6849,6 +6858,11 @@ typedef enum {
     GRAPH_VERTICAL = 2
 } GraphCommandKind;
 
+typedef enum {
+    GRAPH3D_EXPLICIT = 0,
+    GRAPH3D_IMPLICIT = 1
+} Graph3DCommandKind;
+
 // Replace terminal-control characters in graph request fields
 static void sanitizeGraphField(char* text) {
     if (!text) return;
@@ -6863,6 +6877,18 @@ static void emitGraphRequest(GraphCommandKind kind, long long target, const char
     printf("\033]777;BESTIARY_GRAPH\t%d\t%lld\t%s\t%s\a",
            (int)kind,
            target,
+           label ? label : "",
+           serialized ? serialized : "");
+    fflush(stdout);
+}
+
+// Emit a 3D graph request for the GUI terminal to intercept
+static void emitGraph3DRequest(Graph3DCommandKind kind, long long target, const char* yvar,
+                               const char* label, const char* serialized) {
+    printf("\033]777;BESTIARY_GRAPH3D\t%d\t%lld\t%s\t%s\t%s\a",
+           (int)kind,
+           target,
+           yvar ? yvar : "y",
            label ? label : "",
            serialized ? serialized : "");
     fflush(stdout);
@@ -7090,6 +7116,192 @@ static Value evalGraphCall(EvalContext* ctx, AstNode* node) {
     char summary[256];
     if (target > 0) snprintf(summary, sizeof(summary), "Added graph to Graph %lld.", target);
     else snprintf(summary, sizeof(summary), "Opened graph.");
+    free(label);
+    free(serialized);
+    nekoFreeExpr(expr);
+    return valString(summary);
+}
+
+// Choose the second horizontal axis for an explicit 3D graph expression
+static const char* graph3DSecondAxis(const NekoExpr* expr) {
+    int dependsOnY = exprDependsOnVar(expr, "y");
+    int dependsOnT = exprDependsOnVar(expr, "t");
+    if (dependsOnY && dependsOnT) return NULL;
+    return dependsOnT ? "t" : "y";
+}
+
+// Build an explicit 3D graph label
+static char* graph3DExplicitLabel(const NekoExpr* expr) {
+    char* text = nekoExprToString(expr);
+    if (!text) return NULL;
+
+    size_t textLen = strlen(text);
+    size_t len = textLen + 5;
+    char* label = malloc(len + 1);
+    if (!label) {
+        free(text);
+        return NULL;
+    }
+    memcpy(label, "z = ", 4);
+    memcpy(label + 4, text, textLen + 1);
+    free(text);
+    return label;
+}
+
+// Convert graph3D text into a NEKO expression and surface kind
+static NekoExpr* graph3DExprFromString(const char* text, Graph3DCommandKind* kind, char** yvar, char** label) {
+    if (!text || !kind || !yvar || !label) return NULL;
+    *yvar = NULL;
+    *label = NULL;
+
+    // Split f(x,y,z) = g(x,y,z), preserving z = f and f = z as explicit surfaces
+    const char* eq = findGraphEquationEquals(text);
+    if (eq) {
+        char* lhsText = graphTrimRange(text, (size_t)(eq - text));
+        char* rhsText = graphTrimRange(eq + 1, strlen(eq + 1));
+        if (!lhsText || !rhsText || !*lhsText || !*rhsText) {
+            free(lhsText);
+            free(rhsText);
+            return NULL;
+        }
+
+        NekoExpr* lhs = parseNekoExprLiteral(lhsText);
+        NekoExpr* rhs = parseNekoExprLiteral(rhsText);
+        if (!lhs || !rhs) {
+            nekoFreeExpr(lhs);
+            nekoFreeExpr(rhs);
+            free(lhsText);
+            free(rhsText);
+            return NULL;
+        }
+
+        if (graphSideIsName(lhsText, "z") && !exprDependsOnVar(rhs, "z")) {
+            const char* axis = graph3DSecondAxis(rhs);
+            if (!axis) {
+                nekoFreeExpr(lhs);
+                nekoFreeExpr(rhs);
+                free(lhsText);
+                free(rhsText);
+                return NULL;
+            }
+            nekoFreeExpr(lhs);
+            free(lhsText);
+            free(rhsText);
+            rhs = nekoSimplify(rhs);
+            *kind = GRAPH3D_EXPLICIT;
+            *yvar = dupstr(axis);
+            *label = graph3DExplicitLabel(rhs);
+            return rhs;
+        }
+
+        if (graphSideIsName(rhsText, "z") && !exprDependsOnVar(lhs, "z")) {
+            const char* axis = graph3DSecondAxis(lhs);
+            if (!axis) {
+                nekoFreeExpr(lhs);
+                nekoFreeExpr(rhs);
+                free(lhsText);
+                free(rhsText);
+                return NULL;
+            }
+            nekoFreeExpr(rhs);
+            free(lhsText);
+            free(rhsText);
+            lhs = nekoSimplify(lhs);
+            *kind = GRAPH3D_EXPLICIT;
+            *yvar = dupstr(axis);
+            *label = graph3DExplicitLabel(lhs);
+            return lhs;
+        }
+
+        free(lhsText);
+        free(rhsText);
+        NekoExpr* expr = nekoSimplify(nekoSub(lhs, rhs));
+        if (exprDependsOnVar(expr, "t")) {
+            nekoFreeExpr(expr);
+            return NULL;
+        }
+        *kind = GRAPH3D_IMPLICIT;
+        *yvar = dupstr("y");
+        *label = nekoExprToString(expr);
+        return expr;
+    }
+
+    // Parse ordinary graph text as either z = f(x,y) or F(x,y,z) = 0
+    NekoExpr* expr = parseNekoExprLiteral(text);
+    if (!expr) return NULL;
+    expr = nekoSimplify(expr);
+    if (exprDependsOnVar(expr, "z")) {
+        if (exprDependsOnVar(expr, "t")) {
+            nekoFreeExpr(expr);
+            return NULL;
+        }
+        *kind = GRAPH3D_IMPLICIT;
+        *yvar = dupstr("y");
+        *label = nekoExprToString(expr);
+        return expr;
+    }
+
+    const char* axis = graph3DSecondAxis(expr);
+    if (!axis) {
+        nekoFreeExpr(expr);
+        return NULL;
+    }
+    *kind = GRAPH3D_EXPLICIT;
+    *yvar = dupstr(axis);
+    *label = graph3DExplicitLabel(expr);
+    return expr;
+}
+
+// Evaluate a raw graph3D command without assigning inside graph arguments
+static Value evalGraph3DCall(EvalContext* ctx, AstNode* node) {
+    if (!ctx || !node || node->kind != AST_CALL || node->as.call.nargs < 1 || node->as.call.nargs > 2)
+        return valError("\\graph3D expects one graph expression and an optional 3D graph number");
+
+    // Parse an optional 3D graph tab number
+    long long target = 0;
+    if (node->as.call.nargs == 2) {
+        Value tabValue = eval(ctx, node->as.call.args[1]);
+        if (tabValue.kind != VAL_INT || tabValue.as.i < 1) {
+            valFree(tabValue);
+            return valError("\\graph3D graph number must be a positive Int");
+        }
+        target = tabValue.as.i;
+        valFree(tabValue);
+    }
+
+    // The parser preserves the first graph3D argument as raw graph text
+    AstNode* arg = node->as.call.args[0];
+    if (!arg || arg->kind != AST_STRING)
+        return valError("\\graph3D must be evaluated from its raw expression form");
+
+    Graph3DCommandKind kind = GRAPH3D_EXPLICIT;
+    char* yvar = NULL;
+    char* label = NULL;
+    NekoExpr* expr = graph3DExprFromString(arg->as.ident, &kind, &yvar, &label);
+    if (!expr) {
+        free(yvar);
+        free(label);
+        return valError("\\graph3D expects z = f(x,y), z = f(x,t), f(x,y) = z, or an implicit expression in x, y, z");
+    }
+    char* serialized = nekoSerializeExpr(expr);
+    if (!serialized) {
+        free(yvar);
+        free(label);
+        nekoFreeExpr(expr);
+        return valError("\\graph3D could not serialize expression");
+    }
+    if (!yvar) yvar = dupstr("y");
+    if (!label) label = graph3DExplicitLabel(expr);
+    sanitizeGraphField(yvar);
+    sanitizeGraphField(label);
+    sanitizeGraphField(serialized);
+
+    // Send the request and return a visible CLI summary
+    emitGraph3DRequest(kind, target, yvar, label, serialized);
+    char summary[256];
+    if (target > 0) snprintf(summary, sizeof(summary), "Added 3D graph to 3D Graph %lld.", target);
+    else snprintf(summary, sizeof(summary), "Opened 3D graph.");
+    free(yvar);
     free(label);
     free(serialized);
     nekoFreeExpr(expr);
@@ -13645,6 +13857,7 @@ void registerBuiltins(void) {
     registerCommand("run", 1, bi_run);
     registerCommand("export", 1, bi_export);
     registerCommand("graph", -1, bi_graph);
+    registerCommand("graph3D", -1, bi_graph3D);
     registerCommand("list", -1, bi_list);
     registerCommand("len", 1, bi_len);
     registerCommand("sort", 1, bi_sort);

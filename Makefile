@@ -50,6 +50,7 @@ ifeq ($(PLATFORM),windows)
   LDFLAGS += -static -static-libgcc
   LDLIBS := -lm
   GUI_LIBS :=
+  GUI_GL_LIBS := -lopengl32
   GUI_LDFLAGS_EXTRA := -mwindows
   WINDOWS_RC_SRC := packaging/windows/bestiary.rc
   WINDOWS_MANIFEST := packaging/windows/bestiary.manifest
@@ -84,6 +85,7 @@ else
   CPPFLAGS += -Iinclude
   LDLIBS := -lm -lreadline
   GUI_LIBS := -lutil
+  GUI_GL_LIBS := -lGL
   GUI_LDFLAGS_EXTRA :=
   WINDOWS_RC_OBJ :=
   WINDOWS_ICON_ICO :=
@@ -213,7 +215,7 @@ $(GUI_OBJ): src/gui/embedded_icon.h
 
 $(GUI_BIN): $(GUI_OBJ) $(WINDOWS_RC_OBJ) $(BEAST_OBJS) $(CLI_BIN) | $(BINDIR)
 	@command -v $(WX_CONFIG) >/dev/null 2>&1 || { echo "wxWidgets config tool not found: $(WX_CONFIG)"; echo "Install wxWidgets development packages or set WX_CONFIG=/path/to/wx-config."; exit 1; }
-	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(GUI_LDFLAGS_EXTRA) -o $@ $(GUI_OBJ) $(WINDOWS_RC_OBJ) $(BEAST_OBJS) `$(WX_CONFIG) --libs` $(GUI_LIBS) -lm
+	$(CXX) $(CXXFLAGS) $(LDFLAGS) $(GUI_LDFLAGS_EXTRA) -o $@ $(GUI_OBJ) $(WINDOWS_RC_OBJ) $(BEAST_OBJS) `$(WX_CONFIG) --libs` `$(WX_CONFIG) --libs gl` $(GUI_LIBS) $(GUI_GL_LIBS) -lm
 
 $(WINDOWS_BUNDLE_DIR): FORCE $(CLI_BIN) $(REPL_BIN) $(GUI_BIN) $(WINDOWS_RUNTIME_BINS) $(WINDOWS_INSTALLER_FILES)
 	@if [ "$(PLATFORM)" != "windows" ]; then \

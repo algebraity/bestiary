@@ -48,7 +48,7 @@ static constexpr Section kSections[] = {
         "* Creating a new tab: use Ctrl+T or the \"+\" button on the tab bar to create a new tab containing a Bestiary shell.\n\n"
         "* Navigating tabs: Use Ctrl+1 to move to the start page, Ctrl+2 through Ctrl+9 to move to later tabs, and Ctrl+D to close the current tab.\n\n"
         "* Zoom: Use Ctrl+- and Ctrl++ to zoom out and in to a terminal or help page. Bestiary remembers your zoom level and shares it across tabs of the same type! In graphs, use the scroll wheel or touchpad to zoom.\n\n"
-        "* Graphing: Use the `\\graph{function}` command to graph a function in a new Graph tab, `\\graph{function}{n}` to add a function to the nth Graph tab, or `\\graph{x=c}` to graph a vertical line at a real constant c. Expressions involving y, such as `\\graph{x*y}`, are graphed implicitly as `x*y = 0`, and equations such as `\\graph{x^2 + y^2 = 1}` are shifted internally to graph the zero set. The graph command treats x and y as graph axes even if variables with those names exist in the shell.\n\n"
+        "* Graphing: Use the `\\graph{function}` command to graph a function in a new Graph tab, `\\graph{function}{n}` to add a function to the nth Graph tab, or `\\graph{x=c}` to graph a vertical line at a real constant c. Expressions involving y, such as `\\graph{x*y}`, are graphed implicitly as `x*y = 0`, and equations such as `\\graph{x^2 + y^2 = 1}` are shifted internally to graph the zero set. Use `\\graph3D{f(x,y)}` or `\\graph3D{F(x,y,z)}` to open a 3D Graph tab for explicit or implicit surfaces. The graph commands treat axis variables as graph axes even if variables with those names exist in the shell.\n\n"
         "* Persistence: Bestiary remembers what tabs you have open when you close it, and restores them for you automatically. Use `\\export{\"filename.bsy\"}` to create a script that restores your session, so you can share your work with others!\n\n"
         "* Loops: Bestiary supports for and while loops via the backslash commands `\\for{i = start; i < end; inc (e.g. i += 1)}{stuff}` and `\\while{condition}{stuff}`.\n\n"
         "* Conditionals: Bestiary supports conditions via the command `\\if{condition}{stuff}{else this stuff}`.\n\n"
@@ -93,6 +93,7 @@ static constexpr Section kSections[] = {
         "* take a partial derivative: `\\partialDerivative{g}{y}`\n"
         "* compute a gradient or Hessian: `\\gradient{x^2 + y^2}` and `\\hessian{x^2 + y^2}`\n"
         "* evaluate by substitution: `f(3)`\n"
+        "* graph explicit or implicit 3D surfaces: `\\graph3D{x^2 + y^2}` and `\\graph3D{x^2 + y^2 + z^2 = 9}`\n"
         "* find roots or solve ODEs: `\\roots{x^2 - 4}` and `\\solveODE{\"y' = 2x\"}`"
     },
     {
@@ -189,6 +190,7 @@ static constexpr Command kCommands[] = {
     HELP_CMD("run", 1, Beast::Basic, "Runs a text file as a Bestiary script, evaluating each nonblank line in the current context.", "String filename, or an unquoted filename in braces such as \\run{script.bsy}", "String summary, or Error if the file cannot be opened"),
     HELP_CMD("export", 1, Beast::Basic, "Exports the current shell input history to a Bestiary script.", "String filename, Symbol filename, or an unquoted filename in braces such as \\export{session.bsy}", "String summary, or Error if the file cannot be written"),
     HELP_CMD("graph", -1, Beast::Basic, "Opens a GUI graph tab for an explicit, vertical, or implicit graph.", "NEKO expression, numeric value, x = real constant, or expression in x and y; optionally followed by a positive Graph tab number", "String summary"),
+    HELP_CMD("graph3D", -1, Beast::Basic, "Opens a GUI 3D graph tab for an explicit or implicit surface.", "NEKO expression in x,y or x,t; equation using z; implicit expression in x,y,z; optionally followed by a positive 3D Graph tab number", "String summary"),
     HELP_CMD("list", -1, Beast::Basic, "Constructs a dynamic Bestiary list.", "zero or more values", "List"),
     HELP_CMD("len", 1, Beast::Basic, "Returns the length of a dynamic Bestiary list.", "List", "Int"),
     HELP_CMD("copy", 1, Beast::Basic, "Creates an independently owned copy of a supported value.", "scalar, String, Symbol, List, Matrix, Vector, CombSet, Field, FieldElement, CD algebra, CD element, NEKO expression, KUMA distribution, KUMA random variable, or supported TORA value", "same kind as input"),

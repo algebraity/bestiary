@@ -210,6 +210,7 @@ static AstNode* parsePrimary(P* p);
 static AstNode* parseCommandCall(P* p);
 static AstNode* parseRunCall(P* p, Token* cmd);
 static AstNode* parseGraphCall(P* p, Token* cmd);
+static AstNode* parseGraph3DCall(P* p, Token* cmd);
 static AstNode* parseIntegralCall(P* p, Token* cmd);
 static AstNode* parseBoundedSingleArgCall(P* p, Token* cmd, const char* outName);
 static AstNode* parseCallArgList(P* p);
@@ -643,6 +644,7 @@ static AstNode* parseCommandCall(P* p) {
     }
     if (strcmp(name, "run") == 0) return parseRunCall(p, cmd);
     if (strcmp(name, "graph") == 0) return parseGraphCall(p, cmd);
+    if (strcmp(name, "graph3D") == 0) return parseGraph3DCall(p, cmd);
     if (strcmp(name, "int") == 0 || strcmp(name, "integral") == 0) {
         return parseIntegralCall(p, cmd);
     }
@@ -789,6 +791,80 @@ static AstNode* parseGraphCall(P* p, Token* cmd) {
         break;
     }
     return astCall("graph", args.data, args.len, cmd->line, cmd->col);
+}
+
+static AstNode* parseGraph3DCall(P* p, Token* cmd) {
+    TokenKind openKind = TOK_NONE;
+    TokenKind closeKind = TOK_NONE;
+    if (match(p, TOK_LBRACE)) {
+        openKind = TOK_LBRACE;
+        closeKind = TOK_RBRACE;
+    } else if (match(p, TOK_LPAREN)) {
+        openKind = TOK_LPAREN;
+        closeKind = TOK_RPAREN;
+    } else {
+        return astCall("graph3D", NULL, 0, cmd->line, cmd->col);
+    }
+
+    char* raw = NULL;
+    size_t len = 0;
+    size_t cap = 0;
+    int depth = 1;
+    while (!atEnd(p) && depth > 0) {
+        Token* t = peek(p);
+        if (t->kind == openKind) {
+            depth++;
+        } else if (t->kind == closeKind) {
+            depth--;
+            if (depth == 0) {
+                advance(p);
+                break;
+            }
+        }
+
+        char scratch[128];
+        const char* text = tokenRawText(t, scratch, sizeof(scratch));
+        if (!rawPush(&raw, &len, &cap, text)) {
+            free(raw);
+            parseError(p, "out of memory");
+            return NULL;
+        }
+        advance(p);
+    }
+
+    if (depth != 0) {
+        free(raw);
+        parseError(p, "expected closing delimiter after \\graph3D expression");
+        return NULL;
+    }
+
+    NodeBuf args; nbInit(&args);
+
+    // Preserve graph text so x, y, z, and t remain graph axes, not shell variables
+    AstNode* first = astString(raw ? raw : "", cmd->line, cmd->col);
+    if (!first) {
+        free(raw);
+        return NULL;
+    }
+    nbPush(&args, first);
+    free(raw);
+
+    for (;;) {
+        if (check(p, TOK_LBRACE)) {
+            nbPush(&args, parseBraceGroup(p));
+            continue;
+        }
+        if (check(p, TOK_LPAREN)) {
+            nbPush(&args, parseParenOrTuple(p));
+            continue;
+        }
+        if (check(p, TOK_LBRACK)) {
+            nbPush(&args, parseBracketArg(p));
+            continue;
+        }
+        break;
+    }
+    return astCall("graph3D", args.data, args.len, cmd->line, cmd->col);
 }
 
 static AstNode* parseIntegralArg(P* p) {

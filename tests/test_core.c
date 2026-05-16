@@ -993,6 +993,7 @@ static void testRestoreScriptMode(void) {
     if (file) {
         fputs("x = \\list{1,2}\n", file);
         fputs("\\graph{x^2}\n", file);
+        fputs("\\graph3D{x^2 + y^2}\n", file);
         fputs("bad = 1 / 0\n", file);
         fclose(file);
     } else if (fd >= 0) {
@@ -1534,6 +1535,27 @@ static void testGraphCommandAxes(void) {
     CHECK(out.kind == VAL_STRING, "graph accepts implicit equations with assigned x");
     CHECK(strstr(buf, "BESTIARY_GRAPH") && strstr(buf, "-9 + y ^ 2 + x ^ 2"),
           "graph emits implicit equation expression");
+    valFree(out);
+
+    CHECK(evalLineToBuffer(ctx, "\\graph3D{x^2 + y^2}", buf, sizeof(buf), &out),
+          "explicit 3D graph output captured");
+    CHECK(out.kind == VAL_STRING, "graph3D keeps x and y as axes");
+    CHECK(strstr(buf, "BESTIARY_GRAPH3D") && strstr(buf, "x ^ 2") && strstr(buf, "y ^ 2"),
+          "graph3D emits explicit surface expression");
+    valFree(out);
+
+    CHECK(evalLineToBuffer(ctx, "\\graph3D{x + t}{2}", buf, sizeof(buf), &out),
+          "3D graph t-axis output captured");
+    CHECK(out.kind == VAL_STRING, "graph3D accepts t as the second horizontal axis");
+    CHECK(strstr(buf, "BESTIARY_GRAPH3D") && strstr(buf, "\t2\tt\t") && strstr(buf, "t + x"),
+          "graph3D emits target and t-axis expression");
+    valFree(out);
+
+    CHECK(evalLineToBuffer(ctx, "\\graph3D{x^2 + y^2 + z^2 = 9}", buf, sizeof(buf), &out),
+          "implicit 3D graph output captured");
+    CHECK(out.kind == VAL_STRING, "graph3D accepts implicit equations with z");
+    CHECK(strstr(buf, "BESTIARY_GRAPH3D") && strstr(buf, "z ^ 2 + -9 + y ^ 2 + x ^ 2"),
+          "graph3D emits implicit surface expression");
     valFree(out);
 
     evalCtxFree(ctx);

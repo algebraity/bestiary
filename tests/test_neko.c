@@ -645,6 +645,37 @@ static void testGraphingSupport(void) {
     CHECK(implicitSample.count > 0, "implicit graph sample has contour segments");
     nekoFreeImplicitGraphSample(implicitSample);
 
+    // Three-variable evaluation substitutes x, y, and z independently
+    NekoExpr* implicit3D = nekoSub(
+        nekoVar("z"),
+        nekoAdd(nekoVar("x"), nekoVar("y"))
+    );
+    CHECK_CLOSE(nekoEvalExpr3D(implicit3D, "x", 2.0L, "y", 3.0L, "z", 7.0L), 2.0L, 1e-12, "three-variable graph evaluation");
+
+    // Explicit 3D sampling evaluates z = x^2 + y^2 on a rectangular grid
+    NekoExpr* bowl = nekoAdd(
+        nekoPow(nekoVar("x"), nekoConst(2.0L)),
+        nekoPow(nekoVar("y"), nekoConst(2.0L))
+    );
+    NekoExplicitGraph3DSample surface = nekoSampleExplicitGraph3D(bowl, "y", -1.0L, 1.0L, -1.0L, 1.0L, 3, 3);
+    CHECK(surface.status == NEKO_OK && surface.xcount == 3 && surface.ycount == 3, "explicit 3D graph sample constructed");
+    CHECK(surface.points && surface.points[4].valid, "explicit 3D center sample is valid");
+    CHECK_CLOSE(surface.points[4].z, 0.0L, 1e-12, "explicit 3D center value");
+    nekoFreeExplicitGraph3DSample(surface);
+
+    // Explicit 3D sampling can use t as the second horizontal axis
+    NekoExpr* xt = nekoAdd(nekoVar("x"), nekoVar("t"));
+    NekoExplicitGraph3DSample tSurface = nekoSampleExplicitGraph3D(xt, "t", 0.0L, 2.0L, 0.0L, 2.0L, 3, 3);
+    CHECK(tSurface.status == NEKO_OK && tSurface.points && tSurface.points[8].valid, "explicit 3D graph accepts t axis");
+    CHECK_CLOSE(tSurface.points[8].z, 4.0L, 1e-12, "explicit 3D t-axis value");
+    nekoFreeExplicitGraph3DSample(tSurface);
+
+    // Implicit 3D sampling finds triangles for a plane
+    NekoImplicitGraph3DSample implicit3DSample = nekoSampleImplicitGraph3D(implicit3D, -1.0L, 1.0L, -1.0L, 1.0L, -1.0L, 1.0L, 10, 10, 10);
+    CHECK(implicit3DSample.status == NEKO_OK, "implicit 3D graph sample status");
+    CHECK(implicit3DSample.count > 0, "implicit 3D graph has surface triangles");
+    nekoFreeImplicitGraph3DSample(implicit3DSample);
+
     // Serialization round-trips a graphable expression
     char* serialized = nekoSerializeExpr(implicit);
     NekoExpr* decoded = serialized ? nekoDeserializeExpr(serialized) : NULL;
@@ -653,6 +684,9 @@ static void testGraphingSupport(void) {
     nekoFreeExpr(decoded);
 
     nekoFreeExpr(square);
+    nekoFreeExpr(xt);
+    nekoFreeExpr(bowl);
+    nekoFreeExpr(implicit3D);
     nekoFreeExpr(implicit);
 }
 

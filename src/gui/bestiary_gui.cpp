@@ -5,6 +5,7 @@
 #include<wx/dcbuffer.h>
 #include<wx/filename.h>
 #include<wx/filedlg.h>
+#include<wx/glcanvas.h>
 #include<wx/graphics.h>
 #include<wx/hyperlink.h>
 #include<wx/mstream.h>
@@ -29,13 +30,17 @@
 #include"embedded_banner.h"
 #include"embedded_icon.h"
 
+#ifdef __WXMSW__
+#  define WIN32_LEAN_AND_MEAN
+#  include<windows.h>
+#endif
+#include<GL/gl.h>
+
 extern "C" {
 #include"neko.h"
 }
 
 #ifdef __WXMSW__
-#  define WIN32_LEAN_AND_MEAN
-#  include<windows.h>
 #  include<uxtheme.h>
 #else
 #  include<errno.h>
@@ -52,6 +57,19 @@ namespace {
 
 static wxColour ColourFromRgb(uint32_t rgb) {
     return wxColour((rgb >> 16) & 0xFF, (rgb >> 8) & 0xFF, rgb & 0xFF);
+}
+
+static bool ChoosePngSavePath(wxWindow* parent, const wxString& title,
+                              const wxString& defaultName, wxString* path) {
+    wxFileDialog dialog(parent, title, wxEmptyString, defaultName,
+                        "PNG image (*.png)|*.png",
+                        wxFD_SAVE | wxFD_OVERWRITE_PROMPT);
+    if (dialog.ShowModal() != wxID_OK) return false;
+
+    wxFileName file(dialog.GetPath());
+    if (file.GetExt().empty()) file.SetExt("png");
+    *path = file.GetFullPath();
+    return true;
 }
 
 namespace theme {
@@ -202,6 +220,19 @@ enum class GraphRequestKind {
 struct GraphRequest {
     GraphRequestKind kind = GraphRequestKind::Explicit;
     long long target = 0;
+    wxString label;
+    wxString serialized;
+};
+
+enum class Graph3DRequestKind {
+    Explicit = 0,
+    Implicit = 1
+};
+
+struct Graph3DRequest {
+    Graph3DRequestKind kind = Graph3DRequestKind::Explicit;
+    long long target = 0;
+    wxString yvar = "y";
     wxString label;
     wxString serialized;
 };
@@ -619,6 +650,10 @@ public:
 
     void SetGraphRequestCallback(std::function<void(const GraphRequest&)> graphRequestCallback) {
         m_graphRequestCallback = std::move(graphRequestCallback);
+    }
+
+    void SetGraph3DRequestCallback(std::function<void(const Graph3DRequest&)> graph3DRequestCallback) {
+        m_graph3DRequestCallback = std::move(graph3DRequestCallback);
     }
 
     void SetKumaPlotRequestCallback(std::function<void(const KumaPlotRequest&)> kumaPlotRequestCallback) {
@@ -1227,6 +1262,7 @@ private:
 
     void HandleOsc(const std::string& payload) {
         static const std::string graphPrefix = "777;BESTIARY_GRAPH\t";
+        static const std::string graph3DPrefix = "777;BESTIARY_GRAPH3D\t";
         static const std::string plotPrefix = "777;BESTIARY_KUMA_PLOT\t";
         static const std::string inputPrefix = "777;BESTIARY_INPUT\t";
         if (payload.rfind(inputPrefix, 0) == 0) {
@@ -1235,11 +1271,14 @@ private:
             else if (!input.empty()) m_commandHistory.push_back(input);
             return;
         }
-        if (payload.rfind(graphPrefix, 0) != 0 && payload.rfind(plotPrefix, 0) != 0) return;
+        if (payload.rfind(graphPrefix, 0) != 0
+                && payload.rfind(graph3DPrefix, 0) != 0
+                && payload.rfind(plotPrefix, 0) != 0) return;
 
         std::vector<std::string> fields;
         bool isGraph = payload.rfind(graphPrefix, 0) == 0;
-        const std::string& prefix = isGraph ? graphPrefix : plotPrefix;
+        bool isGraph3D = payload.rfind(graph3DPrefix, 0) == 0;
+        const std::string& prefix = isGraph ? graphPrefix : (isGraph3D ? graph3DPrefix : plotPrefix);
         size_t start = prefix.size();
         while (start <= payload.size()) {
             size_t at = payload.find('\t', start);
@@ -1262,6 +1301,20 @@ private:
             request.label = wxString::FromUTF8(fields[2].c_str());
             request.serialized = wxString::FromUTF8(fields[3].c_str());
             m_graphRequestCallback(request);
+            return;
+        }
+        if (isGraph3D) {
+            if (fields.size() < 5 || !m_graph3DRequestCallback) return;
+
+            Graph3DRequest request;
+            int kind = std::atoi(fields[0].c_str());
+            request.kind = kind == 1 ? Graph3DRequestKind::Implicit : Graph3DRequestKind::Explicit;
+            request.target = std::strtoll(fields[1].c_str(), nullptr, 10);
+            request.yvar = wxString::FromUTF8(fields[2].c_str());
+            if (request.yvar.empty()) request.yvar = "y";
+            request.label = wxString::FromUTF8(fields[3].c_str());
+            request.serialized = wxString::FromUTF8(fields[4].c_str());
+            m_graph3DRequestCallback(request);
             return;
         }
 
@@ -1705,6 +1758,7 @@ private:
     BufferPos m_selFocus;
     std::function<void()> m_closeCallback;
     std::function<void(const GraphRequest&)> m_graphRequestCallback;
+    std::function<void(const Graph3DRequest&)> m_graph3DRequestCallback;
     std::function<void(const KumaPlotRequest&)> m_kumaPlotRequestCallback;
     std::vector<wxString> m_commandHistory;
     bool m_suppressNextInputRecord = false;
@@ -1795,6 +1849,20 @@ public:
 
     void SetGraphsChangedCallback(std::function<void()> callback) {
         m_graphsChanged = std::move(callback);
+    }
+
+    bool SavePng(const wxString& path) {
+        wxSize size = GetClientSize();
+        if (size.x <= 0 || size.y <= 0) return false;
+        if (m_resamplePending) ResampleAll();
+
+        wxBitmap bitmap(size.x, size.y, 24);
+        wxMemoryDC dc(bitmap);
+        DrawContent(dc);
+        dc.SelectObject(wxNullBitmap);
+
+        wxImage image = bitmap.ConvertToImage();
+        return image.IsOk() && image.SaveFile(path, wxBITMAP_TYPE_PNG);
     }
 
 private:
@@ -2052,8 +2120,8 @@ private:
         gc->StrokeLine(sx, plot.y, sx, plot.y + plot.height);
     }
 
-    void OnPaint(wxPaintEvent&) {
-        wxAutoBufferedPaintDC dc(this);
+    template<typename DC>
+    void DrawContent(DC& dc) {
         dc.SetBackground(wxBrush(ColourFromRgb(theme::kPanelBg)));
         dc.Clear();
 
@@ -2079,6 +2147,11 @@ private:
             gc->SetFont(font, ColourFromRgb(theme::kMutedText));
             gc->DrawText("resampling...", plot.x + 12, plot.y + 10);
         }
+    }
+
+    void OnPaint(wxPaintEvent&) {
+        wxAutoBufferedPaintDC dc(this);
+        DrawContent(dc);
     }
 
     void OnMouseWheel(wxMouseEvent& evt) {
@@ -2219,6 +2292,14 @@ public:
         m_side->SetSizer(m_sideSizer);
         sideSizer->Add(m_side, 1, wxEXPAND);
 
+        auto* saveRow = new wxBoxSizer(wxHORIZONTAL);
+        saveRow->AddStretchSpacer(1);
+        auto* save = new wxButton(sidePanel, wxID_ANY, "Save", wxDefaultPosition, wxSize(86, 30));
+        StyleDarkButton(save, true);
+        save->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { SaveGraphPng(); });
+        saveRow->Add(save, 0, wxLEFT | wxRIGHT | wxTOP, 10);
+        sideSizer->Add(saveRow, 0, wxEXPAND);
+
         auto* resetRow = new wxBoxSizer(wxHORIZONTAL);
         resetRow->AddStretchSpacer(1);
         auto* reset = new wxButton(sidePanel, wxID_ANY, "Reset", wxDefaultPosition, wxSize(86, 30));
@@ -2243,6 +2324,15 @@ public:
     }
 
 private:
+    void SaveGraphPng() {
+        wxString path;
+        if (!ChoosePngSavePath(this, "Save Graph PNG", "bestiary-graph.png", &path)) return;
+        if (!m_canvas->SavePng(path)) {
+            wxMessageBox("Could not save the graph PNG.", "Save Graph",
+                         wxOK | wxICON_ERROR, this);
+        }
+    }
+
     void RebuildList() {
         m_sideSizer->Clear(true);
         auto* title = new wxStaticText(m_side, wxID_ANY, "Graphs");
@@ -2286,6 +2376,988 @@ private:
 };
 
 // ============================================================
+// Graph3DCanvas: draws sampled NEKO surfaces with wx/OpenGL.
+// ============================================================
+class Graph3DCanvas : public wxGLCanvas {
+public:
+    Graph3DCanvas(wxWindow* parent)
+        : wxGLCanvas(parent, wxID_ANY, nullptr, wxDefaultPosition, wxDefaultSize, wxBORDER_NONE),
+          m_context(new wxGLContext(this)),
+          m_resampleTimer(this) {
+        SetBackgroundStyle(wxBG_STYLE_PAINT);
+        SetBackgroundColour(ColourFromRgb(theme::kPanelBg));
+
+        Bind(wxEVT_PAINT, &Graph3DCanvas::OnPaint, this);
+        Bind(wxEVT_SIZE, &Graph3DCanvas::OnSize, this);
+        Bind(wxEVT_MOUSEWHEEL, &Graph3DCanvas::OnMouseWheel, this);
+        Bind(wxEVT_LEFT_DOWN, &Graph3DCanvas::OnLeftDown, this);
+        Bind(wxEVT_LEFT_UP, &Graph3DCanvas::OnLeftUp, this);
+        Bind(wxEVT_MOTION, &Graph3DCanvas::OnMouseMove, this);
+        Bind(wxEVT_TIMER, &Graph3DCanvas::OnResampleTimer, this);
+        Bind(wxEVT_ERASE_BACKGROUND, [](wxEraseEvent&){});
+        ResetView();
+    }
+
+    ~Graph3DCanvas() override {
+        for (auto& surface : m_surfaces) FreeSamples(surface);
+        delete m_context;
+    }
+
+    bool AddGraph(const Graph3DRequest& request) {
+        wxScopedCharBuffer serial = request.serialized.ToUTF8();
+        NekoExpr* expr = nekoDeserializeExpr(serial.data());
+        if (!expr) return false;
+
+        Surface surface;
+        surface.kind = request.kind;
+        surface.expr = expr;
+        surface.yvar = request.yvar.empty() ? "y" : request.yvar;
+        surface.label = request.label.empty() ? "surface" : request.label;
+        surface.request = request;
+        surface.request.yvar = surface.yvar;
+        surface.request.label = surface.label;
+        surface.colour = NextColour(m_surfaces.size());
+        m_surfaces.push_back(surface);
+        ResampleAll();
+        if (m_surfacesChanged) m_surfacesChanged();
+        Refresh(false);
+        return true;
+    }
+
+    void RemoveGraph(size_t index) {
+        if (index >= m_surfaces.size()) return;
+        FreeSamples(m_surfaces[index]);
+        m_surfaces.erase(m_surfaces.begin() + (ptrdiff_t)index);
+        if (m_surfacesChanged) m_surfacesChanged();
+        Refresh(false);
+    }
+
+    void ResetView() {
+        m_yaw = 45.0L;
+        m_pitch = 34.0L;
+        m_xRange = 10.0L;
+        m_yRange = 10.0L;
+        m_zRange = 10.0L;
+        ResampleAll();
+        Refresh(false);
+    }
+
+    size_t GraphCount() const { return m_surfaces.size(); }
+
+    wxString GraphLabel(size_t index) const {
+        return index < m_surfaces.size() ? m_surfaces[index].label : wxString();
+    }
+
+    wxColour GraphColour(size_t index) const {
+        return index < m_surfaces.size() ? m_surfaces[index].colour : ColourFromRgb(theme::kAccent);
+    }
+
+    std::vector<Graph3DRequest> GraphRequests() const {
+        std::vector<Graph3DRequest> requests;
+        requests.reserve(m_surfaces.size());
+        for (const auto& surface : m_surfaces) requests.push_back(surface.request);
+        return requests;
+    }
+
+    void SetGraphsChangedCallback(std::function<void()> callback) {
+        m_surfacesChanged = std::move(callback);
+    }
+
+    bool SavePng(const wxString& path) {
+        wxSize size = GetClientSize();
+        int width = size.x;
+        int height = size.y;
+        if (width <= 0 || height <= 0 || !m_context) return false;
+        if (m_resamplePending) ResampleAll();
+
+        SetCurrent(*m_context);
+        DrawScene();
+        DrawOverlayGL();
+        glFlush();
+        glFinish();
+
+        size_t stride = (size_t)width * 3;
+        std::vector<unsigned char> pixels(stride * (size_t)height);
+        glPixelStorei(GL_PACK_ALIGNMENT, 1);
+        glReadPixels(0, 0, width, height, GL_RGB, GL_UNSIGNED_BYTE, pixels.data());
+
+        unsigned char* data = (unsigned char*)malloc(pixels.size());
+        if (!data) return false;
+        for (int y = 0; y < height; y++) {
+            std::copy(pixels.begin() + (size_t)(height - 1 - y) * stride,
+                      pixels.begin() + (size_t)(height - y) * stride,
+                      data + (size_t)y * stride);
+        }
+
+        wxImage image(width, height, data, false);
+        return image.IsOk() && image.SaveFile(path, wxBITMAP_TYPE_PNG);
+    }
+
+private:
+    struct Surface {
+        Graph3DRequestKind kind = Graph3DRequestKind::Explicit;
+        NekoExpr* expr = nullptr;
+        wxString yvar = "y";
+        wxString label;
+        Graph3DRequest request;
+        wxColour colour;
+        NekoExplicitGraph3DSample explicitSample = {};
+        NekoImplicitGraph3DSample implicitSample = {};
+        bool samplesReady = false;
+    };
+
+    enum class DragMode {
+        None,
+        Rotate,
+        ScaleX,
+        ScaleY,
+        ScaleZ
+    };
+
+    struct ScreenPoint {
+        double x = 0.0;
+        double y = 0.0;
+    };
+
+    struct OverlayLabel {
+        wxString text;
+        int x = 0;
+        int y = 0;
+        int width = 0;
+        int height = 0;
+        int pointSize = 9;
+    };
+
+    static constexpr long double kAxisExtent = 15.0L;
+    static constexpr uint32_t kGraph3DPlotBg = 0x111923u;
+
+    static wxColour NextColour(size_t index) {
+        static const uint32_t colours[] = {
+            0xE06C75u, 0x61AFEFu, 0x98C379u, 0xE5C07Bu,
+            0xC678DDu, 0x56B6C2u, 0xD19A66u, 0xABB2BFu
+        };
+        return ColourFromRgb(colours[index % (sizeof(colours) / sizeof(colours[0]))]);
+    }
+
+    wxRect PlotRect() const {
+        wxSize size = GetClientSize();
+        int left = 56;
+        int top = 20;
+        int right = 24;
+        int bottom = 44;
+        return wxRect(left, top,
+                      std::max(1, size.x - left - right),
+                      std::max(1, size.y - top - bottom));
+    }
+
+    long double ViewSpan() const {
+        return kAxisExtent * 1.24L;
+    }
+
+    long double NiceTick(long double span) const {
+        if (!isfinite(span) || span <= 0.0L) return 1.0L;
+        long double raw = span / 20.0L;
+        long double mag = powl(10.0L, floorl(log10l(raw)));
+        long double scaled = raw / mag;
+        if (scaled < 1.5L) return mag;
+        if (scaled < 3.5L) return 2.0L * mag;
+        if (scaled < 7.5L) return 5.0L * mag;
+        return 10.0L * mag;
+    }
+
+    long double NormalizedX(long double x) const {
+        return m_xRange > 0.0L ? x / m_xRange * kAxisExtent : 0.0L;
+    }
+
+    long double NormalizedY(long double y) const {
+        return m_yRange > 0.0L ? y / m_yRange * kAxisExtent : 0.0L;
+    }
+
+    long double NormalizedZ(long double z) const {
+        return m_zRange > 0.0L ? z / m_zRange * kAxisExtent : 0.0L;
+    }
+
+    NekoGraphPoint3D NormalizePoint(NekoGraphPoint3D point) const {
+        return (NekoGraphPoint3D){
+            .x = NormalizedX(point.x),
+            .y = NormalizedY(point.y),
+            .z = NormalizedZ(point.z),
+            .valid = point.valid
+        };
+    }
+
+    ScreenPoint ProjectDraw(long double x, long double y, long double z) const {
+        wxRect plot = PlotRect();
+        long double pi = acosl(-1.0L);
+        long double yaw = m_yaw * pi / 180.0L;
+        long double pitch = m_pitch * pi / 180.0L;
+        long double cy = cosl(yaw);
+        long double sy = sinl(yaw);
+        long double cp = cosl(pitch);
+        long double sp = sinl(pitch);
+
+        long double x1 = cy * x - sy * y;
+        long double y1 = sy * x + cy * y;
+        long double z1 = z;
+        long double x2 = x1;
+        long double y2 = cp * y1 + sp * z1;
+        long double span = ViewSpan();
+        long double aspect = plot.height > 0 ? (long double)plot.width / (long double)plot.height : 1.0L;
+        if (!isfinite(aspect) || aspect <= 0.0L) aspect = 1.0L;
+
+        return {
+            plot.x + (double)plot.width / 2.0 + (double)(x2 / (span * aspect)) * (double)plot.width / 2.0,
+            plot.y + (double)plot.height / 2.0 - (double)(y2 / span) * (double)plot.height / 2.0
+        };
+    }
+
+    ScreenPoint ProjectValue(long double x, long double y, long double z) const {
+        return ProjectDraw(NormalizedX(x), NormalizedY(y), NormalizedZ(z));
+    }
+
+    double DistanceToSegment(const wxPoint& pt, ScreenPoint a, ScreenPoint b) const {
+        double vx = b.x - a.x;
+        double vy = b.y - a.y;
+        double wx = pt.x - a.x;
+        double wy = pt.y - a.y;
+        double len2 = vx * vx + vy * vy;
+        double t = len2 > 0.0 ? (wx * vx + wy * vy) / len2 : 0.0;
+        t = std::clamp(t, 0.0, 1.0);
+        double dx = pt.x - (a.x + t * vx);
+        double dy = pt.y - (a.y + t * vy);
+        return sqrt(dx * dx + dy * dy);
+    }
+
+    DragMode AxisDragMode(const wxPoint& pt) const {
+        struct Hit {
+            DragMode mode;
+            double distance;
+        };
+        Hit hits[] = {
+            { DragMode::ScaleX, DistanceToSegment(pt, ProjectDraw(-kAxisExtent, 0.0L, 0.0L), ProjectDraw(kAxisExtent, 0.0L, 0.0L)) },
+            { DragMode::ScaleY, DistanceToSegment(pt, ProjectDraw(0.0L, -kAxisExtent, 0.0L), ProjectDraw(0.0L, kAxisExtent, 0.0L)) },
+            { DragMode::ScaleZ, DistanceToSegment(pt, ProjectDraw(0.0L, 0.0L, -kAxisExtent), ProjectDraw(0.0L, 0.0L, kAxisExtent)) }
+        };
+        Hit best = hits[0];
+        for (const auto& hit : hits) {
+            if (hit.distance < best.distance) best = hit;
+        }
+        return best.distance <= 8.0 ? best.mode : DragMode::Rotate;
+    }
+
+    void UpdateAxisCursor(const wxPoint& pt) {
+        DragMode mode = AxisDragMode(pt);
+        if (mode == DragMode::ScaleX) SetCursor(wxCursor(wxCURSOR_SIZEWE));
+        else if (mode == DragMode::ScaleY) SetCursor(wxCursor(wxCURSOR_SIZEWE));
+        else if (mode == DragMode::ScaleZ) SetCursor(wxCursor(wxCURSOR_SIZENS));
+        else SetCursor(wxCursor(wxCURSOR_ARROW));
+    }
+
+    void FreeSamples(Surface& surface) {
+        nekoFreeExplicitGraph3DSample(surface.explicitSample);
+        nekoFreeImplicitGraph3DSample(surface.implicitSample);
+        surface.explicitSample = {};
+        surface.implicitSample = {};
+        surface.samplesReady = false;
+    }
+
+    void ResampleAll() {
+        wxSize size = GetClientSize();
+        int minDim = std::max(1, std::min(size.x, size.y));
+        size_t explicitSamples = (size_t)std::clamp(minDim / 8, 28, 92);
+        size_t implicitSteps = (size_t)std::clamp(minDim / 30, 16, 34);
+
+        for (auto& surface : m_surfaces) {
+            FreeSamples(surface);
+            if (!surface.expr) continue;
+            if (surface.kind == Graph3DRequestKind::Explicit) {
+                wxScopedCharBuffer yvar = surface.yvar.ToUTF8();
+                const char* axis = yvar.data() && yvar.length() > 0 ? yvar.data() : "y";
+                surface.explicitSample = nekoSampleExplicitGraph3D(surface.expr, axis,
+                    -m_xRange, m_xRange, -m_yRange, m_yRange, explicitSamples, explicitSamples);
+            } else {
+                surface.implicitSample = nekoSampleImplicitGraph3D(surface.expr,
+                    -m_xRange, m_xRange, -m_yRange, m_yRange, -m_zRange, m_zRange,
+                    implicitSteps, implicitSteps, implicitSteps);
+            }
+            surface.samplesReady = true;
+        }
+        m_resamplePending = false;
+    }
+
+    void ScheduleResample() {
+        m_resamplePending = true;
+        m_resampleTimer.StartOnce(160);
+    }
+
+    void SetGlColour(const wxColour& colour, double shade, unsigned char alpha) const {
+        shade = std::clamp(shade, 0.0, 1.0);
+        glColor4ub((GLubyte)std::clamp((int)(colour.Red() * shade), 0, 255),
+                   (GLubyte)std::clamp((int)(colour.Green() * shade), 0, 255),
+                   (GLubyte)std::clamp((int)(colour.Blue() * shade), 0, 255),
+                   (GLubyte)alpha);
+    }
+
+    double TriangleShade(const NekoGraphPoint3D& a, const NekoGraphPoint3D& b, const NekoGraphPoint3D& c) const {
+        long double ux = b.x - a.x;
+        long double uy = b.y - a.y;
+        long double uz = b.z - a.z;
+        long double vx = c.x - a.x;
+        long double vy = c.y - a.y;
+        long double vz = c.z - a.z;
+        long double nx = uy * vz - uz * vy;
+        long double ny = uz * vx - ux * vz;
+        long double nz = ux * vy - uy * vx;
+        long double len = sqrtl(nx * nx + ny * ny + nz * nz);
+        if (!isfinite(len) || len <= 0.0L) return 0.75;
+        nx /= len;
+        ny /= len;
+        nz /= len;
+        long double dot = fabsl(nx * 0.35L + ny * -0.45L + nz * 0.82L);
+        return (double)(0.45L + 0.45L * dot);
+    }
+
+    void DrawTriangle(const NekoGraphPoint3D& a, const NekoGraphPoint3D& b, const NekoGraphPoint3D& c,
+                      const wxColour& colour, unsigned char alpha) const {
+        SetGlColour(colour, TriangleShade(a, b, c), alpha);
+        glVertex3d((double)a.x, (double)a.y, (double)a.z);
+        glVertex3d((double)b.x, (double)b.y, (double)b.z);
+        glVertex3d((double)c.x, (double)c.y, (double)c.z);
+    }
+
+    void DrawLine(const NekoGraphPoint3D& a, const NekoGraphPoint3D& b) const {
+        glVertex3d((double)a.x, (double)a.y, (double)a.z);
+        glVertex3d((double)b.x, (double)b.y, (double)b.z);
+    }
+
+    void DrawExplicitSurface(const Surface& surface) const {
+        const NekoExplicitGraph3DSample& sample = surface.explicitSample;
+        if (!sample.points || sample.xcount < 2 || sample.ycount < 2) return;
+
+        glBegin(GL_TRIANGLES);
+        for (size_t j = 0; j + 1 < sample.ycount; j++) {
+            for (size_t i = 0; i + 1 < sample.xcount; i++) {
+                const NekoGraphPoint3D& p00 = sample.points[j * sample.xcount + i];
+                const NekoGraphPoint3D& p10 = sample.points[j * sample.xcount + i + 1];
+                const NekoGraphPoint3D& p01 = sample.points[(j + 1) * sample.xcount + i];
+                const NekoGraphPoint3D& p11 = sample.points[(j + 1) * sample.xcount + i + 1];
+                if (p00.valid && p10.valid && p11.valid)
+                    DrawTriangle(NormalizePoint(p00), NormalizePoint(p10), NormalizePoint(p11), surface.colour, 178);
+                if (p00.valid && p11.valid && p01.valid)
+                    DrawTriangle(NormalizePoint(p00), NormalizePoint(p11), NormalizePoint(p01), surface.colour, 178);
+            }
+        }
+        glEnd();
+
+        glLineWidth(1.0f);
+        SetGlColour(surface.colour, 0.95, 190);
+        glBegin(GL_LINES);
+        for (size_t j = 0; j < sample.ycount; j++) {
+            for (size_t i = 0; i + 1 < sample.xcount; i++) {
+                const NekoGraphPoint3D& a = sample.points[j * sample.xcount + i];
+                const NekoGraphPoint3D& b = sample.points[j * sample.xcount + i + 1];
+                if (a.valid && b.valid) {
+                    DrawLine(NormalizePoint(a), NormalizePoint(b));
+                }
+            }
+        }
+        for (size_t i = 0; i < sample.xcount; i++) {
+            for (size_t j = 0; j + 1 < sample.ycount; j++) {
+                const NekoGraphPoint3D& a = sample.points[j * sample.xcount + i];
+                const NekoGraphPoint3D& b = sample.points[(j + 1) * sample.xcount + i];
+                if (a.valid && b.valid) {
+                    DrawLine(NormalizePoint(a), NormalizePoint(b));
+                }
+            }
+        }
+        glEnd();
+    }
+
+    void DrawImplicitSurface(const Surface& surface) const {
+        const NekoImplicitGraph3DSample& sample = surface.implicitSample;
+        if (!sample.triangles || sample.count == 0) return;
+
+        glBegin(GL_TRIANGLES);
+        for (size_t i = 0; i < sample.count; i++) {
+            const NekoGraphTriangle3D& t = sample.triangles[i];
+            DrawTriangle(NormalizePoint(t.a), NormalizePoint(t.b), NormalizePoint(t.c), surface.colour, 166);
+        }
+        glEnd();
+
+        glLineWidth(1.0f);
+        SetGlColour(surface.colour, 0.95, 170);
+        glBegin(GL_LINES);
+        for (size_t i = 0; i < sample.count; i++) {
+            const NekoGraphTriangle3D& t = sample.triangles[i];
+            NekoGraphPoint3D a = NormalizePoint(t.a);
+            NekoGraphPoint3D b = NormalizePoint(t.b);
+            NekoGraphPoint3D c = NormalizePoint(t.c);
+            DrawLine(a, b);
+            DrawLine(b, c);
+            DrawLine(c, a);
+        }
+        glEnd();
+    }
+
+    void DrawAxisArrowhead(int axis) const {
+        long double len = kAxisExtent * 0.13L;
+        long double width = kAxisExtent * 0.045L;
+        NekoGraphPoint3D tip = {};
+        NekoGraphPoint3D a = {};
+        NekoGraphPoint3D b = {};
+        NekoGraphPoint3D c = {};
+        NekoGraphPoint3D d = {};
+
+        if (axis == 0) {
+            tip = { .x = kAxisExtent, .y = 0.0L, .z = 0.0L, .valid = true };
+            a = { .x = kAxisExtent - len, .y = width, .z = 0.0L, .valid = true };
+            b = { .x = kAxisExtent - len, .y = 0.0L, .z = width, .valid = true };
+            c = { .x = kAxisExtent - len, .y = -width, .z = 0.0L, .valid = true };
+            d = { .x = kAxisExtent - len, .y = 0.0L, .z = -width, .valid = true };
+        } else if (axis == 1) {
+            tip = { .x = 0.0L, .y = kAxisExtent, .z = 0.0L, .valid = true };
+            a = { .x = width, .y = kAxisExtent - len, .z = 0.0L, .valid = true };
+            b = { .x = 0.0L, .y = kAxisExtent - len, .z = width, .valid = true };
+            c = { .x = -width, .y = kAxisExtent - len, .z = 0.0L, .valid = true };
+            d = { .x = 0.0L, .y = kAxisExtent - len, .z = -width, .valid = true };
+        } else {
+            tip = { .x = 0.0L, .y = 0.0L, .z = kAxisExtent, .valid = true };
+            a = { .x = width, .y = 0.0L, .z = kAxisExtent - len, .valid = true };
+            b = { .x = 0.0L, .y = width, .z = kAxisExtent - len, .valid = true };
+            c = { .x = -width, .y = 0.0L, .z = kAxisExtent - len, .valid = true };
+            d = { .x = 0.0L, .y = -width, .z = kAxisExtent - len, .valid = true };
+        }
+
+        glBegin(GL_TRIANGLES);
+        DrawTriangle(tip, a, b, ColourFromRgb(theme::kMutedText), 255);
+        DrawTriangle(tip, b, c, ColourFromRgb(theme::kMutedText), 255);
+        DrawTriangle(tip, c, d, ColourFromRgb(theme::kMutedText), 255);
+        DrawTriangle(tip, d, a, ColourFromRgb(theme::kMutedText), 255);
+        glEnd();
+    }
+
+    void DrawAxes() const {
+        wxColour axisColour = ColourFromRgb(theme::kMutedText);
+        SetGlColour(axisColour, 1.0, 255);
+        glLineWidth(4.0f);
+        glBegin(GL_LINES);
+        glVertex3d((double)-kAxisExtent, 0.0, 0.0);
+        glVertex3d((double)kAxisExtent, 0.0, 0.0);
+        glVertex3d(0.0, (double)-kAxisExtent, 0.0);
+        glVertex3d(0.0, (double)kAxisExtent, 0.0);
+        glVertex3d(0.0, 0.0, (double)-kAxisExtent);
+        glVertex3d(0.0, 0.0, (double)kAxisExtent);
+        glEnd();
+        DrawAxisArrowhead(0);
+        DrawAxisArrowhead(1);
+        DrawAxisArrowhead(2);
+
+        long double xTick = NiceTick(2.0L * m_xRange);
+        long double yTick = NiceTick(2.0L * m_yRange);
+        long double zTick = NiceTick(2.0L * m_zRange);
+        long double tickSize = kAxisExtent * 0.022L;
+        glLineWidth(2.0f);
+        glBegin(GL_LINES);
+        for (long double x = ceill(-m_xRange / xTick) * xTick; x <= m_xRange; x += xTick) {
+            if (fabsl(x) < 1e-12L) continue;
+            long double dx = NormalizedX(x);
+            glVertex3d((double)dx, (double)-tickSize, 0.0);
+            glVertex3d((double)dx, (double)tickSize, 0.0);
+        }
+        for (long double y = ceill(-m_yRange / yTick) * yTick; y <= m_yRange; y += yTick) {
+            if (fabsl(y) < 1e-12L) continue;
+            long double dy = NormalizedY(y);
+            glVertex3d((double)-tickSize, (double)dy, 0.0);
+            glVertex3d((double)tickSize, (double)dy, 0.0);
+        }
+        for (long double z = ceill(-m_zRange / zTick) * zTick; z <= m_zRange; z += zTick) {
+            if (fabsl(z) < 1e-12L) continue;
+            long double dz = NormalizedZ(z);
+            glVertex3d((double)-tickSize, 0.0, (double)dz);
+            glVertex3d((double)tickSize, 0.0, (double)dz);
+        }
+        glEnd();
+    }
+
+    void DrawBoundingCube() const {
+        wxColour cubeColour = ColourFromRgb(theme::kBorder);
+        SetGlColour(cubeColour, 1.0, 205);
+        glLineWidth(1.5f);
+        glBegin(GL_LINES);
+        for (int ix = -1; ix <= 1; ix += 2) {
+            for (int iy = -1; iy <= 1; iy += 2) {
+                glVertex3d((double)(ix * kAxisExtent), (double)(iy * kAxisExtent), (double)-kAxisExtent);
+                glVertex3d((double)(ix * kAxisExtent), (double)(iy * kAxisExtent), (double)kAxisExtent);
+            }
+        }
+        for (int ix = -1; ix <= 1; ix += 2) {
+            for (int iz = -1; iz <= 1; iz += 2) {
+                glVertex3d((double)(ix * kAxisExtent), (double)-kAxisExtent, (double)(iz * kAxisExtent));
+                glVertex3d((double)(ix * kAxisExtent), (double)kAxisExtent, (double)(iz * kAxisExtent));
+            }
+        }
+        for (int iy = -1; iy <= 1; iy += 2) {
+            for (int iz = -1; iz <= 1; iz += 2) {
+                glVertex3d((double)-kAxisExtent, (double)(iy * kAxisExtent), (double)(iz * kAxisExtent));
+                glVertex3d((double)kAxisExtent, (double)(iy * kAxisExtent), (double)(iz * kAxisExtent));
+            }
+        }
+        glEnd();
+    }
+
+    void EnableClipBox() const {
+        GLdouble planes[6][4] = {
+            {  1.0,  0.0,  0.0, (double)kAxisExtent },
+            { -1.0,  0.0,  0.0, (double)kAxisExtent },
+            {  0.0,  1.0,  0.0, (double)kAxisExtent },
+            {  0.0, -1.0,  0.0, (double)kAxisExtent },
+            {  0.0,  0.0,  1.0, (double)kAxisExtent },
+            {  0.0,  0.0, -1.0, (double)kAxisExtent }
+        };
+        for (int i = 0; i < 6; i++) {
+            glClipPlane(GL_CLIP_PLANE0 + i, planes[i]);
+            glEnable(GL_CLIP_PLANE0 + i);
+        }
+    }
+
+    void DisableClipBox() const {
+        for (int i = 0; i < 6; i++) glDisable(GL_CLIP_PLANE0 + i);
+    }
+
+    void DrawScene() {
+        wxSize size = GetClientSize();
+        wxRect plot = PlotRect();
+        int width = std::max(1, size.x);
+        int height = std::max(1, size.y);
+        int viewportY = height - plot.y - plot.height;
+        long double aspect = plot.height > 0 ? (long double)plot.width / (long double)plot.height : 1.0L;
+        long double span = ViewSpan();
+
+        glViewport(0, 0, width, height);
+        glClearColor(0x16 / 255.0f, 0x1B / 255.0f, 0x22 / 255.0f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glEnable(GL_SCISSOR_TEST);
+        glScissor(plot.x, viewportY, plot.width, plot.height);
+        glClearColor(((kGraph3DPlotBg >> 16) & 0xFF) / 255.0f,
+                     ((kGraph3DPlotBg >> 8) & 0xFF) / 255.0f,
+                     (kGraph3DPlotBg & 0xFF) / 255.0f,
+                     1.0f);
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+        glDisable(GL_SCISSOR_TEST);
+
+        glViewport(plot.x, viewportY, plot.width, plot.height);
+        glEnable(GL_DEPTH_TEST);
+        glDepthFunc(GL_LEQUAL);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glDisable(GL_CULL_FACE);
+
+        glMatrixMode(GL_PROJECTION);
+        glLoadIdentity();
+        glOrtho((double)(-span * aspect), (double)(span * aspect),
+                (double)-span, (double)span,
+                (double)(-span * 5.0L), (double)(span * 5.0L));
+
+        glMatrixMode(GL_MODELVIEW);
+        glLoadIdentity();
+        glRotatef((GLfloat)-m_pitch, 1.0f, 0.0f, 0.0f);
+        glRotatef((GLfloat)m_yaw, 0.0f, 0.0f, 1.0f);
+
+        EnableClipBox();
+        for (const auto& surface : m_surfaces) {
+            if (surface.kind == Graph3DRequestKind::Explicit) DrawExplicitSurface(surface);
+            else DrawImplicitSurface(surface);
+        }
+        DisableClipBox();
+        DrawBoundingCube();
+        DrawAxes();
+    }
+
+    wxFont OverlayFont(int pointSize) const {
+        wxFont font(wxFontInfo(pointSize).Family(wxFONTFAMILY_TELETYPE).Bold());
+#ifdef __WXMSW__
+        font.SetFaceName("Consolas");
+#elif defined(__WXGTK__)
+        font.SetFaceName("DejaVu Sans Mono");
+#endif
+        return font;
+    }
+
+    wxSize MeasureOverlayText(const wxString& text, int pointSize) const {
+        wxBitmap bitmap(1, 1, 24);
+        wxMemoryDC dc(bitmap);
+        dc.SetFont(OverlayFont(pointSize));
+        wxCoord width = 0;
+        wxCoord height = 0;
+        dc.GetTextExtent(text, &width, &height);
+        dc.SelectObject(wxNullBitmap);
+        return wxSize(std::max(1, (int)width), std::max(1, (int)height));
+    }
+
+    wxString FormatTickLabel(long double value) const {
+        if (fabsl(value) < 1e-12L) value = 0.0L;
+        return wxString::Format("%Lg", value);
+    }
+
+    bool AddOverlayLabel(std::vector<OverlayLabel>& labels, std::vector<wxRect>& occupied,
+                         const wxString& text, ScreenPoint point, int dx, int dy,
+                         int pointSize, bool force) const {
+        if (text.empty()) return false;
+        wxRect plot = PlotRect();
+        wxSize extent = MeasureOverlayText(text, pointSize);
+        int width = extent.x + 2;
+        int height = extent.y + 2;
+        int x = (int)std::round(point.x) + dx;
+        int y = (int)std::round(point.y) + dy;
+        x = std::clamp(x, plot.x + 4, std::max(plot.x + 4, plot.x + plot.width - width - 4));
+        y = std::clamp(y, plot.y + 4, std::max(plot.y + 4, plot.y + plot.height - height - 4));
+        wxRect rect(x, y, width, height);
+        wxRect padded = rect;
+        padded.Inflate(4, 3);
+
+        if (!force) {
+            for (const wxRect& taken : occupied) {
+                wxRect expanded = taken;
+                expanded.Inflate(3, 2);
+                if (expanded.Intersects(padded)) return false;
+            }
+        }
+
+        labels.push_back({ text, x, y, width, height, pointSize });
+        occupied.push_back(rect);
+        return true;
+    }
+
+    void AddTickLabels(std::vector<OverlayLabel>& labels, std::vector<wxRect>& occupied) const {
+        long double xTick = NiceTick(2.0L * m_xRange);
+        long double yTick = NiceTick(2.0L * m_yRange);
+        long double zTick = NiceTick(2.0L * m_zRange);
+
+        for (long double x = ceill(-m_xRange / xTick) * xTick; x <= m_xRange; x += xTick) {
+            if (fabsl(x) < 1e-12L) continue;
+            AddOverlayLabel(labels, occupied, FormatTickLabel(x),
+                            ProjectDraw(NormalizedX(x), 0.0L, 0.0L), 5, 7, 10, false);
+        }
+        for (long double y = ceill(-m_yRange / yTick) * yTick; y <= m_yRange; y += yTick) {
+            if (fabsl(y) < 1e-12L) continue;
+            AddOverlayLabel(labels, occupied, FormatTickLabel(y),
+                            ProjectDraw(0.0L, NormalizedY(y), 0.0L), 6, -18, 10, false);
+        }
+        for (long double z = ceill(-m_zRange / zTick) * zTick; z <= m_zRange; z += zTick) {
+            if (fabsl(z) < 1e-12L) continue;
+            AddOverlayLabel(labels, occupied, FormatTickLabel(z),
+                            ProjectDraw(0.0L, 0.0L, NormalizedZ(z)), 7, -8, 10, false);
+        }
+    }
+
+    void DrawOverlayTextureLabel(const OverlayLabel& label) const {
+        wxBitmap bitmap(label.width, label.height, 24);
+        wxMemoryDC dc(bitmap);
+        dc.SetBackground(*wxBLACK_BRUSH);
+        dc.Clear();
+        dc.SetTextForeground(*wxWHITE);
+        dc.SetFont(OverlayFont(label.pointSize));
+        dc.DrawText(label.text, 1, 1);
+        dc.SelectObject(wxNullBitmap);
+
+        wxImage image = bitmap.ConvertToImage();
+        if (!image.IsOk() || !image.GetData()) return;
+        unsigned char* rgb = image.GetData();
+        wxColour textColour = ColourFromRgb(theme::kText);
+        std::vector<unsigned char> rgba((size_t)label.width * (size_t)label.height * 4);
+        for (int i = 0; i < label.width * label.height; i++) {
+            unsigned char alpha = std::max(rgb[i * 3], std::max(rgb[i * 3 + 1], rgb[i * 3 + 2]));
+            rgba[(size_t)i * 4] = textColour.Red();
+            rgba[(size_t)i * 4 + 1] = textColour.Green();
+            rgba[(size_t)i * 4 + 2] = textColour.Blue();
+            rgba[(size_t)i * 4 + 3] = alpha;
+        }
+
+        GLuint texture = 0;
+        glGenTextures(1, &texture);
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP);
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, label.width, label.height, 0,
+                     GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+
+        glColor4ub(255, 255, 255, 255);
+        glBegin(GL_QUADS);
+        glTexCoord2f(0.0f, 0.0f);
+        glVertex2i(label.x, label.y);
+        glTexCoord2f(1.0f, 0.0f);
+        glVertex2i(label.x + label.width, label.y);
+        glTexCoord2f(1.0f, 1.0f);
+        glVertex2i(label.x + label.width, label.y + label.height);
+        glTexCoord2f(0.0f, 1.0f);
+        glVertex2i(label.x, label.y + label.height);
+        glEnd();
+
+        glBindTexture(GL_TEXTURE_2D, 0);
+        glDeleteTextures(1, &texture);
+    }
+
+    void DrawOverlayGL() {
+        wxSize size = GetClientSize();
+        std::vector<OverlayLabel> labels;
+        std::vector<wxRect> occupied;
+
+        AddOverlayLabel(labels, occupied, "x", ProjectDraw(kAxisExtent, 0.0L, 0.0L), 10, -12, 16, true);
+        AddOverlayLabel(labels, occupied,
+                        m_surfaces.empty() ? "y" : (m_surfaces.front().yvar.empty() ? "y" : m_surfaces.front().yvar),
+                        ProjectDraw(0.0L, kAxisExtent, 0.0L), 10, -12, 16, true);
+        AddOverlayLabel(labels, occupied, "z", ProjectDraw(0.0L, 0.0L, kAxisExtent), 10, -12, 16, true);
+        AddTickLabels(labels, occupied);
+        if (m_resamplePending)
+            AddOverlayLabel(labels, occupied, "resampling...", { 12.0, 10.0 }, 0, 0, 9, true);
+
+        glPushAttrib(GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT | GL_TEXTURE_BIT | GL_CURRENT_BIT);
+        glDisable(GL_DEPTH_TEST);
+        glDisable(GL_CULL_FACE);
+        glDisable(GL_CLIP_PLANE0);
+        glDisable(GL_CLIP_PLANE1);
+        glDisable(GL_CLIP_PLANE2);
+        glDisable(GL_CLIP_PLANE3);
+        glDisable(GL_CLIP_PLANE4);
+        glDisable(GL_CLIP_PLANE5);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glEnable(GL_TEXTURE_2D);
+
+        glMatrixMode(GL_PROJECTION);
+        glPushMatrix();
+        glLoadIdentity();
+        glOrtho(0.0, (double)std::max(1, size.x), (double)std::max(1, size.y), 0.0, -1.0, 1.0);
+        glMatrixMode(GL_MODELVIEW);
+        glPushMatrix();
+        glLoadIdentity();
+
+        for (const OverlayLabel& label : labels) DrawOverlayTextureLabel(label);
+
+        glMatrixMode(GL_MODELVIEW);
+        glPopMatrix();
+        glMatrixMode(GL_PROJECTION);
+        glPopMatrix();
+        glMatrixMode(GL_MODELVIEW);
+        glPopAttrib();
+    }
+
+    void OnPaint(wxPaintEvent&) {
+        wxPaintDC dc(this);
+        (void)dc;
+        if (!m_context) return;
+        SetCurrent(*m_context);
+        DrawScene();
+        DrawOverlayGL();
+        glFlush();
+        SwapBuffers();
+    }
+
+    void OnMouseWheel(wxMouseEvent& evt) {
+        if (evt.GetWheelAxis() != wxMOUSE_WHEEL_VERTICAL) {
+            evt.Skip();
+            return;
+        }
+        long double factor = evt.GetWheelRotation() > 0 ? 0.85L : 1.0L / 0.85L;
+        m_xRange = std::clamp(m_xRange * factor, 0.05L, 1.0e6L);
+        m_yRange = std::clamp(m_yRange * factor, 0.05L, 1.0e6L);
+        m_zRange = std::clamp(m_zRange * factor, 0.05L, 1.0e6L);
+        ScheduleResample();
+        Refresh(false);
+    }
+
+    void OnLeftDown(wxMouseEvent& evt) {
+        SetFocus();
+        m_dragMode = AxisDragMode(evt.GetPosition());
+        m_dragging = true;
+        m_dragStart = evt.GetPosition();
+        m_dragYaw = m_yaw;
+        m_dragPitch = m_pitch;
+        m_dragXRange = m_xRange;
+        m_dragYRange = m_yRange;
+        m_dragZRange = m_zRange;
+        if (!HasCapture()) CaptureMouse();
+    }
+
+    void OnLeftUp(wxMouseEvent&) {
+        if (!m_dragging) return;
+        m_dragging = false;
+        DragMode mode = m_dragMode;
+        m_dragMode = DragMode::None;
+        if (HasCapture()) ReleaseMouse();
+        if (mode == DragMode::ScaleX || mode == DragMode::ScaleY || mode == DragMode::ScaleZ)
+            ScheduleResample();
+    }
+
+    void OnMouseMove(wxMouseEvent& evt) {
+        if (!m_dragging || !evt.LeftIsDown()) {
+            UpdateAxisCursor(evt.GetPosition());
+            evt.Skip();
+            return;
+        }
+
+        wxPoint pt = evt.GetPosition();
+        if (m_dragMode == DragMode::ScaleX) {
+            long double factor = expl(-(long double)(pt.x - m_dragStart.x) / 160.0L);
+            m_xRange = std::clamp(m_dragXRange * factor, 0.05L, 1.0e6L);
+            SetCursor(wxCursor(wxCURSOR_SIZEWE));
+            ScheduleResample();
+        } else if (m_dragMode == DragMode::ScaleY) {
+            long double factor = expl((long double)(pt.y - m_dragStart.y) / 160.0L);
+            m_yRange = std::clamp(m_dragYRange * factor, 0.05L, 1.0e6L);
+            SetCursor(wxCursor(wxCURSOR_SIZEWE));
+            ScheduleResample();
+        } else if (m_dragMode == DragMode::ScaleZ) {
+            long double factor = expl((long double)(pt.y - m_dragStart.y) / 160.0L);
+            m_zRange = std::clamp(m_dragZRange * factor, 0.05L, 1.0e6L);
+            SetCursor(wxCursor(wxCURSOR_SIZENS));
+            ScheduleResample();
+        } else {
+            m_yaw = m_dragYaw + (long double)(pt.x - m_dragStart.x) * 0.55L;
+            m_pitch = std::clamp(m_dragPitch + (long double)(pt.y - m_dragStart.y) * 0.55L, -85.0L, 85.0L);
+        }
+        Refresh(false);
+    }
+
+    void OnSize(wxSizeEvent& evt) {
+        ResampleAll();
+        Refresh(false);
+        evt.Skip();
+    }
+
+    void OnResampleTimer(wxTimerEvent&) {
+        ResampleAll();
+        Refresh(false);
+    }
+
+    wxGLContext* m_context = nullptr;
+    std::vector<Surface> m_surfaces;
+    wxTimer m_resampleTimer;
+    bool m_resamplePending = false;
+    bool m_dragging = false;
+    DragMode m_dragMode = DragMode::None;
+    wxPoint m_dragStart;
+    long double m_dragYaw = 45.0L;
+    long double m_dragPitch = 34.0L;
+    long double m_dragXRange = 10.0L;
+    long double m_dragYRange = 10.0L;
+    long double m_dragZRange = 10.0L;
+    long double m_yaw = 45.0L;
+    long double m_pitch = 34.0L;
+    long double m_xRange = 10.0L;
+    long double m_yRange = 10.0L;
+    long double m_zRange = 10.0L;
+    std::function<void()> m_surfacesChanged;
+};
+
+class Graph3DPage : public wxPanel {
+public:
+    Graph3DPage(wxWindow* parent)
+        : wxPanel(parent, wxID_ANY) {
+        StyleDarkWindow(this, theme::kPanelBg);
+        auto* root = new wxBoxSizer(wxHORIZONTAL);
+        m_canvas = new Graph3DCanvas(this);
+
+        auto* sidePanel = new wxPanel(this, wxID_ANY, wxDefaultPosition, wxSize(240, -1));
+        StyleDarkWindow(sidePanel, theme::kTabBg);
+        auto* sideSizer = new wxBoxSizer(wxVERTICAL);
+        sidePanel->SetSizer(sideSizer);
+
+        m_side = new wxScrolledWindow(sidePanel, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+                                      wxVSCROLL | wxBORDER_NONE);
+        StyleDarkWindow(m_side, theme::kTabBg);
+        m_side->SetScrollRate(8, 8);
+        m_sideSizer = new wxBoxSizer(wxVERTICAL);
+        m_side->SetSizer(m_sideSizer);
+        sideSizer->Add(m_side, 1, wxEXPAND);
+
+        auto* saveRow = new wxBoxSizer(wxHORIZONTAL);
+        saveRow->AddStretchSpacer(1);
+        auto* save = new wxButton(sidePanel, wxID_ANY, "Save", wxDefaultPosition, wxSize(86, 30));
+        StyleDarkButton(save, true);
+        save->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { SaveGraphPng(); });
+        saveRow->Add(save, 0, wxLEFT | wxRIGHT | wxTOP, 10);
+        sideSizer->Add(saveRow, 0, wxEXPAND);
+
+        auto* resetRow = new wxBoxSizer(wxHORIZONTAL);
+        resetRow->AddStretchSpacer(1);
+        auto* reset = new wxButton(sidePanel, wxID_ANY, "Reset", wxDefaultPosition, wxSize(86, 30));
+        StyleDarkButton(reset, true);
+        reset->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { m_canvas->ResetView(); });
+        resetRow->Add(reset, 0, wxALL, 10);
+        sideSizer->Add(resetRow, 0, wxEXPAND);
+
+        root->Add(m_canvas, 1, wxEXPAND);
+        root->Add(sidePanel, 0, wxEXPAND);
+        SetSizer(root);
+        m_canvas->SetGraphsChangedCallback([this]() { RebuildList(); });
+        RebuildList();
+    }
+
+    bool AddGraph(const Graph3DRequest& request) {
+        return m_canvas->AddGraph(request);
+    }
+
+    std::vector<Graph3DRequest> GraphRequests() const {
+        return m_canvas->GraphRequests();
+    }
+
+private:
+    void SaveGraphPng() {
+        wxString path;
+        if (!ChoosePngSavePath(this, "Save 3D Graph PNG", "bestiary-3d-graph.png", &path)) return;
+        if (!m_canvas->SavePng(path)) {
+            wxMessageBox("Could not save the 3D graph PNG.", "Save 3D Graph",
+                         wxOK | wxICON_ERROR, this);
+        }
+    }
+
+    void RebuildList() {
+        m_sideSizer->Clear(true);
+        auto* title = new wxStaticText(m_side, wxID_ANY, "Graphs");
+        StyleDarkLabel(title);
+        wxFont titleFont = title->GetFont();
+        titleFont.SetWeight(wxFONTWEIGHT_BOLD);
+        title->SetFont(titleFont);
+        m_sideSizer->Add(title, 0, wxALL, 12);
+
+        if (m_canvas->GraphCount() == 0) {
+            auto* empty = new wxStaticText(m_side, wxID_ANY, "No graphs");
+            StyleDarkLabel(empty, true);
+            m_sideSizer->Add(empty, 0, wxLEFT | wxRIGHT | wxBOTTOM, 12);
+        }
+
+        for (size_t i = 0; i < m_canvas->GraphCount(); i++) {
+            auto* row = new wxPanel(m_side);
+            StyleDarkWindow(row, theme::kPanelRaisedBg);
+            auto* rowSizer = new wxBoxSizer(wxHORIZONTAL);
+            auto* swatch = new wxPanel(row, wxID_ANY, wxDefaultPosition, wxSize(10, 22));
+            swatch->SetBackgroundColour(m_canvas->GraphColour(i));
+            auto* label = new wxStaticText(row, wxID_ANY, m_canvas->GraphLabel(i));
+            StyleDarkLabel(label);
+            auto* close = new wxButton(row, wxID_ANY, "x", wxDefaultPosition, wxSize(24, 24), wxBU_EXACTFIT);
+            StyleDarkButton(close);
+            close->Bind(wxEVT_BUTTON, [this, i](wxCommandEvent&) { m_canvas->RemoveGraph(i); });
+            rowSizer->Add(swatch, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, 8);
+            rowSizer->Add(label, 1, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, 8);
+            rowSizer->Add(close, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+            row->SetSizer(rowSizer);
+            m_sideSizer->Add(row, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
+        }
+
+        m_side->FitInside();
+        m_side->Layout();
+    }
+
+    Graph3DCanvas* m_canvas = nullptr;
+    wxScrolledWindow* m_side = nullptr;
+    wxBoxSizer* m_sideSizer = nullptr;
+};
+
+// ============================================================
 // KumaPlotCanvas: draws KUMA plot data in a primitive viewport.
 // ============================================================
 class KumaPlotCanvas : public wxWindow {
@@ -2321,6 +3393,19 @@ public:
     void ResetView() {
         ComputeBounds();
         Refresh(false);
+    }
+
+    bool SavePng(const wxString& path) {
+        wxSize size = GetClientSize();
+        if (size.x <= 0 || size.y <= 0) return false;
+
+        wxBitmap bitmap(size.x, size.y, 24);
+        wxMemoryDC dc(bitmap);
+        DrawContent(dc);
+        dc.SelectObject(wxNullBitmap);
+
+        wxImage image = bitmap.ConvertToImage();
+        return image.IsOk() && image.SaveFile(path, wxBITMAP_TYPE_PNG);
     }
 
 private:
@@ -2787,8 +3872,8 @@ private:
                        WorldToScreenX(m_lineEnd.x, plot), WorldToScreenY(m_lineEnd.y, plot));
     }
 
-    void OnPaint(wxPaintEvent&) {
-        wxAutoBufferedPaintDC dc(this);
+    template<typename DC>
+    void DrawContent(DC& dc) {
         dc.SetBackground(wxBrush(ColourFromRgb(theme::kPanelBg)));
         dc.Clear();
 
@@ -2811,6 +3896,11 @@ private:
             DrawPoints(gc.get(), plot);
         }
         gc->ResetClip();
+    }
+
+    void OnPaint(wxPaintEvent&) {
+        wxAutoBufferedPaintDC dc(this);
+        DrawContent(dc);
     }
 
     void ClampForcedY() {
@@ -2940,6 +4030,14 @@ public:
         m_canvas = new KumaPlotCanvas(this);
         root->Add(m_canvas, 1, wxEXPAND);
 
+        auto* saveRow = new wxBoxSizer(wxHORIZONTAL);
+        saveRow->AddStretchSpacer(1);
+        auto* save = new wxButton(this, wxID_ANY, "Save", wxDefaultPosition, wxSize(86, 30));
+        StyleDarkButton(save, true);
+        save->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { SavePlotPng(); });
+        saveRow->Add(save, 0, wxRIGHT | wxTOP, 12);
+        root->Add(saveRow, 0, wxEXPAND);
+
         auto* resetRow = new wxBoxSizer(wxHORIZONTAL);
         resetRow->AddStretchSpacer(1);
         auto* reset = new wxButton(this, wxID_ANY, "Reset", wxDefaultPosition, wxSize(86, 30));
@@ -2957,6 +4055,15 @@ public:
     }
 
 private:
+    void SavePlotPng() {
+        wxString path;
+        if (!ChoosePngSavePath(this, "Save KUMA Plot PNG", "bestiary-kuma-plot.png", &path)) return;
+        if (!m_canvas->SavePng(path)) {
+            wxMessageBox("Could not save the KUMA plot PNG.", "Save KUMA Plot",
+                         wxOK | wxICON_ERROR, this);
+        }
+    }
+
     KumaPlotCanvas* m_canvas = nullptr;
 };
 
@@ -3010,9 +4117,11 @@ struct Tab {
     bool          closable;
     int           sessionNumber; // >= 1 for numbered Bestiary sessions, -1 otherwise
     int           graphNumber = -1; // >= 1 for numbered Graph tabs, -1 otherwise
+    int           graph3DNumber = -1; // >= 1 for numbered 3D Graph tabs, -1 otherwise
     int           kumaPlotNumber = -1; // >= 1 for numbered KUMA Plot tabs, -1 otherwise
     TerminalView* terminal;      // nullptr for non-terminal pages
     GraphPage*    graph;         // nullptr for non-graph pages
+    Graph3DPage*  graph3D;       // nullptr for non-3D graph pages
     KumaPlotPage* kumaPlot;      // nullptr for non-KUMA plot pages
     int           scrollX = 0;
     int           scrollY = 0;
@@ -3155,6 +4264,11 @@ private:
     int NextGraphNumber() {
         for (int n = 1; ; n++)
             if (m_openGraphNumbers.find(n) == m_openGraphNumbers.end()) return n;
+    }
+
+    int NextGraph3DNumber() {
+        for (int n = 1; ; n++)
+            if (m_openGraph3DNumbers.find(n) == m_openGraph3DNumbers.end()) return n;
     }
 
     int NextKumaPlotNumber() {
@@ -3348,6 +4462,7 @@ private:
     void AddPage(const wxString& title, wxWindow* page, bool closable,
                  int sessionNumber, TerminalView* terminal,
                  int graphNumber = -1, GraphPage* graph = nullptr,
+                 int graph3DNumber = -1, Graph3DPage* graph3D = nullptr,
                  int kumaPlotNumber = -1, KumaPlotPage* kumaPlot = nullptr,
                  std::shared_ptr<HelpPageState> helpPageState = nullptr) {
         m_pages->AddPage(page, title);
@@ -3358,9 +4473,11 @@ private:
         tab.closable = closable;
         tab.sessionNumber = sessionNumber;
         tab.graphNumber = graphNumber;
+        tab.graph3DNumber = graph3DNumber;
         tab.kumaPlotNumber = kumaPlotNumber;
         tab.terminal = terminal;
         tab.graph = graph;
+        tab.graph3D = graph3D;
         tab.kumaPlot = kumaPlot;
         tab.helpPage = std::move(helpPageState);
         m_tabs.push_back(tab);
@@ -3386,6 +4503,7 @@ private:
         auto* term = new TerminalView(m_pages);
         term->SetCloseCallback([this, term]() { CloseTabByPage(term); });
         term->SetGraphRequestCallback([this](const GraphRequest& request) { HandleGraphRequest(request); });
+        term->SetGraph3DRequestCallback([this](const Graph3DRequest& request) { HandleGraph3DRequest(request); });
         term->SetKumaPlotRequestCallback([this](const KumaPlotRequest& request) { HandleKumaPlotRequest(request); });
         term->SetZoomDelta(m_terminalZoomDelta);
         AddPage(title, term, true, number, term);
@@ -3429,6 +4547,7 @@ private:
         auto* term = new TerminalView(m_pages);
         term->SetCloseCallback([this, term]() { CloseTabByPage(term); });
         term->SetGraphRequestCallback([this](const GraphRequest& request) { HandleGraphRequest(request); });
+        term->SetGraph3DRequestCallback([this](const Graph3DRequest& request) { HandleGraph3DRequest(request); });
         term->SetKumaPlotRequestCallback([this](const KumaPlotRequest& request) { HandleKumaPlotRequest(request); });
         term->SetZoomDelta(m_terminalZoomDelta);
         term->SetCommandHistory(commands);
@@ -3499,6 +4618,61 @@ private:
         AddPage(wxString::Format("Graph %d", number), graph, true, -1, nullptr, number, graph);
     }
 
+    Graph3DPage* FindGraph3DPage(int number) const {
+        for (const auto& tab : m_tabs) {
+            if (tab.graph3DNumber == number) return tab.graph3D;
+        }
+        return nullptr;
+    }
+
+    void HandleGraph3DRequest(const Graph3DRequest& request) {
+        if (request.target > 0) {
+            if (request.target > INT_MAX) return;
+            Graph3DPage* existing = FindGraph3DPage((int)request.target);
+            if (existing) {
+                existing->AddGraph(request);
+                for (size_t i = 0; i < m_tabs.size(); i++) {
+                    if (m_tabs[i].graph3D == existing) {
+                        SelectTab((int)i);
+                        break;
+                    }
+                }
+                return;
+            }
+        }
+        AddGraph3DTab(request);
+    }
+
+    void AddGraph3DTab(const Graph3DRequest& request) {
+        int number = request.target > 0 && request.target <= INT_MAX
+            ? (int)request.target
+            : NextGraph3DNumber();
+        if (m_openGraph3DNumbers.find(number) != m_openGraph3DNumbers.end())
+            number = NextGraph3DNumber();
+        m_openGraph3DNumbers.insert(number);
+
+        auto* graph = new Graph3DPage(m_pages);
+        Graph3DRequest adjusted = request;
+        adjusted.target = number;
+        graph->AddGraph(adjusted);
+        AddPage(wxString::Format("3D Graph %d", number), graph, true, -1, nullptr,
+                -1, nullptr, number, graph);
+    }
+
+    void AddRestoredGraph3DTab(int number, const std::vector<Graph3DRequest>& requests) {
+        if (number < 1 || m_openGraph3DNumbers.find(number) != m_openGraph3DNumbers.end())
+            number = NextGraph3DNumber();
+        m_openGraph3DNumbers.insert(number);
+
+        auto* graph = new Graph3DPage(m_pages);
+        for (Graph3DRequest request : requests) {
+            request.target = number;
+            graph->AddGraph(request);
+        }
+        AddPage(wxString::Format("3D Graph %d", number), graph, true, -1, nullptr,
+                -1, nullptr, number, graph);
+    }
+
     void HandleKumaPlotRequest(const KumaPlotRequest& request) {
         AddKumaPlotTab(request);
     }
@@ -3508,7 +4682,7 @@ private:
         m_openKumaPlotNumbers.insert(number);
         wxString title = wxString::Format("KUMA Plot %d", number);
         auto* plot = new KumaPlotPage(m_pages, request, title);
-        AddPage(title, plot, true, -1, nullptr, -1, nullptr, number, plot);
+        AddPage(title, plot, true, -1, nullptr, -1, nullptr, -1, nullptr, number, plot);
     }
 
     void AddRestoredKumaPlotTab(int number, const KumaPlotRequest& request) {
@@ -3517,7 +4691,7 @@ private:
         m_openKumaPlotNumbers.insert(number);
         wxString title = wxString::Format("KUMA Plot %d", number);
         auto* plot = new KumaPlotPage(m_pages, request, title);
-        AddPage(title, plot, true, -1, nullptr, -1, nullptr, number, plot);
+        AddPage(title, plot, true, -1, nullptr, -1, nullptr, -1, nullptr, number, plot);
     }
 
     void OpenScriptTab() {
@@ -4170,6 +5344,14 @@ private:
         return GraphRequestKind::Explicit;
     }
 
+    static long Graph3DKindToLong(Graph3DRequestKind kind) {
+        return kind == Graph3DRequestKind::Implicit ? 1 : 0;
+    }
+
+    static Graph3DRequestKind LongToGraph3DKind(long value) {
+        return value == 1 ? Graph3DRequestKind::Implicit : Graph3DRequestKind::Explicit;
+    }
+
     static long KumaPlotKindToLong(KumaPlotRequestKind kind) {
         return (long)kind;
     }
@@ -4256,6 +5438,19 @@ private:
                     config->Write(item + "/Label", requests[j].label);
                     config->Write(item + "/Serialized", requests[j].serialized);
                 }
+            } else if (tab.graph3D) {
+                config->Write(group + "/Type", "graph3d");
+                config->Write(group + "/Number", (long)tab.graph3DNumber);
+                std::vector<Graph3DRequest> requests = tab.graph3D->GraphRequests();
+                config->Write(group + "/GraphCount", (long)requests.size());
+                for (size_t j = 0; j < requests.size(); j++) {
+                    wxString item = group + wxString::Format("/Graph%zu", j);
+                    config->Write(item + "/Kind", Graph3DKindToLong(requests[j].kind));
+                    config->Write(item + "/Target", (long)requests[j].target);
+                    config->Write(item + "/YVar", requests[j].yvar);
+                    config->Write(item + "/Label", requests[j].label);
+                    config->Write(item + "/Serialized", requests[j].serialized);
+                }
             } else if (tab.kumaPlot) {
                 config->Write(group + "/Type", "kuma");
                 config->Write(group + "/Number", (long)tab.kumaPlotNumber);
@@ -4339,6 +5534,28 @@ private:
                     if (!request.serialized.empty()) requests.push_back(request);
                 }
                 AddRestoredGraphTab((int)number, requests);
+            } else if (type == "graph3d") {
+                long number = 0;
+                long graphCount = 0;
+                std::vector<Graph3DRequest> requests;
+                config->Read(group + "/Number", &number, 0);
+                config->Read(group + "/GraphCount", &graphCount, 0);
+                for (long j = 0; j < graphCount; j++) {
+                    wxString item = group + wxString::Format("/Graph%ld", j);
+                    long kind = 0;
+                    long target = 0;
+                    Graph3DRequest request;
+                    config->Read(item + "/Kind", &kind, 0);
+                    config->Read(item + "/Target", &target, number);
+                    config->Read(item + "/YVar", &request.yvar, "y");
+                    config->Read(item + "/Label", &request.label, "");
+                    config->Read(item + "/Serialized", &request.serialized, "");
+                    request.kind = LongToGraph3DKind(kind);
+                    request.target = target;
+                    if (request.yvar.empty()) request.yvar = "y";
+                    if (!request.serialized.empty()) requests.push_back(request);
+                }
+                AddRestoredGraph3DTab((int)number, requests);
             } else if (type == "kuma") {
                 long number = 0;
                 long kind = 8;
@@ -4608,7 +5825,7 @@ private:
             evt.Skip();
         });
         scheduleRelayout();
-        AddPage(tabTitle, page, true, -1, nullptr, -1, nullptr, -1, nullptr, helpPageState);
+        AddPage(tabTitle, page, true, -1, nullptr, -1, nullptr, -1, nullptr, -1, nullptr, helpPageState);
     }
 
     void AddHelpTab() {
@@ -4681,7 +5898,7 @@ private:
             evt.Skip();
         });
         scheduleRelayout();
-        AddPage("Help", page, true, -1, nullptr, -1, nullptr, -1, nullptr, helpPageState);
+        AddPage("Help", page, true, -1, nullptr, -1, nullptr, -1, nullptr, -1, nullptr, helpPageState);
     }
 
     void SelectTab(int index) {
@@ -4710,6 +5927,8 @@ private:
                 m_openNumbers.erase(m_tabs[i].sessionNumber);
             if (m_tabs[i].graphNumber >= 1)
                 m_openGraphNumbers.erase(m_tabs[i].graphNumber);
+            if (m_tabs[i].graph3DNumber >= 1)
+                m_openGraph3DNumbers.erase(m_tabs[i].graph3DNumber);
             if (m_tabs[i].kumaPlotNumber >= 1)
                 m_openKumaPlotNumbers.erase(m_tabs[i].kumaPlotNumber);
 
@@ -4735,6 +5954,8 @@ private:
                 m_openNumbers.erase(m_tabs[i].sessionNumber);
             if (m_tabs[i].graphNumber >= 1)
                 m_openGraphNumbers.erase(m_tabs[i].graphNumber);
+            if (m_tabs[i].graph3DNumber >= 1)
+                m_openGraph3DNumbers.erase(m_tabs[i].graph3DNumber);
             if (m_tabs[i].kumaPlotNumber >= 1)
                 m_openKumaPlotNumbers.erase(m_tabs[i].kumaPlotNumber);
 
@@ -4758,6 +5979,7 @@ private:
     int               m_selected;
     std::set<int>     m_openNumbers;
     std::set<int>     m_openGraphNumbers;
+    std::set<int>     m_openGraph3DNumbers;
     std::set<int>     m_openKumaPlotNumbers;
     int               m_dragTabIndex = wxNOT_FOUND;
     bool              m_draggingTabs = false;
