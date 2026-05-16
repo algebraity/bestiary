@@ -385,9 +385,9 @@ static void printInlineGroup(Group* group) {
         printf("<group null>");
         return;
     }
-    printf("<group card=%d; elements=[", group->card);
-    int limit = group->card < 6 ? group->card : 6;
-    for (int i = 0; i < limit; i++) {
+    printf("<group card=%zu; elements=[", group->card);
+    size_t limit = group->card < 6 ? group->card : 6;
+    for (size_t i = 0; i < limit; i++) {
         if (i) printf(", ");
         printf("%s", (group->elements && group->elements[i] && group->elements[i]->repr)
                          ? group->elements[i]->repr
@@ -402,9 +402,9 @@ static void printInlineRing(Ring* ring) {
         printf("<ring null>");
         return;
     }
-    printf("<ring card=%d; elements=[", ring->card);
-    int limit = ring->card < 6 ? ring->card : 6;
-    for (int i = 0; i < limit; i++) {
+    printf("<ring card=%zu; elements=[", ring->card);
+    size_t limit = ring->card < 6 ? ring->card : 6;
+    for (size_t i = 0; i < limit; i++) {
         if (i) printf(", ");
         printf("%s", (ring->elements && ring->elements[i] && ring->elements[i]->repr)
                          ? ring->elements[i]->repr
@@ -421,13 +421,13 @@ static void printInlineSubgroup(SubGroup* subgroup) {
     }
     printf("<subgroup of ");
     printInlineGroup(subgroup->ambient);
-    printf("; card=%d; elements=[", subgroup->card);
-    int limit = subgroup->card < 6 ? subgroup->card : 6;
+    printf("; card=%zu; elements=[", subgroup->card);
+    size_t limit = subgroup->card < 6 ? subgroup->card : 6;
     int* indices = subgroup->type == SUBGROUP_INDEXED ? subgroup->data.indexed.indices : NULL;
-    for (int i = 0; i < limit; i++) {
+    for (size_t i = 0; i < limit; i++) {
         if (i) printf(", ");
         int idx = indices ? indices[i] : -1;
-        GroupElement* element = (subgroup->ambient && idx >= 0 && idx < subgroup->ambient->card)
+        GroupElement* element = (subgroup->ambient && idx >= 0 && (size_t)idx < subgroup->ambient->card)
             ? subgroup->ambient->elements[idx]
             : NULL;
         printf("%s", (element && element->repr) ? element->repr : "?");
@@ -444,12 +444,12 @@ static void printInlineCoset(GroupCoset* coset) {
     printf("<%sCoset of ", coset->isLeft ? "left" : "right");
     printInlineSubgroup(coset->subgroup);
     printf("; elements=[");
-    int limit = (coset->subgroup && coset->subgroup->card < 6) ? coset->subgroup->card : 6;
+    size_t limit = (coset->subgroup && coset->subgroup->card < 6) ? coset->subgroup->card : 6;
     int* indices = coset->type == GROUP_COSET_INDEXED ? coset->data.indexed.indices : NULL;
-    for (int i = 0; i < limit; i++) {
+    for (size_t i = 0; i < limit; i++) {
         if (i) printf(", ");
         int idx = indices ? indices[i] : -1;
-        GroupElement* element = (coset->group && idx >= 0 && idx < coset->group->card)
+        GroupElement* element = (coset->group && idx >= 0 && (size_t)idx < coset->group->card)
             ? coset->group->elements[idx]
             : NULL;
         printf("%s", (element && element->repr) ? element->repr : "?");
@@ -465,13 +465,13 @@ static void printInlineSubring(SubRing* subring) {
     }
     printf("<subring of ");
     printInlineRing(subring->ambient);
-    printf("; card=%d; elements=[", subring->card);
-    int limit = subring->card < 6 ? subring->card : 6;
+    printf("; card=%zu; elements=[", subring->card);
+    size_t limit = subring->card < 6 ? subring->card : 6;
     int* indices = subring->type == SUBRING_INDEXED ? subring->data.indexed.indices : NULL;
-    for (int i = 0; i < limit; i++) {
+    for (size_t i = 0; i < limit; i++) {
         if (i) printf(", ");
         int idx = indices ? indices[i] : -1;
-        RingElement* element = (subring->ambient && idx >= 0 && idx < subring->ambient->card)
+        RingElement* element = (subring->ambient && idx >= 0 && (size_t)idx < subring->ambient->card)
             ? subring->ambient->elements[idx]
             : NULL;
         printf("%s", (element && element->repr) ? element->repr : "?");
@@ -488,13 +488,13 @@ static void printInlineIdeal(Ideal* ideal) {
     const char* side = ideal->side == IDEAL_LEFT ? "left" : (ideal->side == IDEAL_RIGHT ? "right" : "two-sided");
     printf("<%sIdeal of ", side);
     printInlineRing(ideal->ring);
-    printf("; card=%d; elements=[", ideal->card);
-    int limit = ideal->card < 6 ? ideal->card : 6;
+    printf("; card=%zu; elements=[", ideal->card);
+    size_t limit = ideal->card < 6 ? ideal->card : 6;
     int* indices = ideal->type == IDEAL_INDEXED ? ideal->data.indexed.indices : NULL;
-    for (int i = 0; i < limit; i++) {
+    for (size_t i = 0; i < limit; i++) {
         if (i) printf(", ");
         int idx = indices ? indices[i] : -1;
-        RingElement* element = (ideal->ring && idx >= 0 && idx < ideal->ring->card)
+        RingElement* element = (ideal->ring && idx >= 0 && (size_t)idx < ideal->ring->card)
             ? ideal->ring->elements[idx]
             : NULL;
         printf("%s", (element && element->repr) ? element->repr : "?");
@@ -541,11 +541,18 @@ static void printInlineRepresentation(Representation* rep) {
         printf("<representation null>");
         return;
     }
-    printf("<representation %s; dim=%d; matrixDim=%d; groupCard=%d>",
-           rep->repr ? rep->repr : "?",
-           rep->dim,
-           rep->mdim,
-           (rep->group ? rep->group->card : -1));
+    if (rep->group) {
+        printf("<representation %s; dim=%d; matrixDim=%d; groupCard=%zu>",
+               rep->repr ? rep->repr : "?",
+               rep->dim,
+               rep->mdim,
+               rep->group->card);
+    } else {
+        printf("<representation %s; dim=%d; matrixDim=%d; groupCard=-1>",
+               rep->repr ? rep->repr : "?",
+               rep->dim,
+               rep->mdim);
+    }
 }
 
 static void printInlineCharacter(Character* chi) {
@@ -553,10 +560,16 @@ static void printInlineCharacter(Character* chi) {
         printf("<character null>");
         return;
     }
-    printf("<character %s; classes=%d; groupCard=%d>",
-           chi->repr ? chi->repr : "?",
-           chi->numClasses,
-           (chi->group ? chi->group->card : -1));
+    if (chi->group) {
+        printf("<character %s; classes=%d; groupCard=%zu>",
+               chi->repr ? chi->repr : "?",
+               chi->numClasses,
+               chi->group->card);
+    } else {
+        printf("<character %s; classes=%d; groupCard=-1>",
+               chi->repr ? chi->repr : "?",
+               chi->numClasses);
+    }
 }
 
 static void freeCharacterDeep(Character* chi) {
@@ -609,10 +622,16 @@ static void printInlineCharacterTable(CharacterTable* table) {
         printf("<characterTable null>");
         return;
     }
-    printf("<characterTable classes=%d; irreps=%d; groupCard=%d>",
-           table->numClasses,
-           table->numIrreps,
-           (table->group ? table->group->card : -1));
+    if (table->group) {
+        printf("<characterTable classes=%d; irreps=%d; groupCard=%zu>",
+               table->numClasses,
+               table->numIrreps,
+               table->group->card);
+    } else {
+        printf("<characterTable classes=%d; irreps=%d; groupCard=-1>",
+               table->numClasses,
+               table->numIrreps);
+    }
 }
 
 static void freeCharacterTableDeep(CharacterTable* table) {

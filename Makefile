@@ -239,14 +239,14 @@ $(LINUX_RELEASE_DIR): FORCE $(CLI_BIN) $(GUI_BIN)
 $(LINUX_RELEASE_ARCHIVE): $(LINUX_RELEASE_DIR)
 	cd $(DISTDIR) && tar -czf $(notdir $@) $(notdir $(LINUX_RELEASE_DIR))
 
-$(WINDOWS_RELEASE_DIR): FORCE $(CLI_BIN) $(GUI_BIN) $(WINDOWS_RUNTIME_BINS)
+$(WINDOWS_RELEASE_DIR): FORCE $(CLI_BIN) $(GUI_BIN) $(WINDOWS_RUNTIME_BINS) $(WINDOWS_INSTALLER_FILES)
 	@if [ "$(PLATFORM)" != "windows" ]; then \
 		echo "windows release packaging is only supported with PLATFORM=windows"; \
 		exit 1; \
 	fi
 	rm -rf $@
 	@mkdir -p $@
-	cp $(CLI_BIN) $(GUI_BIN) $(WINDOWS_RUNTIME_BINS) $@/
+	cp $(CLI_BIN) $(GUI_BIN) $(WINDOWS_RUNTIME_BINS) $(WINDOWS_INSTALLER_FILES) $@/
 
 $(WINDOWS_RELEASE_ARCHIVE): $(WINDOWS_RELEASE_DIR)
 	cd $(DISTDIR) && zip -rq $(notdir $@) $(notdir $(WINDOWS_RELEASE_DIR))

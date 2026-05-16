@@ -25,7 +25,7 @@ On GNU/Linux, the extracted archive contains the Bestiary executables. You can r
 
 ## GUI application
 
-Bestiary can be used either through the GUI application, `bestiary`, or through the command-line interpreter, `bestiary-cli`. The GUI is recommended for serious work and long-term use, since it provides multiple shell tabs, searchable documentation, script tabs, 2D and 3D graphig, statistical plotting tools, and convenient access to the same evaluator used by the CLI.
+Bestiary can be used either through the GUI application, `bestiary`, or through the command-line interpreter, `bestiary-cli`. The GUI is recommended for serious work and long-term use, since it provides multiple shell tabs, searchable documentation, script tabs, 2D and 3D graphing, statistical plotting tools, PNG export for graphs and plots, and convenient access to the same evaluator used by the CLI.
 
 Here are some screenshots from Bestiary:
 
@@ -156,7 +156,7 @@ Bestiary is powered by 7 core C-based mathematics libraries, known as BEASTs, wi
   * the petite rabbit, hopping through rings, skipping through fields, and always staying in a group (;3)
   * provides a full library for finite group and ring theory, including constructors for common objects, quotients, homomorphisms, and much more
   * Main features: groups, rings, fields, sub-objects, quotients, homomorphisms, ideals, advanced computations
-* NEKO (猫): Numerical Estimation Kernel with Optimizations (calculus,numerical analysis, and solvers)
+* NEKO (猫): Numerical Estimation Kernel with Optimizations (calculus, numerical analysis, and solvers)
   * the supple feline, squeezing quickly and leanly into even the tightest of functions and ODEs
   * offers symbolic and numerical methods for calculus and applications
   * Main features: differentiation, integration, numerical rootfinding, ODE solvers, polynomial factorization over R and C
@@ -172,14 +172,14 @@ Bestiary is powered by 7 core C-based mathematics libraries, known as BEASTs, wi
   * the fearless wolf, hunting down the properties of sets of integers with ferocious intensity
   * a self-contained library for integer combinatorics based on [OOKAMI](https://git.keimai.space/algebraity/ookami)
   * Main features: computing sumsets, difference sets, product sets, rep functions, energies, APs and GPs, and much more
-* KUMA (熊): Kernal for Uncertainty Measurement and Analyssi (probability and statistics)
+* KUMA (熊): Kernel for Uncertainty Measurement and Analysis (probability and statistics)
   * the ferocious bear, meeting uncertainty with the mathematical force of a grizzly
   * uses HEBI and NEKO when necessary, providing access to essential features for probability and statistics
   * Main features: basic invariants, statistics of two variables, various statistical plots, essential discrete and continuous probability distributions, random sampling
 * Quaternionic (quaternions, octonions, and Cayley-Dickson algebras)
   * the first and only non-animal library; an implementation of [Quaternionic](https://git.keimai.space/algebraity/quaternionic)
   * makes use of HEBI, Sokko, and USAGI to do arithmetic and algebra with quaternions, octonions, and higher-degree Cayley-Dickson algebras
-  * Main features: defining Cayley-Dickson algebras over fields, CD arithemtic, zero-divisors, ideals of CD algebras, commutator and associator, matrix representations of quaternions
+  * Main features: defining Cayley-Dickson algebras over fields, CD arithmetic, zero-divisors, ideals of CD algebras, commutator and associator, matrix representations of quaternions
 
 ## Dependencies
 

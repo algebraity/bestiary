@@ -1997,7 +1997,7 @@ void printCharacterTable(CharacterTable* T) {
     }
 
     // Print the table title with the group order
-    printf("Character table of group (|G| = %d):\n\n", T->group->card);
+    printf("Character table of group (|G| = %zu):\n\n", T->group->card);
 
     // Print the conjugacy-class representative row
     printf("%-*s |", rowLabelWidth, "class rep");

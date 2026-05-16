@@ -1712,9 +1712,9 @@ static void appendInlineGroupSummary(char* buf, size_t bufSize, Group* group) {
         snprintf(buf + used, bufSize - used, "<group null>");
         return;
     }
-    used += snprintf(buf + used, bufSize - used, "<group card=%d; elements=[", group->card);
-    int limit = group->card < 6 ? group->card : 6;
-    for (int i = 0; i < limit && used < bufSize; i++) {
+    used += snprintf(buf + used, bufSize - used, "<group card=%zu; elements=[", group->card);
+    size_t limit = group->card < 6 ? group->card : 6;
+    for (size_t i = 0; i < limit && used < bufSize; i++) {
         used += snprintf(buf + used, bufSize - used, "%s%s",
                          i ? ", " : "",
                          (group->elements && group->elements[i] && group->elements[i]->repr)
@@ -1731,9 +1731,9 @@ static void appendInlineRingSummary(char* buf, size_t bufSize, Ring* ring) {
         snprintf(buf + used, bufSize - used, "<ring null>");
         return;
     }
-    used += snprintf(buf + used, bufSize - used, "<ring card=%d; elements=[", ring->card);
-    int limit = ring->card < 6 ? ring->card : 6;
-    for (int i = 0; i < limit && used < bufSize; i++) {
+    used += snprintf(buf + used, bufSize - used, "<ring card=%zu; elements=[", ring->card);
+    size_t limit = ring->card < 6 ? ring->card : 6;
+    for (size_t i = 0; i < limit && used < bufSize; i++) {
         used += snprintf(buf + used, bufSize - used, "%s%s",
                          i ? ", " : "",
                          (ring->elements && ring->elements[i] && ring->elements[i]->repr)
@@ -1761,9 +1761,9 @@ static void appendInlineSubgroupElements(char* buf, size_t bufSize, SubGroup* su
         return;
     }
     used += snprintf(buf + used, bufSize - used, "[");
-    int limit = subgroup->card < 8 ? subgroup->card : 8;
+    size_t limit = subgroup->card < 8 ? subgroup->card : 8;
     int* indices = subgroup->type == SUBGROUP_INDEXED ? subgroup->data.indexed.indices : NULL;
-    for (int i = 0; i < limit && used < bufSize; i++) {
+    for (size_t i = 0; i < limit && used < bufSize; i++) {
         GroupElement* element = indices ? subgroup->ambient->elements[indices[i]] : NULL;
         used += snprintf(buf + used, bufSize - used, "%s%s",
                          i ? ", " : "",
@@ -1780,7 +1780,7 @@ static void appendInlineSubgroupSummary(char* buf, size_t bufSize, SubGroup* sub
         snprintf(buf + used, bufSize - used, "<subgroup null>");
         return;
     }
-    used += snprintf(buf + used, bufSize - used, "<subgroup card=%d; elements=", subgroup->card);
+    used += snprintf(buf + used, bufSize - used, "<subgroup card=%zu; elements=", subgroup->card);
     appendInlineSubgroupElements(buf, bufSize, subgroup);
     used = strlen(buf);
     if (used < bufSize) snprintf(buf + used, bufSize - used, ">");
@@ -1793,10 +1793,10 @@ static void appendInlineSubringSummary(char* buf, size_t bufSize, SubRing* subri
         snprintf(buf + used, bufSize - used, "<subring null>");
         return;
     }
-    used += snprintf(buf + used, bufSize - used, "<subring card=%d; elements=[", subring->card);
-    int limit = subring->card < 8 ? subring->card : 8;
+    used += snprintf(buf + used, bufSize - used, "<subring card=%zu; elements=[", subring->card);
+    size_t limit = subring->card < 8 ? subring->card : 8;
     int* indices = subring->type == SUBRING_INDEXED ? subring->data.indexed.indices : NULL;
-    for (int i = 0; i < limit && used < bufSize; i++) {
+    for (size_t i = 0; i < limit && used < bufSize; i++) {
         RingElement* element = indices ? subring->ambient->elements[indices[i]] : NULL;
         used += snprintf(buf + used, bufSize - used, "%s%s",
                          i ? ", " : "",
@@ -1814,11 +1814,11 @@ static void appendInlineIdealSummary(char* buf, size_t bufSize, Ideal* ideal) {
         return;
     }
     const char* side = ideal->side == IDEAL_LEFT ? "left" : (ideal->side == IDEAL_RIGHT ? "right" : "two-sided");
-    used += snprintf(buf + used, bufSize - used, "<%sIdeal card=%d; elements=[",
+    used += snprintf(buf + used, bufSize - used, "<%sIdeal card=%zu; elements=[",
                      side, ideal->card);
-    int limit = ideal->card < 8 ? ideal->card : 8;
+    size_t limit = ideal->card < 8 ? ideal->card : 8;
     int* indices = ideal->type == IDEAL_INDEXED ? ideal->data.indexed.indices : NULL;
-    for (int i = 0; i < limit && used < bufSize; i++) {
+    for (size_t i = 0; i < limit && used < bufSize; i++) {
         RingElement* element = indices ? ideal->ring->elements[indices[i]] : NULL;
         used += snprintf(buf + used, bufSize - used, "%s%s",
                          i ? ", " : "",
@@ -1931,7 +1931,7 @@ static Value subgroupListSymbol(const char* label, Group* group, SubGroup** subg
     if (used < 8192) snprintf(buf + used, 8192 - used, ": ");
     for (int i = 0; i < count; i++) {
         used = strlen(buf);
-        if (used < 8192) snprintf(buf + used, 8192 - used, "%sH%d(card=%d, elements=", i ? "; " : "", i + 1, subgroups[i]->card);
+        if (used < 8192) snprintf(buf + used, 8192 - used, "%sH%d(card=%zu, elements=", i ? "; " : "", i + 1, subgroups[i]->card);
         appendInlineSubgroupElements(buf, 8192, subgroups[i]);
         used = strlen(buf);
         if (used < 8192) snprintf(buf + used, 8192 - used, ")");
@@ -12276,7 +12276,7 @@ static Value bi_listSubgroups_cmd(EvalContext* c, Value* a, size_t n) {
     if (used < 8192) snprintf(buf + used, 8192 - used, ": ");
     for (int i = 0; i < count; i++) {
         used = strlen(buf);
-        if (used < 8192) snprintf(buf + used, 8192 - used, "%sH%d(card=%d, elements=", i ? "; " : "", i + 1, subgroups[i]->card);
+        if (used < 8192) snprintf(buf + used, 8192 - used, "%sH%d(card=%zu, elements=", i ? "; " : "", i + 1, subgroups[i]->card);
         appendInlineSubgroupElements(buf, 8192, subgroups[i]);
         used = strlen(buf);
         if (used < 8192) snprintf(buf + used, 8192 - used, ")");
@@ -12409,10 +12409,25 @@ static Value bi_groupHomomorphismInfo_cmd(EvalContext* c, Value* a, size_t n) {
     SubGroup* kernel = hom ? groupHomomorphismKernel(hom) : NULL;
     Group* image = hom ? groupHomomorphismImage(hom) : NULL;
     size_t used = strlen(buf);
-    if (used < sizeof(buf)) snprintf(buf + used, sizeof(buf) - used, "; kernelCard=%d; imageCard=%d; isomorphism=%s",
-                                     kernel ? kernel->card : -1,
-                                     image ? image->card : -1,
-                                     (hom && isGroupIsomorphism(hom)) ? "yes" : "no");
+    if (used < sizeof(buf)) {
+        if (kernel && image) {
+            snprintf(buf + used, sizeof(buf) - used, "; kernelCard=%zu; imageCard=%zu; isomorphism=%s",
+                     kernel->card,
+                     image->card,
+                     (hom && isGroupIsomorphism(hom)) ? "yes" : "no");
+        } else if (kernel) {
+            snprintf(buf + used, sizeof(buf) - used, "; kernelCard=%zu; imageCard=-1; isomorphism=%s",
+                     kernel->card,
+                     (hom && isGroupIsomorphism(hom)) ? "yes" : "no");
+        } else if (image) {
+            snprintf(buf + used, sizeof(buf) - used, "; kernelCard=-1; imageCard=%zu; isomorphism=%s",
+                     image->card,
+                     (hom && isGroupIsomorphism(hom)) ? "yes" : "no");
+        } else {
+            snprintf(buf + used, sizeof(buf) - used, "; kernelCard=-1; imageCard=-1; isomorphism=%s",
+                     (hom && isGroupIsomorphism(hom)) ? "yes" : "no");
+        }
+    }
     freeSubgroup(kernel);
     freeGroup(image);
     valFree(a[0]);
@@ -12431,10 +12446,25 @@ static Value bi_ringHomomorphismInfo_cmd(EvalContext* c, Value* a, size_t n) {
     Ideal* kernel = hom ? ringHomomorphismKernel(hom) : NULL;
     Ring* image = hom ? ringHomomorphismImage(hom) : NULL;
     size_t used = strlen(buf);
-    if (used < sizeof(buf)) snprintf(buf + used, sizeof(buf) - used, "; kernelCard=%d; imageCard=%d; isomorphism=%s",
-                                     kernel ? kernel->card : -1,
-                                     image ? image->card : -1,
-                                     (hom && isRingIsomorphism(hom)) ? "yes" : "no");
+    if (used < sizeof(buf)) {
+        if (kernel && image) {
+            snprintf(buf + used, sizeof(buf) - used, "; kernelCard=%zu; imageCard=%zu; isomorphism=%s",
+                     kernel->card,
+                     image->card,
+                     (hom && isRingIsomorphism(hom)) ? "yes" : "no");
+        } else if (kernel) {
+            snprintf(buf + used, sizeof(buf) - used, "; kernelCard=%zu; imageCard=-1; isomorphism=%s",
+                     kernel->card,
+                     (hom && isRingIsomorphism(hom)) ? "yes" : "no");
+        } else if (image) {
+            snprintf(buf + used, sizeof(buf) - used, "; kernelCard=-1; imageCard=%zu; isomorphism=%s",
+                     image->card,
+                     (hom && isRingIsomorphism(hom)) ? "yes" : "no");
+        } else {
+            snprintf(buf + used, sizeof(buf) - used, "; kernelCard=-1; imageCard=-1; isomorphism=%s",
+                     (hom && isRingIsomorphism(hom)) ? "yes" : "no");
+        }
+    }
     free(kernel ? kernel->data.indexed.indices : NULL);
     free(kernel);
     freeRing(image);
@@ -13197,12 +13227,12 @@ static Value bi_printRep_cmd(EvalContext* c, Value* a, size_t n) {
         return valError("\\printRep failed");
     }
 
-    printf("Representation %s of group (|G|=%d)\n",
+    printf("Representation %s of group (|G|=%zu)\n",
            rep->repr ? rep->repr : "?",
            rep->group->card);
     printf("dimension=%d, matrixDimension=%d\n\n", rep->dim, rep->mdim);
 
-    for (int i = 0; i < rep->group->card; i++) {
+    for (size_t i = 0; i < rep->group->card; i++) {
         const char* elemRepr = (rep->group->elements
                                 && rep->group->elements[i]
                                 && rep->group->elements[i]->repr)
