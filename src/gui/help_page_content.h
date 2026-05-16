@@ -53,7 +53,7 @@ static constexpr Section kSections[] = {
         "* Loops: Bestiary supports for and while loops via the backslash commands `\\for{i = start; i < end; inc (e.g. i += 1)}{stuff}` and `\\while{condition}{stuff}`.\n\n"
         "* Conditionals: Bestiary supports conditions via the command `\\if{condition}{stuff}{else this stuff}`.\n\n"
         "* User-defined functions: You can define your own function with: `\\def{funcName}{input}{stuff...optional \\return{output}}`. Shift+Enter produces a new line while inside curly braces, like in other languages with support for conditionals and functions. After defining them, your functions may be called with `\\funcName{input}`.\n\n"
-        "* Mutable lists: Define a list with `list = \\list{item1, item2, ...}`, append elements with `\\append{list}{element}`, remove a matching element with `\\remove{list}{element}`, and conveniently access list elements with `list[index]`."
+        "* Mutable lists: Define a list with `list = \\list{item1, item2, ...}`, append elements with `\\append{list}{element}`, remove a matching element with `\\remove{list}{element}`, get the length with `\\len{list}`, and conveniently access list elements with `list[index]`."
     },
     {
         Beast::Hebi,
@@ -159,6 +159,7 @@ static constexpr Section kSections[] = {
         "* construct distributions: `\\bernoulli{p}`, `\\normal{mu}{sigma}`, and `\\customDiscrete{values}{probabilities}`\n"
         "* evaluate probabilities: `\\pmf{dist}{x}`, `\\pdf{dist}{x}`, `\\cdf{dist}{x}`, and `\\sample{dist}`\n"
         "* build graphable continuous functions: `\\pdfFunc{dist}` and `\\cdfFunc{dist}`\n"
+        "* open plot tabs: `\\boxPlot{data}`, `\\histogram{data}`, `\\freqPlot{data}`, `\\scatterPlot{x}{y}`, and `\\regressionPlot{x}{y}`\n"
         "* define random variables: `X = \\rv{X}{dist}` and use `\\rvExpectedValue{X}` or `\\rvAffine{X}{a}{b}`"
     },
     {
@@ -186,7 +187,10 @@ static constexpr Section kSections[] = {
 static constexpr Command kCommands[] = {
     HELP_CMD("help", -1, Beast::Basic, "Displays command usage, accepted value types, and return type.", "zero arguments to list commands, or one command name as a Symbol or String", "String"),
     HELP_CMD("run", 1, Beast::Basic, "Runs a text file as a Bestiary script, evaluating each nonblank line in the current context.", "String filename, or an unquoted filename in braces such as \\run{script.bsy}", "String summary, or Error if the file cannot be opened"),
+    HELP_CMD("export", 1, Beast::Basic, "Exports the current shell input history to a Bestiary script.", "String filename, Symbol filename, or an unquoted filename in braces such as \\export{session.bsy}", "String summary, or Error if the file cannot be written"),
+    HELP_CMD("graph", -1, Beast::Basic, "Opens a GUI graph tab for an explicit, vertical, or implicit graph.", "NEKO expression, numeric value, x = real constant, or expression in x and y; optionally followed by a positive Graph tab number", "String summary"),
     HELP_CMD("list", -1, Beast::Basic, "Constructs a dynamic Bestiary list.", "zero or more values", "List"),
+    HELP_CMD("len", 1, Beast::Basic, "Returns the length of a dynamic Bestiary list.", "List", "Int"),
     HELP_CMD("copy", 1, Beast::Basic, "Creates an independently owned copy of a supported value.", "scalar, String, Symbol, List, Matrix, Vector, CombSet, Field, FieldElement, CD algebra, CD element, NEKO expression, KUMA distribution, KUMA random variable, or supported TORA value", "same kind as input"),
     HELP_CMD("sort", 1, Beast::Basic, "Sorts a List of numeric values in ascending order.", "List containing only Int, Fraction, and Decimal values", "List"),
     HELP_CMD("sortedCopy", 1, Beast::Basic, "Creates a sorted copy of a numeric List without mutating the original.", "List containing only Int, Fraction, and Decimal values", "List"),
@@ -317,6 +321,17 @@ static constexpr Command kCommands[] = {
     HELP_CMD("linearRegressionSlope", 2, Beast::Kuma, "Computes the least-squares regression slope for y on x.", "two same-length nonempty numeric Lists", "Int, Fraction, or Decimal"),
     HELP_CMD("linearRegressionIntercept", 2, Beast::Kuma, "Computes the least-squares regression intercept for y on x.", "two same-length nonempty numeric Lists", "Int, Fraction, or Decimal"),
     HELP_CMD("linearRegressionPredict", 3, Beast::Kuma, "Predicts y from slope, intercept, and x.", "numeric slope, numeric intercept, and numeric x", "Int, Fraction, or Decimal"),
+    HELP_CMD("boxPlot", -1, Beast::Kuma, "Opens a KUMA Plot tab containing a boxplot.", "nonempty numeric List, then optional title, x-axis label, and y-axis label", "String summary"),
+    HELP_CMD("histogram", -1, Beast::Kuma, "Opens a KUMA Plot tab containing a histogram.", "nonempty numeric List, optional nonnegative bin count, then optional title, x-axis label, and y-axis label", "String summary"),
+    HELP_CMD("frequencyPlot", -1, Beast::Kuma, "Opens a KUMA Plot tab containing a frequency plot.", "nonempty numeric List, then optional title, x-axis label, and y-axis label", "String summary"),
+    HELP_CMD("freqPlot", -1, Beast::Kuma, "Alias for frequencyPlot.", "nonempty numeric List, then optional title, x-axis label, and y-axis label", "String summary"),
+    HELP_CMD("barGraph", -1, Beast::Kuma, "Opens a KUMA Plot tab containing a bar graph.", "same-length numeric label and value Lists, then optional title, x-axis label, and y-axis label", "String summary"),
+    HELP_CMD("densityPlot", -1, Beast::Kuma, "Opens a KUMA Plot tab containing a kernel density estimate.", "nonempty numeric List, then optional title, x-axis label, and y-axis label", "String summary"),
+    HELP_CMD("dotPlot", -1, Beast::Kuma, "Opens a KUMA Plot tab containing a dot plot.", "nonempty numeric List, then optional title, x-axis label, and y-axis label", "String summary"),
+    HELP_CMD("ecdf", -1, Beast::Kuma, "Opens a KUMA Plot tab containing an empirical CDF.", "nonempty numeric List, then optional title, x-axis label, and y-axis label", "String summary"),
+    HELP_CMD("qqPlot", -1, Beast::Kuma, "Opens a KUMA Plot tab containing a QQ plot.", "nonempty numeric List, ProbabilityDistribution, then optional title, x-axis label, and y-axis label", "String summary"),
+    HELP_CMD("scatterPlot", -1, Beast::Kuma, "Opens a KUMA Plot tab containing a scatter plot.", "two same-length nonempty numeric Lists, then optional title, x-axis label, and y-axis label", "String summary"),
+    HELP_CMD("regressionPlot", -1, Beast::Kuma, "Opens a KUMA Plot tab containing scatter data and a least-squares regression line.", "two same-length nonempty numeric Lists, then optional title, x-axis label, and y-axis label", "String summary"),
     HELP_CMD("bernoulli", 1, Beast::Kuma, "Constructs a Bernoulli distribution.", "probability p", "ProbabilityDistribution"),
     HELP_CMD("binomial", 2, Beast::Kuma, "Constructs a binomial distribution.", "Int n >= 0 and probability p", "ProbabilityDistribution"),
     HELP_CMD("geometric", 1, Beast::Kuma, "Constructs a geometric distribution.", "probability p with 0 < p <= 1", "ProbabilityDistribution"),

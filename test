@@ -1,0 +1,8 @@
+G = \Sn{5}
+G
+H = G \times G
+H
+H
+\graph{x^2}
+\graph{x^2 + y^2 = 9}{1}
+H

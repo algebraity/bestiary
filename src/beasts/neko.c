@@ -3,6 +3,7 @@
 #include<string.h>
 #include<math.h>
 #include<limits.h>
+#include<stdarg.h>
 #include "neko.h"
 #include "hebi.h"
 
@@ -33,6 +34,76 @@ static bool checkedSizeMul(size_t a, size_t b, size_t* out) {
 
     // Store the checked product for the caller
     *out = a * b;
+    return true;
+}
+
+typedef struct {
+    char* data;
+    size_t len;
+    size_t cap;
+} NekoStringBuf;
+
+// Reserve room for additional bytes in a string buffer
+static bool nekoStringBufReserve(NekoStringBuf* buf, size_t extra) {
+    // Require a valid buffer before checking capacity
+    if (!buf) return false;
+
+    // Grow enough to include the requested bytes and terminator
+    size_t needed = buf->len + extra + 1;
+    if (needed <= buf->cap) return true;
+
+    // Double capacity until it can hold the requested content
+    size_t nextCap = buf->cap ? buf->cap * 2 : 64;
+    while (nextCap < needed) nextCap *= 2;
+    char* next = realloc(buf->data, nextCap);
+    if (!next) return false;
+
+    // Store the grown buffer and capacity
+    buf->data = next;
+    buf->cap = nextCap;
+    return true;
+}
+
+// Append raw text to a string buffer
+static bool nekoStringBufAppendText(NekoStringBuf* buf, const char* text) {
+    // Treat missing text as an empty string
+    size_t n = text ? strlen(text) : 0;
+    if (!nekoStringBufReserve(buf, n)) return false;
+
+    // Copy the bytes and restore the terminator
+    if (n) memcpy(buf->data + buf->len, text, n);
+    buf->len += n;
+    buf->data[buf->len] = '\0';
+    return true;
+}
+
+// Append one character to a string buffer
+static bool nekoStringBufAppendChar(NekoStringBuf* buf, char ch) {
+    // Reserve one byte and then write it
+    if (!nekoStringBufReserve(buf, 1)) return false;
+    buf->data[buf->len++] = ch;
+    buf->data[buf->len] = '\0';
+    return true;
+}
+
+// Append formatted text to a string buffer
+static bool nekoStringBufAppendFormat(NekoStringBuf* buf, const char* fmt, ...) {
+    // Measure the formatted output before reserving storage
+    va_list args;
+    va_start(args, fmt);
+    va_list copy;
+    va_copy(copy, args);
+    int needed = vsnprintf(NULL, 0, fmt, copy);
+    va_end(copy);
+    if (needed < 0 || !nekoStringBufReserve(buf, (size_t)needed)) {
+        va_end(args);
+        return false;
+    }
+
+    // Write the formatted bytes into the reserved tail
+    vsnprintf(buf->data + buf->len, buf->cap - buf->len, fmt, args);
+    va_end(args);
+    buf->len += (size_t)needed;
     return true;
 }
 
@@ -386,6 +457,251 @@ long double nekoEvalExpr(const NekoExpr* expr, const char* var, long double x) {
             return NAN;
     }
     return NAN;
+}
+
+// Evaluate an expression numerically at two variable values
+long double nekoEvalExpr2D(const NekoExpr* expr, const char* xvar, long double x, const char* yvar, long double y) {
+    // Invalid expressions evaluate to NAN
+    if (!expr) return NAN;
+
+    // Dispatch recursively according to expression kind
+    switch (expr->kind) {
+        case NEKO_EXPR_CONST:
+            return expr->as.constant;
+        case NEKO_EXPR_VAR:
+            if (expr->as.var && xvar && strcmp(expr->as.var, xvar) == 0) return x;
+            if (expr->as.var && yvar && strcmp(expr->as.var, yvar) == 0) return y;
+            return NAN;
+        case NEKO_EXPR_ADD:
+            return nekoEvalExpr2D(expr->as.binary.lhs, xvar, x, yvar, y)
+                 + nekoEvalExpr2D(expr->as.binary.rhs, xvar, x, yvar, y);
+        case NEKO_EXPR_SUB:
+            return nekoEvalExpr2D(expr->as.binary.lhs, xvar, x, yvar, y)
+                 - nekoEvalExpr2D(expr->as.binary.rhs, xvar, x, yvar, y);
+        case NEKO_EXPR_MUL:
+            return nekoEvalExpr2D(expr->as.binary.lhs, xvar, x, yvar, y)
+                 * nekoEvalExpr2D(expr->as.binary.rhs, xvar, x, yvar, y);
+        case NEKO_EXPR_DIV:
+            return nekoEvalExpr2D(expr->as.binary.lhs, xvar, x, yvar, y)
+                 / nekoEvalExpr2D(expr->as.binary.rhs, xvar, x, yvar, y);
+        case NEKO_EXPR_POW:
+            return powl(nekoEvalExpr2D(expr->as.binary.lhs, xvar, x, yvar, y),
+                        nekoEvalExpr2D(expr->as.binary.rhs, xvar, x, yvar, y));
+        case NEKO_EXPR_NEG:
+            return -nekoEvalExpr2D(expr->as.unary.arg, xvar, x, yvar, y);
+        case NEKO_EXPR_SIN:
+            return sinl(nekoEvalExpr2D(expr->as.unary.arg, xvar, x, yvar, y));
+        case NEKO_EXPR_COS:
+            return cosl(nekoEvalExpr2D(expr->as.unary.arg, xvar, x, yvar, y));
+        case NEKO_EXPR_TAN:
+            return tanl(nekoEvalExpr2D(expr->as.unary.arg, xvar, x, yvar, y));
+        case NEKO_EXPR_ASIN:
+            return asinl(nekoEvalExpr2D(expr->as.unary.arg, xvar, x, yvar, y));
+        case NEKO_EXPR_ACOS:
+            return acosl(nekoEvalExpr2D(expr->as.unary.arg, xvar, x, yvar, y));
+        case NEKO_EXPR_ATAN:
+            return atanl(nekoEvalExpr2D(expr->as.unary.arg, xvar, x, yvar, y));
+        case NEKO_EXPR_EXP:
+            return expl(nekoEvalExpr2D(expr->as.unary.arg, xvar, x, yvar, y));
+        case NEKO_EXPR_LOG:
+            return logl(nekoEvalExpr2D(expr->as.unary.arg, xvar, x, yvar, y));
+        case NEKO_EXPR_SQRT:
+            return sqrtl(nekoEvalExpr2D(expr->as.unary.arg, xvar, x, yvar, y));
+        case NEKO_EXPR_ABS:
+            return fabsl(nekoEvalExpr2D(expr->as.unary.arg, xvar, x, yvar, y));
+        case NEKO_EXPR_ERF:
+            return realErf(nekoEvalExpr2D(expr->as.unary.arg, xvar, x, yvar, y));
+        case NEKO_EXPR_EI:
+            return realEi(nekoEvalExpr2D(expr->as.unary.arg, xvar, x, yvar, y));
+        case NEKO_EXPR_STEP: {
+            long double v = nekoEvalExpr2D(expr->as.unary.arg, xvar, x, yvar, y);
+            return v >= 0.0L ? 1.0L : 0.0L;
+        }
+        case NEKO_EXPR_CALL:
+            return NAN;
+    }
+    return NAN;
+}
+
+// Sample an explicit graph y = f(x) over an interval
+NekoExplicitGraphSample nekoSampleExplicitGraph(const NekoExpr* expr, long double xmin, long double xmax, size_t samples) {
+    NekoExplicitGraphSample out = { .status = NEKO_OK, .points = NULL, .count = 0 };
+
+    // Validate the expression, interval, and sample count
+    if (!expr || !isfinite(xmin) || !isfinite(xmax) || samples < 2 || xmin == xmax) {
+        out.status = NEKO_ERR_INVALID_ARG;
+        return out;
+    }
+
+    // Allocate one point for each requested sample
+    out.points = calloc(samples, sizeof(NekoGraphPoint));
+    if (!out.points) {
+        out.status = NEKO_ERR_INVALID_ARG;
+        return out;
+    }
+    out.count = samples;
+
+    // Evaluate the expression on an evenly spaced grid
+    long double h = (xmax - xmin) / (long double)(samples - 1);
+    for (size_t i = 0; i < samples; i++) {
+        long double x = xmin + (long double)i * h;
+        long double y = nekoEvalExpr(expr, "x", x);
+        out.points[i] = (NekoGraphPoint){ .x = x, .y = y, .valid = isfinite(y) };
+    }
+    return out;
+}
+
+// Append a segment to an implicit graph sample
+static bool graphSegmentPush(NekoImplicitGraphSample* sample, size_t* cap, NekoGraphSegment segment) {
+    // Reject missing sample storage
+    if (!sample || !cap) return false;
+
+    // Grow the segment buffer when it is full
+    if (sample->count == *cap) {
+        size_t nextCap = *cap ? *cap * 2 : 64;
+        NekoGraphSegment* next = realloc(sample->segments, nextCap * sizeof(NekoGraphSegment));
+        if (!next) return false;
+        sample->segments = next;
+        *cap = nextCap;
+    }
+
+    // Store the new segment
+    sample->segments[sample->count++] = segment;
+    return true;
+}
+
+// Interpolate a zero crossing along a cell edge
+static NekoGraphPoint graphEdgePoint(long double x1, long double y1, long double v1,
+                                     long double x2, long double y2, long double v2) {
+    // Use linear interpolation, with a midpoint fallback for nearly equal values
+    long double denom = v1 - v2;
+    long double t = fabsl(denom) > 1e-18L ? v1 / denom : 0.5L;
+    if (!isfinite(t)) t = 0.5L;
+    if (t < 0.0L) t = 0.0L;
+    if (t > 1.0L) t = 1.0L;
+
+    // Return the interpolated point on the edge
+    return (NekoGraphPoint){
+        .x = x1 + t * (x2 - x1),
+        .y = y1 + t * (y2 - y1),
+        .valid = true
+    };
+}
+
+// Add zero-contour pieces for one marching-squares cell
+static bool sampleImplicitCell(NekoImplicitGraphSample* out, size_t* cap,
+                               long double x0, long double x1,
+                               long double y0, long double y1,
+                               long double v00, long double v10,
+                               long double v11, long double v01) {
+    // Skip cells with any nonfinite corner
+    if (!isfinite(v00) || !isfinite(v10) || !isfinite(v11) || !isfinite(v01)) return true;
+
+    // Collect edge crossings in clockwise order
+    NekoGraphPoint points[4];
+    int count = 0;
+    if ((v00 <= 0.0L && v10 >= 0.0L) || (v00 >= 0.0L && v10 <= 0.0L))
+        points[count++] = graphEdgePoint(x0, y0, v00, x1, y0, v10);
+    if ((v10 <= 0.0L && v11 >= 0.0L) || (v10 >= 0.0L && v11 <= 0.0L))
+        points[count++] = graphEdgePoint(x1, y0, v10, x1, y1, v11);
+    if ((v11 <= 0.0L && v01 >= 0.0L) || (v11 >= 0.0L && v01 <= 0.0L))
+        points[count++] = graphEdgePoint(x1, y1, v11, x0, y1, v01);
+    if ((v01 <= 0.0L && v00 >= 0.0L) || (v01 >= 0.0L && v00 <= 0.0L))
+        points[count++] = graphEdgePoint(x0, y1, v01, x0, y0, v00);
+
+    // Connect crossing pairs into contour segments
+    if (count == 2) {
+        return graphSegmentPush(out, cap, (NekoGraphSegment){
+            .x1 = points[0].x, .y1 = points[0].y,
+            .x2 = points[1].x, .y2 = points[1].y
+        });
+    }
+    if (count == 4) {
+        return graphSegmentPush(out, cap, (NekoGraphSegment){
+            .x1 = points[0].x, .y1 = points[0].y,
+            .x2 = points[1].x, .y2 = points[1].y
+        }) && graphSegmentPush(out, cap, (NekoGraphSegment){
+            .x1 = points[2].x, .y1 = points[2].y,
+            .x2 = points[3].x, .y2 = points[3].y
+        });
+    }
+    return true;
+}
+
+// Sample an implicit graph F(x, y) = 0 over a rectangle
+NekoImplicitGraphSample nekoSampleImplicitGraph(const NekoExpr* expr, long double xmin, long double xmax, long double ymin, long double ymax, size_t xsteps, size_t ysteps) {
+    NekoImplicitGraphSample out = { .status = NEKO_OK, .segments = NULL, .count = 0 };
+
+    // Validate the expression, viewport, and grid size
+    if (!expr || !isfinite(xmin) || !isfinite(xmax) || !isfinite(ymin) || !isfinite(ymax)
+            || xmin == xmax || ymin == ymax || xsteps < 2 || ysteps < 2) {
+        out.status = NEKO_ERR_INVALID_ARG;
+        return out;
+    }
+
+    // Allocate the grid of sampled function values
+    size_t nx = xsteps + 1;
+    size_t ny = ysteps + 1;
+    size_t total = 0;
+    if (!checkedSizeMul(nx, ny, &total)) {
+        out.status = NEKO_ERR_INVALID_ARG;
+        return out;
+    }
+    long double* values = malloc(total * sizeof(long double));
+    if (!values) {
+        out.status = NEKO_ERR_INVALID_ARG;
+        return out;
+    }
+
+    // Evaluate F(x, y) at each grid point
+    long double hx = (xmax - xmin) / (long double)xsteps;
+    long double hy = (ymax - ymin) / (long double)ysteps;
+    for (size_t j = 0; j < ny; j++) {
+        long double y = ymin + (long double)j * hy;
+        for (size_t i = 0; i < nx; i++) {
+            long double x = xmin + (long double)i * hx;
+            values[j * nx + i] = nekoEvalExpr2D(expr, "x", x, "y", y);
+        }
+    }
+
+    // Run marching squares on each grid cell
+    size_t cap = 0;
+    for (size_t j = 0; j < ysteps; j++) {
+        long double y0 = ymin + (long double)j * hy;
+        long double y1 = y0 + hy;
+        for (size_t i = 0; i < xsteps; i++) {
+            long double x0 = xmin + (long double)i * hx;
+            long double x1 = x0 + hx;
+            if (!sampleImplicitCell(&out, &cap, x0, x1, y0, y1,
+                                    values[j * nx + i],
+                                    values[j * nx + i + 1],
+                                    values[(j + 1) * nx + i + 1],
+                                    values[(j + 1) * nx + i])) {
+                free(values);
+                free(out.segments);
+                out.segments = NULL;
+                out.count = 0;
+                out.status = NEKO_ERR_INVALID_ARG;
+                return out;
+            }
+        }
+    }
+
+    // Release the temporary value grid
+    free(values);
+    return out;
+}
+
+// Free explicit graph sample storage
+void nekoFreeExplicitGraphSample(NekoExplicitGraphSample sample) {
+    // Release the owned point array
+    free(sample.points);
+}
+
+// Free implicit graph sample storage
+void nekoFreeImplicitGraphSample(NekoImplicitGraphSample sample) {
+    // Release the owned segment array
+    free(sample.segments);
 }
 
 /* ---------- Simplification ---------- */
@@ -3542,4 +3858,309 @@ static void printExprPrec(const NekoExpr* expr, int parentPrec) {
 void nekoPrintExpr(const NekoExpr* expr) {
     // Start recursive printing with no parent precedence
     printExprPrec(expr, 0);
+}
+
+// Append a readable expression string with simple precedence handling
+static bool appendExprText(NekoStringBuf* buf, const NekoExpr* expr, int parentPrec) {
+    // Print a visible placeholder for missing expression nodes
+    if (!expr) return nekoStringBufAppendText(buf, "<null>");
+
+    // Dispatch by expression kind while respecting parent precedence
+    switch (expr->kind) {
+        case NEKO_EXPR_CONST:
+            return nekoStringBufAppendFormat(buf, "%Lg", expr->as.constant);
+        case NEKO_EXPR_VAR:
+            return nekoStringBufAppendText(buf, expr->as.var ? expr->as.var : "?");
+        case NEKO_EXPR_ADD:
+        case NEKO_EXPR_SUB:
+        case NEKO_EXPR_MUL:
+        case NEKO_EXPR_DIV:
+        case NEKO_EXPR_POW: {
+            int prec = exprPrecedence(expr);
+            bool parens = parentPrec > prec;
+            const char* op = expr->kind == NEKO_EXPR_ADD ? " + "
+                : expr->kind == NEKO_EXPR_SUB ? " - "
+                : expr->kind == NEKO_EXPR_MUL ? " * "
+                : expr->kind == NEKO_EXPR_DIV ? " / "
+                : " ^ ";
+            if (parens && !nekoStringBufAppendChar(buf, '(')) return false;
+            if (!appendExprText(buf, expr->as.binary.lhs, prec)) return false;
+            if (!nekoStringBufAppendText(buf, op)) return false;
+            if (!appendExprText(buf, expr->as.binary.rhs, prec + (expr->kind == NEKO_EXPR_POW || expr->kind == NEKO_EXPR_DIV))) return false;
+            if (parens && !nekoStringBufAppendChar(buf, ')')) return false;
+            return true;
+        }
+        case NEKO_EXPR_NEG:
+            if (parentPrec > 30 && !nekoStringBufAppendChar(buf, '(')) return false;
+            if (!nekoStringBufAppendChar(buf, '-')) return false;
+            if (!appendExprText(buf, expr->as.unary.arg, 30)) return false;
+            if (parentPrec > 30 && !nekoStringBufAppendChar(buf, ')')) return false;
+            return true;
+        case NEKO_EXPR_SIN:
+        case NEKO_EXPR_COS:
+        case NEKO_EXPR_TAN:
+        case NEKO_EXPR_ASIN:
+        case NEKO_EXPR_ACOS:
+        case NEKO_EXPR_ATAN:
+        case NEKO_EXPR_EXP:
+        case NEKO_EXPR_LOG:
+        case NEKO_EXPR_SQRT:
+        case NEKO_EXPR_ABS:
+        case NEKO_EXPR_ERF:
+        case NEKO_EXPR_EI:
+        case NEKO_EXPR_STEP:
+            return nekoStringBufAppendText(buf, unaryName(expr->kind))
+                && nekoStringBufAppendChar(buf, '(')
+                && appendExprText(buf, expr->as.unary.arg, 0)
+                && nekoStringBufAppendChar(buf, ')');
+        case NEKO_EXPR_CALL:
+            if (!nekoStringBufAppendText(buf, expr->as.call.name ? expr->as.call.name : "?")) return false;
+            if (!nekoStringBufAppendChar(buf, '(')) return false;
+            for (int i = 0; i < expr->as.call.nargs; i++) {
+                if (i && !nekoStringBufAppendText(buf, ", ")) return false;
+                if (!appendExprText(buf, expr->as.call.args[i], 0)) return false;
+            }
+            return nekoStringBufAppendChar(buf, ')');
+    }
+    return false;
+}
+
+// Return an owned readable string for a NEKO expression
+char* nekoExprToString(const NekoExpr* expr) {
+    // Build the string with recursive expression formatting
+    NekoStringBuf buf = {0};
+    if (!appendExprText(&buf, expr, 0)) {
+        free(buf.data);
+        return NULL;
+    }
+    return buf.data;
+}
+
+// Append a serialized expression tree
+static bool appendSerializedExpr(NekoStringBuf* buf, const NekoExpr* expr) {
+    // Reject missing expressions because the format stores complete trees
+    if (!expr) return false;
+
+    // Emit a compact typed prefix form
+    switch (expr->kind) {
+        case NEKO_EXPR_CONST:
+            return nekoStringBufAppendFormat(buf, "C:%La;", expr->as.constant);
+        case NEKO_EXPR_VAR: {
+            const char* name = expr->as.var ? expr->as.var : "";
+            return nekoStringBufAppendFormat(buf, "V:%zu:%s;", strlen(name), name);
+        }
+        case NEKO_EXPR_ADD:
+        case NEKO_EXPR_SUB:
+        case NEKO_EXPR_MUL:
+        case NEKO_EXPR_DIV:
+        case NEKO_EXPR_POW:
+            return nekoStringBufAppendFormat(buf, "B:%d:{", (int)expr->kind)
+                && appendSerializedExpr(buf, expr->as.binary.lhs)
+                && nekoStringBufAppendText(buf, "}{")
+                && appendSerializedExpr(buf, expr->as.binary.rhs)
+                && nekoStringBufAppendText(buf, "};");
+        case NEKO_EXPR_NEG:
+        case NEKO_EXPR_SIN:
+        case NEKO_EXPR_COS:
+        case NEKO_EXPR_TAN:
+        case NEKO_EXPR_ASIN:
+        case NEKO_EXPR_ACOS:
+        case NEKO_EXPR_ATAN:
+        case NEKO_EXPR_EXP:
+        case NEKO_EXPR_LOG:
+        case NEKO_EXPR_SQRT:
+        case NEKO_EXPR_ABS:
+        case NEKO_EXPR_ERF:
+        case NEKO_EXPR_EI:
+        case NEKO_EXPR_STEP:
+            return nekoStringBufAppendFormat(buf, "U:%d:{", (int)expr->kind)
+                && appendSerializedExpr(buf, expr->as.unary.arg)
+                && nekoStringBufAppendText(buf, "};");
+        case NEKO_EXPR_CALL: {
+            const char* name = expr->as.call.name ? expr->as.call.name : "";
+            if (!nekoStringBufAppendFormat(buf, "F:%zu:%s:%d:", strlen(name), name, expr->as.call.nargs)) return false;
+            for (int i = 0; i < expr->as.call.nargs; i++) {
+                if (!nekoStringBufAppendChar(buf, '{')) return false;
+                if (!appendSerializedExpr(buf, expr->as.call.args[i])) return false;
+                if (!nekoStringBufAppendChar(buf, '}')) return false;
+            }
+            return nekoStringBufAppendChar(buf, ';');
+        }
+    }
+    return false;
+}
+
+// Return an owned serialized string for a NEKO expression
+char* nekoSerializeExpr(const NekoExpr* expr) {
+    // Serialize the tree into a GUI-safe ASCII payload
+    NekoStringBuf buf = {0};
+    if (!appendSerializedExpr(&buf, expr)) {
+        free(buf.data);
+        return NULL;
+    }
+    return buf.data;
+}
+
+// Parse an unsigned size from a serialized expression
+static bool parseSerializedSize(const char** p, size_t* out) {
+    // Require valid parser state
+    if (!p || !*p || !out) return false;
+
+    // Accumulate decimal digits
+    size_t value = 0;
+    const char* s = *p;
+    if (*s < '0' || *s > '9') return false;
+    while (*s >= '0' && *s <= '9') {
+        value = value * 10 + (size_t)(*s - '0');
+        s++;
+    }
+    *p = s;
+    *out = value;
+    return true;
+}
+
+// Parse an integer from a serialized expression
+static bool parseSerializedInt(const char** p, int* out) {
+    // Parse through size_t because kind tags are nonnegative
+    size_t value = 0;
+    if (!parseSerializedSize(p, &value) || value > (size_t)INT_MAX) return false;
+    *out = (int)value;
+    return true;
+}
+
+// Consume a required serialized character
+static bool consumeSerializedChar(const char** p, char ch) {
+    // Check and advance over the requested character
+    if (!p || !*p || **p != ch) return false;
+    (*p)++;
+    return true;
+}
+
+// Parse one braced serialized child expression
+static NekoExpr* parseSerializedBracedExpr(const char** p);
+
+// Parse one serialized expression tree
+static NekoExpr* parseSerializedExpr(const char** p) {
+    // Require an expression tag
+    if (!p || !*p || !**p) return NULL;
+    char tag = *(*p)++;
+    if (!consumeSerializedChar(p, ':')) return NULL;
+
+    // Parse constants directly with strtold
+    if (tag == 'C') {
+        char* end = NULL;
+        long double value = strtold(*p, &end);
+        if (end == *p || !end || *end != ';') return NULL;
+        *p = end + 1;
+        return nekoConst(value);
+    }
+
+    // Parse variables using the stored name length
+    if (tag == 'V') {
+        size_t len = 0;
+        if (!parseSerializedSize(p, &len) || !consumeSerializedChar(p, ':')) return NULL;
+        char* name = malloc(len + 1);
+        if (!name) return NULL;
+        memcpy(name, *p, len);
+        name[len] = '\0';
+        *p += len;
+        if (!consumeSerializedChar(p, ';')) {
+            free(name);
+            return NULL;
+        }
+        NekoExpr* expr = nekoVar(name);
+        free(name);
+        return expr;
+    }
+
+    // Parse unary nodes with one braced child
+    if (tag == 'U') {
+        int kindValue = 0;
+        if (!parseSerializedInt(p, &kindValue) || !consumeSerializedChar(p, ':')) return NULL;
+        NekoExpr* arg = parseSerializedBracedExpr(p);
+        if (!arg || !consumeSerializedChar(p, ';')) {
+            nekoFreeExpr(arg);
+            return NULL;
+        }
+        return nekoUnary((NekoExprKind)kindValue, arg);
+    }
+
+    // Parse binary nodes with two braced children
+    if (tag == 'B') {
+        int kindValue = 0;
+        if (!parseSerializedInt(p, &kindValue) || !consumeSerializedChar(p, ':')) return NULL;
+        NekoExpr* lhs = parseSerializedBracedExpr(p);
+        NekoExpr* rhs = parseSerializedBracedExpr(p);
+        if (!lhs || !rhs || !consumeSerializedChar(p, ';')) {
+            nekoFreeExpr(lhs);
+            nekoFreeExpr(rhs);
+            return NULL;
+        }
+        return nekoBinary((NekoExprKind)kindValue, lhs, rhs);
+    }
+
+    // Parse call nodes with length-prefixed names and braced args
+    if (tag == 'F') {
+        size_t len = 0;
+        int nargs = 0;
+        if (!parseSerializedSize(p, &len) || !consumeSerializedChar(p, ':')) return NULL;
+        char* name = malloc(len + 1);
+        if (!name) return NULL;
+        memcpy(name, *p, len);
+        name[len] = '\0';
+        *p += len;
+        if (!consumeSerializedChar(p, ':') || !parseSerializedInt(p, &nargs) || !consumeSerializedChar(p, ':')) {
+            free(name);
+            return NULL;
+        }
+        NekoExpr** args = nargs > 0 ? calloc((size_t)nargs, sizeof(NekoExpr*)) : NULL;
+        if (nargs > 0 && !args) {
+            free(name);
+            return NULL;
+        }
+        for (int i = 0; i < nargs; i++) {
+            args[i] = parseSerializedBracedExpr(p);
+            if (!args[i]) {
+                for (int j = 0; j < i; j++) nekoFreeExpr(args[j]);
+                free(args);
+                free(name);
+                return NULL;
+            }
+        }
+        if (!consumeSerializedChar(p, ';')) {
+            for (int i = 0; i < nargs; i++) nekoFreeExpr(args[i]);
+            free(args);
+            free(name);
+            return NULL;
+        }
+        NekoExpr* expr = nekoCall(name, args, nargs);
+        free(name);
+        return expr;
+    }
+    return NULL;
+}
+
+// Parse one braced serialized child expression
+static NekoExpr* parseSerializedBracedExpr(const char** p) {
+    // Read the opening brace, child expression, and closing brace
+    if (!consumeSerializedChar(p, '{')) return NULL;
+    NekoExpr* expr = parseSerializedExpr(p);
+    if (!expr || !consumeSerializedChar(p, '}')) {
+        nekoFreeExpr(expr);
+        return NULL;
+    }
+    return expr;
+}
+
+// Reconstruct a NEKO expression from a serialized string
+NekoExpr* nekoDeserializeExpr(const char* text) {
+    // Parse one complete expression and reject trailing junk
+    if (!text) return NULL;
+    const char* p = text;
+    NekoExpr* expr = parseSerializedExpr(&p);
+    if (!expr || *p != '\0') {
+        nekoFreeExpr(expr);
+        return NULL;
+    }
+    return expr;
 }

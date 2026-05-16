@@ -11,6 +11,16 @@ typedef struct ProbabilityDistribution ProbabilityDistribution;
 typedef struct RandomVariable RandomVariable;
 typedef struct Frequency Frequency;
 typedef struct NekoExpr NekoExpr;
+typedef struct KumaBoxPlotData KumaBoxPlotData;
+typedef struct KumaHistogramData KumaHistogramData;
+typedef struct KumaFrequencyPlotData KumaFrequencyPlotData;
+typedef struct KumaBarGraphData KumaBarGraphData;
+typedef struct KumaDensityPlotData KumaDensityPlotData;
+typedef struct KumaDotPlotData KumaDotPlotData;
+typedef struct KumaECDFPlotData KumaECDFPlotData;
+typedef struct KumaQQPlotData KumaQQPlotData;
+typedef struct KumaScatterPlotData KumaScatterPlotData;
+typedef struct KumaRegressionPlotData KumaRegressionPlotData;
 
 typedef enum {
     KUMA_DIST_DISCRETE,
@@ -148,6 +158,107 @@ struct RandomVariable {
     bool ownsDistribution;
 };
 
+/* ---------- Plot data structs ---------- */
+
+typedef struct {
+    long double x;
+    long double y;
+} KumaPlotPoint;
+
+typedef struct {
+    Number value;
+    size_t count;
+    long double position;
+    long double proportion;
+} KumaFrequencyPlotItem;
+
+typedef struct {
+    Number label;
+    Number value;
+    long double height;
+} KumaBarGraphItem;
+
+typedef struct {
+    long double lower;
+    long double upper;
+    long double midpoint;
+    size_t count;
+    long double proportion;
+    long double density;
+} KumaHistogramBin;
+
+struct KumaBoxPlotData {
+    long double minimum;
+    long double q1;
+    long double median;
+    long double q3;
+    long double maximum;
+    long double lowerFence;
+    long double upperFence;
+    long double lowerWhisker;
+    long double upperWhisker;
+    long double* outliers;
+    size_t outlierCount;
+};
+
+struct KumaHistogramData {
+    KumaHistogramBin* bins;
+    size_t binCount;
+    size_t sampleSize;
+    long double minimum;
+    long double maximum;
+    long double binWidth;
+};
+
+struct KumaFrequencyPlotData {
+    KumaFrequencyPlotItem* items;
+    size_t count;
+    size_t sampleSize;
+};
+
+struct KumaBarGraphData {
+    KumaBarGraphItem* bars;
+    size_t count;
+};
+
+struct KumaDensityPlotData {
+    KumaPlotPoint* points;
+    size_t count;
+    size_t sampleSize;
+    long double bandwidth;
+};
+
+struct KumaDotPlotData {
+    KumaFrequencyPlotItem* dots;
+    size_t count;
+    size_t sampleSize;
+};
+
+struct KumaECDFPlotData {
+    KumaPlotPoint* points;
+    size_t count;
+    size_t sampleSize;
+};
+
+struct KumaQQPlotData {
+    KumaPlotPoint* points;
+    size_t count;
+};
+
+struct KumaScatterPlotData {
+    KumaPlotPoint* points;
+    size_t count;
+};
+
+struct KumaRegressionPlotData {
+    KumaPlotPoint* points;
+    size_t count;
+    KumaPlotPoint lineStart;
+    KumaPlotPoint lineEnd;
+    Number slope;
+    Number intercept;
+};
+
 /* ---------- Helper methods ---------- */
 bool isValidStatsNumber(Number x);
 bool isValidStatsArray(Number* data, size_t size);
@@ -198,6 +309,28 @@ Number correlation(Number* x, Number* y, size_t size);
 Number linearRegressionSlope(Number* x, Number* y, size_t size);
 Number linearRegressionIntercept(Number* x, Number* y, size_t size);
 Number linearRegressionPredict(Number slope, Number intercept, Number x);
+
+/* ---------- Plot data functions ---------- */
+KumaBoxPlotData* boxplot(Number* data, size_t size);
+KumaHistogramData* histogram(Number* data, size_t size, size_t binCount);
+KumaFrequencyPlotData* frequencyPlot(Number* data, size_t size);
+KumaBarGraphData* barGraph(Number* labels, Number* values, size_t size);
+KumaDensityPlotData* densityPlot(Number* data, size_t size, size_t pointCount, Number bandwidth);
+KumaDotPlotData* dotPlot(Number* data, size_t size);
+KumaECDFPlotData* ecdf(Number* data, size_t size);
+KumaQQPlotData* qqPlot(Number* data, size_t size, ProbabilityDistribution* dist);
+KumaScatterPlotData* scatterPlot(Number* x, Number* y, size_t size);
+KumaRegressionPlotData* regressionPlot(Number* x, Number* y, size_t size);
+void freeBoxPlotData(KumaBoxPlotData* plot);
+void freeHistogramData(KumaHistogramData* plot);
+void freeFrequencyPlotData(KumaFrequencyPlotData* plot);
+void freeBarGraphData(KumaBarGraphData* plot);
+void freeDensityPlotData(KumaDensityPlotData* plot);
+void freeDotPlotData(KumaDotPlotData* plot);
+void freeECDFPlotData(KumaECDFPlotData* plot);
+void freeQQPlotData(KumaQQPlotData* plot);
+void freeScatterPlotData(KumaScatterPlotData* plot);
+void freeRegressionPlotData(KumaRegressionPlotData* plot);
 
 /* ---------- ProbabilityDistribution construction ---------- */
 ProbabilityDistribution* constructProbabilityDistribution(

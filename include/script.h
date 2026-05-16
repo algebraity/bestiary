@@ -9,6 +9,9 @@ typedef struct ScriptRunOptions {
     int dumpTokens;
     int dumpAst;
     int printResults;
+    int lazyAssignments;
+    int skipGraphCommands;
+    int quietErrors;
 } ScriptRunOptions;
 
 typedef struct ScriptRunResult {

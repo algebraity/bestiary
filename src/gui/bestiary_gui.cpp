@@ -5,6 +5,7 @@
 #include<wx/dcbuffer.h>
 #include<wx/filename.h>
 #include<wx/filedlg.h>
+#include<wx/graphics.h>
 #include<wx/hyperlink.h>
 #include<wx/mstream.h>
 #include<wx/scrolwin.h>
@@ -14,7 +15,9 @@
 #include<wx/timer.h>
 #include<wx/vector.h>
 #include<algorithm>
+#include<cmath>
 #include<cstdio>
+#include<cstdlib>
 #include<cstdint>
 #include<deque>
 #include<memory>
@@ -25,6 +28,10 @@
 #include"help_page_content.h"
 #include"embedded_banner.h"
 #include"embedded_icon.h"
+
+extern "C" {
+#include"neko.h"
+}
 
 #ifdef __WXMSW__
 #  define WIN32_LEAN_AND_MEAN
@@ -126,6 +133,28 @@ static wxString BestiaryExecutablePath() {
     return bestiary.GetFullPath();
 }
 
+static bool EnsureWritableDirectory(const wxString& dir) {
+    if (dir.empty()) return false;
+    if (wxFileName::DirExists(dir)) return true;
+
+    wxLogNull quiet;
+    return wxFileName::Mkdir(dir, wxS_DIR_DEFAULT, wxPATH_MKDIR_FULL)
+        || wxFileName::DirExists(dir);
+}
+
+static wxString BestiarySessionDirectory() {
+    wxString dir = wxStandardPaths::Get().GetUserLocalDataDir();
+    if (EnsureWritableDirectory(dir)) return dir;
+
+    dir = wxStandardPaths::Get().GetUserDataDir();
+    if (EnsureWritableDirectory(dir)) return dir;
+
+    dir = wxFileName(wxFileName::GetTempDir(), "Bestiary").GetFullPath();
+    if (EnsureWritableDirectory(dir)) return dir;
+
+    return wxString();
+}
+
 static wxImage LoadEmbeddedBannerImage() {
     wxMemoryBuffer decoded = wxBase64Decode(BestiaryEmbeddedBanner::kBannerBase64,
                                             wxNO_LEN,
@@ -163,6 +192,40 @@ static wxIconBundle BuildEmbeddedIconBundle() {
     }
     return bundle;
 }
+
+enum class GraphRequestKind {
+    Explicit = 0,
+    Implicit = 1,
+    Vertical = 2
+};
+
+struct GraphRequest {
+    GraphRequestKind kind = GraphRequestKind::Explicit;
+    long long target = 0;
+    wxString label;
+    wxString serialized;
+};
+
+enum class KumaPlotRequestKind {
+    Box = 0,
+    Histogram = 1,
+    Frequency = 2,
+    Bar = 3,
+    Density = 4,
+    Dot = 5,
+    ECDF = 6,
+    QQ = 7,
+    Scatter = 8,
+    Regression = 9
+};
+
+struct KumaPlotRequest {
+    KumaPlotRequestKind kind = KumaPlotRequestKind::Scatter;
+    wxString title;
+    wxString xLabel;
+    wxString yLabel;
+    wxString payload;
+};
 
 // ============================================================
 // PtySession: spawns a child on a real pseudo-terminal so the
@@ -414,6 +477,7 @@ private:
             std::wstring wcmd(cmd.wc_str(), cmd.length());
             wcmd.push_back(L'\0');
 
+            SetEnvironmentVariableW(L"BESTIARY_GUI", L"1");
             BOOL ok = CreateProcessW(nullptr, &wcmd[0], nullptr, nullptr, FALSE,
                                       EXTENDED_STARTUPINFO_PRESENT, nullptr, nullptr,
                                       &si.StartupInfo, &m_pi);
@@ -461,6 +525,7 @@ private:
             // Child
             setenv("TERM", "xterm-256color", 1);
             setenv("LANG", "C.UTF-8", 0);
+            setenv("BESTIARY_GUI", "1", 1);
 
             std::string exeStr(exe.utf8_str());
             std::vector<std::string> argStrs;
@@ -552,10 +617,88 @@ public:
         m_closeCallback = std::move(closeCallback);
     }
 
+    void SetGraphRequestCallback(std::function<void(const GraphRequest&)> graphRequestCallback) {
+        m_graphRequestCallback = std::move(graphRequestCallback);
+    }
+
+    void SetKumaPlotRequestCallback(std::function<void(const KumaPlotRequest&)> kumaPlotRequestCallback) {
+        m_kumaPlotRequestCallback = std::move(kumaPlotRequestCallback);
+    }
+
     void RunScript(const wxString& path) {
         wxString cmd = wxString::Format("\\run{\"%s\"}\r", path);
         wxScopedCharBuffer u8 = cmd.ToUTF8();
+        m_suppressNextInputRecord = true;
         m_pty.Write(u8.data(), u8.length());
+    }
+
+    const std::vector<wxString>& CommandHistory() const {
+        return m_commandHistory;
+    }
+
+    void SetCommandHistory(const std::vector<wxString>& history) {
+        m_commandHistory = history;
+    }
+
+    std::vector<wxString> TranscriptLines() const {
+        std::vector<PhysicalLine> lines = CollectPhysicalLines();
+        std::vector<wxString> out;
+        wxString logical;
+        bool haveLogical = false;
+        bool seenContent = false;
+
+        for (size_t i = 0; i < lines.size(); i++) {
+            bool continuesNext = i + 1 < lines.size() && lines[i + 1].wrappedFromPrevious;
+            wxString text = PhysicalLineText(lines[i], continuesNext);
+            if (lines[i].wrappedFromPrevious) {
+                if (!haveLogical) {
+                    logical = text;
+                    haveLogical = true;
+                } else {
+                    logical += text;
+                }
+                continue;
+            }
+
+            if (haveLogical) {
+                if (!seenContent && logical.empty()) {
+                    // Skip leading blank terminal rows
+                } else {
+                    if (!logical.empty()) seenContent = true;
+                    if (seenContent) out.push_back(logical);
+                }
+            }
+            logical = text;
+            haveLogical = true;
+        }
+
+        if (haveLogical) {
+            if (!seenContent && logical.empty()) {
+                // Skip leading blank terminal rows
+            } else {
+                if (!logical.empty()) seenContent = true;
+                if (seenContent) out.push_back(logical);
+            }
+        }
+
+        while (!out.empty() && out.back().empty()) out.pop_back();
+        if (!out.empty()) {
+            wxString last = out.back();
+            last.Trim(true).Trim(false);
+            if (last == ">") out.pop_back();
+        }
+        return out;
+    }
+
+    void SetTranscriptLines(const std::vector<wxString>& lines) {
+        if (lines.empty()) return;
+        ResetTerminal();
+        for (const wxString& line : lines) {
+            FeedString(line);
+            FeedString("\r\n");
+        }
+        JumpToLiveView();
+        Refresh(false);
     }
 
     static constexpr int kBaseFontPointSize = 11;
@@ -577,8 +720,8 @@ public:
 private:
     struct Cell {
         wxChar  ch    = L' ';
-        uint32_t fg   = 0xC0C0C0u;
-        uint32_t bg   = 0x000000u;
+        uint32_t fg   = theme::kTerminalText;
+        uint32_t bg   = theme::kTerminalBg;
         uint8_t  attrs = 0; // 1=bold, 2=underline, 4=reverse
     };
 
@@ -705,7 +848,8 @@ private:
     }
 
     bool IsBlankCell(const Cell& cell) const {
-        return cell.ch == L' ' && cell.fg == 0xC0C0C0u && cell.bg == 0x000000u && cell.attrs == 0;
+        return cell.ch == L' ' && cell.fg == theme::kTerminalText
+            && cell.bg == theme::kTerminalBg && cell.attrs == 0;
     }
 
     bool ScreenRowHasContent(int row) const {
@@ -732,6 +876,14 @@ private:
         int length = (int)line.cells.size();
         while (length > minLength && IsBlankCell(line.cells[(size_t)(length - 1)])) length--;
         return length;
+    }
+
+    wxString PhysicalLineText(const PhysicalLine& line, bool continuesNext) const {
+        wxString text;
+        int length = PhysicalLineContentLength(line, continuesNext);
+        text.reserve((size_t)length);
+        for (int i = 0; i < length; i++) text += line.cells[(size_t)i].ch;
+        return text;
     }
 
     std::vector<PhysicalLine> CollectPhysicalLines() const {
@@ -1063,7 +1215,7 @@ private:
             else m_paramBuf += (char)b;
             break;
         case State::Osc:
-            if (b == 0x07) { m_state = State::Ground; m_paramBuf.clear(); }
+            if (b == 0x07) { HandleOsc(m_paramBuf); m_state = State::Ground; m_paramBuf.clear(); }
             else if (b == 0x1b) { m_state = State::Esc; m_paramBuf.clear(); }
             else m_paramBuf += (char)b;
             break;
@@ -1071,6 +1223,85 @@ private:
             m_state = State::Ground;
             break;
         }
+    }
+
+    void HandleOsc(const std::string& payload) {
+        static const std::string graphPrefix = "777;BESTIARY_GRAPH\t";
+        static const std::string plotPrefix = "777;BESTIARY_KUMA_PLOT\t";
+        static const std::string inputPrefix = "777;BESTIARY_INPUT\t";
+        if (payload.rfind(inputPrefix, 0) == 0) {
+            wxString input = DecodeHexPayload(payload.substr(inputPrefix.size()));
+            if (m_suppressNextInputRecord) m_suppressNextInputRecord = false;
+            else if (!input.empty()) m_commandHistory.push_back(input);
+            return;
+        }
+        if (payload.rfind(graphPrefix, 0) != 0 && payload.rfind(plotPrefix, 0) != 0) return;
+
+        std::vector<std::string> fields;
+        bool isGraph = payload.rfind(graphPrefix, 0) == 0;
+        const std::string& prefix = isGraph ? graphPrefix : plotPrefix;
+        size_t start = prefix.size();
+        while (start <= payload.size()) {
+            size_t at = payload.find('\t', start);
+            if (at == std::string::npos) {
+                fields.push_back(payload.substr(start));
+                break;
+            }
+            fields.push_back(payload.substr(start, at - start));
+            start = at + 1;
+        }
+        if (isGraph) {
+            if (fields.size() < 4 || !m_graphRequestCallback) return;
+
+            GraphRequest request;
+            int kind = std::atoi(fields[0].c_str());
+            if (kind == 1) request.kind = GraphRequestKind::Implicit;
+            else if (kind == 2) request.kind = GraphRequestKind::Vertical;
+            else request.kind = GraphRequestKind::Explicit;
+            request.target = std::strtoll(fields[1].c_str(), nullptr, 10);
+            request.label = wxString::FromUTF8(fields[2].c_str());
+            request.serialized = wxString::FromUTF8(fields[3].c_str());
+            m_graphRequestCallback(request);
+            return;
+        }
+
+        if (fields.size() < 5 || !m_kumaPlotRequestCallback) return;
+        KumaPlotRequest request;
+        int kind = std::atoi(fields[0].c_str());
+        if (kind == 0) request.kind = KumaPlotRequestKind::Box;
+        else if (kind == 1) request.kind = KumaPlotRequestKind::Histogram;
+        else if (kind == 2) request.kind = KumaPlotRequestKind::Frequency;
+        else if (kind == 3) request.kind = KumaPlotRequestKind::Bar;
+        else if (kind == 4) request.kind = KumaPlotRequestKind::Density;
+        else if (kind == 5) request.kind = KumaPlotRequestKind::Dot;
+        else if (kind == 6) request.kind = KumaPlotRequestKind::ECDF;
+        else if (kind == 7) request.kind = KumaPlotRequestKind::QQ;
+        else if (kind == 9) request.kind = KumaPlotRequestKind::Regression;
+        else request.kind = KumaPlotRequestKind::Scatter;
+        request.title = wxString::FromUTF8(fields[1].c_str());
+        request.xLabel = wxString::FromUTF8(fields[2].c_str());
+        request.yLabel = wxString::FromUTF8(fields[3].c_str());
+        request.payload = wxString::FromUTF8(fields[4].c_str());
+        m_kumaPlotRequestCallback(request);
+    }
+
+    static int HexValue(char ch) {
+        if (ch >= '0' && ch <= '9') return ch - '0';
+        if (ch >= 'A' && ch <= 'F') return ch - 'A' + 10;
+        if (ch >= 'a' && ch <= 'f') return ch - 'a' + 10;
+        return -1;
+    }
+
+    static wxString DecodeHexPayload(const std::string& hex) {
+        std::string bytes;
+        bytes.reserve(hex.size() / 2);
+        for (size_t i = 0; i + 1 < hex.size(); i += 2) {
+            int hi = HexValue(hex[i]);
+            int lo = HexValue(hex[i + 1]);
+            if (hi < 0 || lo < 0) return wxString();
+            bytes.push_back((char)((hi << 4) | lo));
+        }
+        return wxString::FromUTF8(bytes.c_str());
     }
 
     void FeedUtf8(unsigned char b) {
@@ -1267,7 +1498,7 @@ private:
         };
         for (size_t i = 0; i < p.size(); i++) {
             int n = p[i];
-            if      (n == 0)               { m_curFg = 0xC0C0C0u; m_curBg = 0x000000u; m_curAttrs = 0; }
+            if      (n == 0)               { m_curFg = theme::kTerminalText; m_curBg = theme::kTerminalBg; m_curAttrs = 0; }
             else if (n == 1)               m_curAttrs |= 1;
             else if (n == 4)               m_curAttrs |= 2;
             else if (n == 7)               m_curAttrs |= 4;
@@ -1275,9 +1506,9 @@ private:
             else if (n == 24)              m_curAttrs &= ~2;
             else if (n == 27)              m_curAttrs &= ~4;
             else if (n >= 30  && n <= 37)  m_curFg = pal[n - 30];
-            else if (n == 39)              m_curFg = 0xC0C0C0u;
+            else if (n == 39)              m_curFg = theme::kTerminalText;
             else if (n >= 40  && n <= 47)  m_curBg = pal[n - 40];
-            else if (n == 49)              m_curBg = 0x000000u;
+            else if (n == 49)              m_curBg = theme::kTerminalBg;
             else if (n >= 90  && n <= 97)  m_curFg = bri[n - 90];
             else if (n >= 100 && n <= 107) m_curBg = bri[n - 100];
         }
@@ -1313,7 +1544,7 @@ private:
         for (auto& cell : m_screen) cell = Cell{};
         std::fill(m_screenWrappedFromPrevious.begin(), m_screenWrappedFromPrevious.end(), false);
         m_curRow = m_curCol = 0;
-        m_curFg = 0xC0C0C0u; m_curBg = 0x000000u; m_curAttrs = 0;
+        m_curFg = theme::kTerminalText; m_curBg = theme::kTerminalBg; m_curAttrs = 0;
         m_scrollTop = 0; m_scrollBot = m_rows - 1;
     }
 
@@ -1473,10 +1704,1260 @@ private:
     BufferPos m_selAnchor;
     BufferPos m_selFocus;
     std::function<void()> m_closeCallback;
+    std::function<void(const GraphRequest&)> m_graphRequestCallback;
+    std::function<void(const KumaPlotRequest&)> m_kumaPlotRequestCallback;
+    std::vector<wxString> m_commandHistory;
+    bool m_suppressNextInputRecord = false;
 
     std::deque<PhysicalLine> m_history;
     std::vector<bool> m_screenWrappedFromPrevious = std::vector<bool>((size_t)m_rows, false);
     std::vector<Cell> m_screen;
+};
+
+// ============================================================
+// GraphCanvas: draws sampled NEKO graphs inside a plot viewport.
+// ============================================================
+class GraphCanvas : public wxWindow {
+public:
+    GraphCanvas(wxWindow* parent)
+        : wxWindow(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+                   wxBORDER_NONE),
+          m_resampleTimer(this) {
+        SetBackgroundStyle(wxBG_STYLE_PAINT);
+        SetBackgroundColour(ColourFromRgb(theme::kPanelBg));
+
+        Bind(wxEVT_PAINT, &GraphCanvas::OnPaint, this);
+        Bind(wxEVT_SIZE, &GraphCanvas::OnSize, this);
+        Bind(wxEVT_MOUSEWHEEL, &GraphCanvas::OnMouseWheel, this);
+        Bind(wxEVT_LEFT_DOWN, &GraphCanvas::OnLeftDown, this);
+        Bind(wxEVT_LEFT_UP, &GraphCanvas::OnLeftUp, this);
+        Bind(wxEVT_MOTION, &GraphCanvas::OnMouseMove, this);
+        Bind(wxEVT_TIMER, &GraphCanvas::OnResampleTimer, this);
+        Bind(wxEVT_ERASE_BACKGROUND, [](wxEraseEvent&){});
+        ResetView();
+    }
+
+    ~GraphCanvas() override {
+        for (auto& graph : m_graphs) FreeSamples(graph);
+    }
+
+    bool AddGraph(const GraphRequest& request) {
+        wxScopedCharBuffer serial = request.serialized.ToUTF8();
+        NekoExpr* expr = nekoDeserializeExpr(serial.data());
+        if (!expr) return false;
+
+        Graph graph;
+        graph.kind = request.kind;
+        graph.expr = expr;
+        graph.label = request.label.empty() ? "graph" : request.label;
+        graph.request = request;
+        graph.request.label = graph.label;
+        graph.colour = NextColour(m_graphs.size());
+        m_graphs.push_back(graph);
+        ResampleAll();
+        if (m_graphsChanged) m_graphsChanged();
+        Refresh(false);
+        return true;
+    }
+
+    void RemoveGraph(size_t index) {
+        if (index >= m_graphs.size()) return;
+        FreeSamples(m_graphs[index]);
+        m_graphs.erase(m_graphs.begin() + (ptrdiff_t)index);
+        if (m_graphsChanged) m_graphsChanged();
+        Refresh(false);
+    }
+
+    void ResetView() {
+        m_freeAxisAspect = false;
+        m_viewInitialized = true;
+        SetSquareView(0.0L, 0.0L, 10.0L, PlotRect());
+        ResampleAll();
+        Refresh(false);
+    }
+
+    size_t GraphCount() const { return m_graphs.size(); }
+
+    wxString GraphLabel(size_t index) const {
+        return index < m_graphs.size() ? m_graphs[index].label : wxString();
+    }
+
+    wxColour GraphColour(size_t index) const {
+        return index < m_graphs.size() ? m_graphs[index].colour : ColourFromRgb(theme::kAccent);
+    }
+
+    std::vector<GraphRequest> GraphRequests() const {
+        std::vector<GraphRequest> requests;
+        requests.reserve(m_graphs.size());
+        for (const auto& graph : m_graphs) requests.push_back(graph.request);
+        return requests;
+    }
+
+    void SetGraphsChangedCallback(std::function<void()> callback) {
+        m_graphsChanged = std::move(callback);
+    }
+
+private:
+    struct Graph {
+        GraphRequestKind kind = GraphRequestKind::Explicit;
+        NekoExpr* expr = nullptr;
+        wxString label;
+        GraphRequest request;
+        wxColour colour;
+        NekoExplicitGraphSample explicitSample = {};
+        NekoImplicitGraphSample implicitSample = {};
+        bool samplesReady = false;
+    };
+
+    enum class DragMode {
+        None,
+        Pan,
+        ScaleX,
+        ScaleY
+    };
+
+    static wxColour NextColour(size_t index) {
+        static const uint32_t colours[] = {
+            0xE06C75u, 0x61AFEFu, 0x98C379u, 0xE5C07Bu,
+            0xC678DDu, 0x56B6C2u, 0xD19A66u, 0xABB2BFu
+        };
+        return ColourFromRgb(colours[index % (sizeof(colours) / sizeof(colours[0]))]);
+    }
+
+    wxRect PlotRect() const {
+        wxSize size = GetClientSize();
+        int left = 56;
+        int top = 20;
+        int right = 24;
+        int bottom = 44;
+        return wxRect(left, top,
+                      std::max(1, size.x - left - right),
+                      std::max(1, size.y - top - bottom));
+    }
+
+    long double PlotAspect(const wxRect& plot) const {
+        if (plot.width <= 0 || plot.height <= 0) return 1.0L;
+        long double aspect = (long double)plot.width / (long double)plot.height;
+        return isfinite(aspect) && aspect > 0.0L ? aspect : 1.0L;
+    }
+
+    void SetSquareView(long double centerX, long double centerY, long double yHalfSpan, const wxRect& plot) {
+        if (!isfinite(yHalfSpan) || yHalfSpan <= 0.0L) yHalfSpan = 10.0L;
+        long double xHalfSpan = yHalfSpan * PlotAspect(plot);
+        m_xMin = centerX - xHalfSpan;
+        m_xMax = centerX + xHalfSpan;
+        m_yMin = centerY - yHalfSpan;
+        m_yMax = centerY + yHalfSpan;
+    }
+
+    void PreserveSquareScale(const wxRect& plot) {
+        long double centerX = (m_xMin + m_xMax) / 2.0L;
+        long double centerY = (m_yMin + m_yMax) / 2.0L;
+        long double yHalfSpan = (m_yMax - m_yMin) / 2.0L;
+        SetSquareView(centerX, centerY, yHalfSpan, plot);
+    }
+
+    double WorldToScreenX(long double x, const wxRect& plot) const {
+        long double t = (x - m_xMin) / (m_xMax - m_xMin);
+        return plot.x + (double)t * plot.width;
+    }
+
+    double WorldToScreenY(long double y, const wxRect& plot) const {
+        long double t = (y - m_yMin) / (m_yMax - m_yMin);
+        return plot.y + plot.height - (double)t * plot.height;
+    }
+
+    long double ScreenToWorldX(int sx, const wxRect& plot) const {
+        long double t = (long double)(sx - plot.x) / (long double)std::max(1, plot.width);
+        return m_xMin + t * (m_xMax - m_xMin);
+    }
+
+    long double ScreenToWorldY(int sy, const wxRect& plot) const {
+        long double t = (long double)(plot.y + plot.height - sy) / (long double)std::max(1, plot.height);
+        return m_yMin + t * (m_yMax - m_yMin);
+    }
+
+    long double NiceTick(long double span) const {
+        if (!isfinite(span) || span <= 0.0L) return 1.0L;
+        long double raw = span / 10.0L;
+        long double mag = powl(10.0L, floorl(log10l(raw)));
+        long double scaled = raw / mag;
+        if (scaled < 1.5L) return mag;
+        if (scaled < 3.5L) return 2.0L * mag;
+        if (scaled < 7.5L) return 5.0L * mag;
+        return 10.0L * mag;
+    }
+
+    bool HitXAxis(const wxPoint& pt, const wxRect& plot) const {
+        if (!(m_yMin <= 0.0L && m_yMax >= 0.0L)) return false;
+        double sy = WorldToScreenY(0.0L, plot);
+        return pt.x >= plot.x && pt.x <= plot.x + plot.width
+            && std::abs(pt.y - sy) <= 7;
+    }
+
+    bool HitYAxis(const wxPoint& pt, const wxRect& plot) const {
+        if (!(m_xMin <= 0.0L && m_xMax >= 0.0L)) return false;
+        double sx = WorldToScreenX(0.0L, plot);
+        return pt.y >= plot.y && pt.y <= plot.y + plot.height
+            && std::abs(pt.x - sx) <= 7;
+    }
+
+    DragMode AxisDragMode(const wxPoint& pt, const wxRect& plot) const {
+        bool hitX = HitXAxis(pt, plot);
+        bool hitY = HitYAxis(pt, plot);
+        if (hitX && hitY) {
+            double sx = WorldToScreenX(0.0L, plot);
+            double sy = WorldToScreenY(0.0L, plot);
+            return std::abs(pt.y - sy) <= std::abs(pt.x - sx)
+                ? DragMode::ScaleX
+                : DragMode::ScaleY;
+        }
+        if (hitX) return DragMode::ScaleX;
+        if (hitY) return DragMode::ScaleY;
+        return DragMode::Pan;
+    }
+
+    void UpdateAxisCursor(const wxPoint& pt) {
+        wxRect plot = PlotRect();
+        DragMode mode = AxisDragMode(pt, plot);
+        if (mode == DragMode::ScaleX) SetCursor(wxCursor(wxCURSOR_SIZEWE));
+        else if (mode == DragMode::ScaleY) SetCursor(wxCursor(wxCURSOR_SIZENS));
+        else SetCursor(wxCursor(wxCURSOR_ARROW));
+    }
+
+    void FreeSamples(Graph& graph) {
+        nekoFreeExplicitGraphSample(graph.explicitSample);
+        nekoFreeImplicitGraphSample(graph.implicitSample);
+        graph.explicitSample = {};
+        graph.implicitSample = {};
+        graph.samplesReady = false;
+    }
+
+    void ResampleAll() {
+        wxRect plot = PlotRect();
+        size_t explicitSamples = (size_t)std::max(160, plot.width * 2);
+        size_t xsteps = (size_t)std::clamp(plot.width / 5, 40, 180);
+        size_t ysteps = (size_t)std::clamp(plot.height / 5, 40, 180);
+
+        for (auto& graph : m_graphs) {
+            FreeSamples(graph);
+            if (!graph.expr) continue;
+            if (graph.kind == GraphRequestKind::Explicit) {
+                graph.explicitSample = nekoSampleExplicitGraph(graph.expr, m_xMin, m_xMax, explicitSamples);
+            } else if (graph.kind == GraphRequestKind::Implicit) {
+                graph.implicitSample = nekoSampleImplicitGraph(graph.expr, m_xMin, m_xMax, m_yMin, m_yMax, xsteps, ysteps);
+            }
+            graph.samplesReady = true;
+        }
+        m_resamplePending = false;
+    }
+
+    void ScheduleResample() {
+        m_resamplePending = true;
+        m_resampleTimer.StartOnce(160);
+    }
+
+    void DrawGrid(wxGraphicsContext* gc, const wxRect& plot) {
+        long double xTick = NiceTick(m_xMax - m_xMin);
+        long double yTick = NiceTick(m_yMax - m_yMin);
+        wxFont font(wxFontInfo(9).Family(wxFONTFAMILY_DEFAULT));
+        std::vector<std::pair<long double, double>> xTicks;
+        std::vector<std::pair<long double, double>> yTicks;
+
+        gc->SetPen(wxPen(ColourFromRgb(0x243040u), 1));
+        gc->SetFont(font, ColourFromRgb(theme::kMutedText));
+        for (long double x = ceill(m_xMin / xTick) * xTick; x <= m_xMax; x += xTick) {
+            double sx = WorldToScreenX(x, plot);
+            xTicks.push_back({x, sx});
+            gc->StrokeLine(sx, plot.y, sx, plot.y + plot.height);
+            wxString label = wxString::Format("%Lg", x);
+            wxDouble width = 0.0;
+            wxDouble height = 0.0;
+            gc->GetTextExtent(label, &width, &height);
+            gc->DrawText(label, sx - width / 2.0, plot.y + plot.height + 6);
+        }
+        for (long double y = ceill(m_yMin / yTick) * yTick; y <= m_yMax; y += yTick) {
+            double sy = WorldToScreenY(y, plot);
+            yTicks.push_back({y, sy});
+            gc->StrokeLine(plot.x, sy, plot.x + plot.width, sy);
+            wxString label = wxString::Format("%Lg", y);
+            wxDouble width = 0.0;
+            wxDouble height = 0.0;
+            gc->GetTextExtent(label, &width, &height);
+            gc->DrawText(label, plot.x - width - 8, sy - height / 2.0);
+        }
+
+        gc->SetPen(wxPen(ColourFromRgb(theme::kMutedText), 2));
+        if (m_yMin <= 0.0L && m_yMax >= 0.0L) {
+            double sy = WorldToScreenY(0.0L, plot);
+            gc->StrokeLine(plot.x, sy, plot.x + plot.width, sy);
+            gc->StrokeLine(plot.x + plot.width, sy, plot.x + plot.width - 9, sy - 5);
+            gc->StrokeLine(plot.x + plot.width, sy, plot.x + plot.width - 9, sy + 5);
+            gc->DrawText("x", plot.x + plot.width - 12, sy + 8);
+            gc->SetPen(wxPen(ColourFromRgb(theme::kText), 1));
+            for (const auto& tick : xTicks) {
+                gc->StrokeLine(tick.second, sy - 4, tick.second, sy + 4);
+            }
+            gc->SetPen(wxPen(ColourFromRgb(theme::kMutedText), 2));
+        }
+        if (m_xMin <= 0.0L && m_xMax >= 0.0L) {
+            double sx = WorldToScreenX(0.0L, plot);
+            gc->StrokeLine(sx, plot.y + plot.height, sx, plot.y);
+            gc->StrokeLine(sx, plot.y, sx - 5, plot.y + 9);
+            gc->StrokeLine(sx, plot.y, sx + 5, plot.y + 9);
+            gc->DrawText("y", sx + 8, plot.y + 4);
+            gc->SetPen(wxPen(ColourFromRgb(theme::kText), 1));
+            for (const auto& tick : yTicks) {
+                gc->StrokeLine(sx - 4, tick.second, sx + 4, tick.second);
+            }
+            gc->SetPen(wxPen(ColourFromRgb(theme::kMutedText), 2));
+        }
+    }
+
+    void DrawExplicit(wxGraphicsContext* gc, const Graph& graph, const wxRect& plot) {
+        if (!graph.explicitSample.points || graph.explicitSample.count < 2) return;
+        gc->SetPen(wxPen(graph.colour, 2));
+        bool havePrev = false;
+        double px = 0.0;
+        double py = 0.0;
+        for (size_t i = 0; i < graph.explicitSample.count; i++) {
+            const NekoGraphPoint& point = graph.explicitSample.points[i];
+            double sx = WorldToScreenX(point.x, plot);
+            double sy = WorldToScreenY(point.y, plot);
+            bool valid = point.valid && sy > plot.y - plot.height * 4 && sy < plot.y + plot.height * 5;
+            if (valid && havePrev && std::abs(sy - py) < plot.height * 2)
+                gc->StrokeLine(px, py, sx, sy);
+            havePrev = valid;
+            px = sx;
+            py = sy;
+        }
+    }
+
+    void DrawImplicit(wxGraphicsContext* gc, const Graph& graph, const wxRect& plot) {
+        if (!graph.implicitSample.segments) return;
+        gc->SetPen(wxPen(graph.colour, 2));
+        for (size_t i = 0; i < graph.implicitSample.count; i++) {
+            const NekoGraphSegment& s = graph.implicitSample.segments[i];
+            gc->StrokeLine(WorldToScreenX(s.x1, plot), WorldToScreenY(s.y1, plot),
+                           WorldToScreenX(s.x2, plot), WorldToScreenY(s.y2, plot));
+        }
+    }
+
+    void DrawVertical(wxGraphicsContext* gc, const Graph& graph, const wxRect& plot) {
+        if (!graph.expr || graph.expr->kind != NEKO_EXPR_CONST) return;
+        long double x = graph.expr->as.constant;
+        if (x < m_xMin || x > m_xMax) return;
+        double sx = WorldToScreenX(x, plot);
+        gc->SetPen(wxPen(graph.colour, 2));
+        gc->StrokeLine(sx, plot.y, sx, plot.y + plot.height);
+    }
+
+    void OnPaint(wxPaintEvent&) {
+        wxAutoBufferedPaintDC dc(this);
+        dc.SetBackground(wxBrush(ColourFromRgb(theme::kPanelBg)));
+        dc.Clear();
+
+        wxRect plot = PlotRect();
+        dc.SetBrush(wxBrush(ColourFromRgb(theme::kTerminalBg)));
+        dc.SetPen(wxPen(ColourFromRgb(theme::kBorder), 1));
+        dc.DrawRectangle(plot);
+
+        std::unique_ptr<wxGraphicsContext> gc(wxGraphicsContext::Create(dc));
+        if (!gc) return;
+        DrawGrid(gc.get(), plot);
+
+        gc->Clip(plot.x, plot.y, plot.width, plot.height);
+        for (const auto& graph : m_graphs) {
+            if (graph.kind == GraphRequestKind::Explicit) DrawExplicit(gc.get(), graph, plot);
+            else if (graph.kind == GraphRequestKind::Implicit) DrawImplicit(gc.get(), graph, plot);
+            else DrawVertical(gc.get(), graph, plot);
+        }
+        gc->ResetClip();
+
+        if (m_resamplePending) {
+            wxFont font(wxFontInfo(9).Family(wxFONTFAMILY_DEFAULT));
+            gc->SetFont(font, ColourFromRgb(theme::kMutedText));
+            gc->DrawText("resampling...", plot.x + 12, plot.y + 10);
+        }
+    }
+
+    void OnMouseWheel(wxMouseEvent& evt) {
+        if (evt.GetWheelAxis() != wxMOUSE_WHEEL_VERTICAL) {
+            evt.Skip();
+            return;
+        }
+        wxRect plot = PlotRect();
+        wxPoint pt = evt.GetPosition();
+        long double anchorX = ScreenToWorldX(pt.x, plot);
+        long double anchorY = ScreenToWorldY(pt.y, plot);
+        long double factor = evt.GetWheelRotation() > 0 ? 0.85L : 1.0L / 0.85L;
+
+        m_xMin = anchorX + (m_xMin - anchorX) * factor;
+        m_xMax = anchorX + (m_xMax - anchorX) * factor;
+        m_yMin = anchorY + (m_yMin - anchorY) * factor;
+        m_yMax = anchorY + (m_yMax - anchorY) * factor;
+        ScheduleResample();
+        Refresh(false);
+    }
+
+    void OnLeftDown(wxMouseEvent& evt) {
+        SetFocus();
+        wxRect plot = PlotRect();
+        m_dragMode = AxisDragMode(evt.GetPosition(), plot);
+        m_dragging = true;
+        m_dragStart = evt.GetPosition();
+        m_dragXMin = m_xMin;
+        m_dragXMax = m_xMax;
+        m_dragYMin = m_yMin;
+        m_dragYMax = m_yMax;
+        if (m_dragMode == DragMode::ScaleX || m_dragMode == DragMode::ScaleY)
+            m_freeAxisAspect = true;
+        if (!HasCapture()) CaptureMouse();
+    }
+
+    void OnLeftUp(wxMouseEvent&) {
+        if (!m_dragging) return;
+        m_dragging = false;
+        m_dragMode = DragMode::None;
+        if (HasCapture()) ReleaseMouse();
+        ScheduleResample();
+    }
+
+    void OnMouseMove(wxMouseEvent& evt) {
+        if (!m_dragging || !evt.LeftIsDown()) {
+            UpdateAxisCursor(evt.GetPosition());
+            evt.Skip();
+            return;
+        }
+        wxRect plot = PlotRect();
+        wxPoint pt = evt.GetPosition();
+        if (m_dragMode == DragMode::ScaleX) {
+            long double center = (m_dragXMin + m_dragXMax) / 2.0L;
+            long double span = m_dragXMax - m_dragXMin;
+            long double factor = expl(-(long double)(pt.x - m_dragStart.x) / 160.0L);
+            factor = std::clamp(factor, 0.05L, 20.0L);
+            m_xMin = center - span * factor / 2.0L;
+            m_xMax = center + span * factor / 2.0L;
+            SetCursor(wxCursor(wxCURSOR_SIZEWE));
+        } else if (m_dragMode == DragMode::ScaleY) {
+            long double center = (m_dragYMin + m_dragYMax) / 2.0L;
+            long double span = m_dragYMax - m_dragYMin;
+            long double factor = expl((long double)(pt.y - m_dragStart.y) / 160.0L);
+            factor = std::clamp(factor, 0.05L, 20.0L);
+            m_yMin = center - span * factor / 2.0L;
+            m_yMax = center + span * factor / 2.0L;
+            SetCursor(wxCursor(wxCURSOR_SIZENS));
+        } else {
+            long double dx = (long double)(pt.x - m_dragStart.x) / (long double)std::max(1, plot.width) * (m_dragXMax - m_dragXMin);
+            long double dy = (long double)(pt.y - m_dragStart.y) / (long double)std::max(1, plot.height) * (m_dragYMax - m_dragYMin);
+            m_xMin = m_dragXMin - dx;
+            m_xMax = m_dragXMax - dx;
+            m_yMin = m_dragYMin + dy;
+            m_yMax = m_dragYMax + dy;
+        }
+        ScheduleResample();
+        Refresh(false);
+    }
+
+    void OnSize(wxSizeEvent& evt) {
+        if (!m_freeAxisAspect) {
+            wxRect plot = PlotRect();
+            if (!m_viewInitialized) {
+                SetSquareView(0.0L, 0.0L, 10.0L, plot);
+                m_viewInitialized = true;
+            } else {
+                PreserveSquareScale(plot);
+            }
+            ResampleAll();
+        }
+        Refresh(false);
+        evt.Skip();
+    }
+
+    void OnResampleTimer(wxTimerEvent&) {
+        ResampleAll();
+        Refresh(false);
+    }
+
+    std::vector<Graph> m_graphs;
+    wxTimer m_resampleTimer;
+    bool m_resamplePending = false;
+    bool m_dragging = false;
+    DragMode m_dragMode = DragMode::None;
+    wxPoint m_dragStart;
+    bool m_freeAxisAspect = false;
+    bool m_viewInitialized = false;
+    long double m_dragXMin = -10.0L;
+    long double m_dragXMax = 10.0L;
+    long double m_dragYMin = -10.0L;
+    long double m_dragYMax = 10.0L;
+    long double m_xMin = -10.0L;
+    long double m_xMax = 10.0L;
+    long double m_yMin = -10.0L;
+    long double m_yMax = 10.0L;
+    std::function<void()> m_graphsChanged;
+};
+
+class GraphPage : public wxPanel {
+public:
+    GraphPage(wxWindow* parent)
+        : wxPanel(parent, wxID_ANY) {
+        StyleDarkWindow(this, theme::kPanelBg);
+        auto* root = new wxBoxSizer(wxHORIZONTAL);
+        m_canvas = new GraphCanvas(this);
+
+        auto* sidePanel = new wxPanel(this, wxID_ANY, wxDefaultPosition, wxSize(240, -1));
+        StyleDarkWindow(sidePanel, theme::kTabBg);
+        auto* sideSizer = new wxBoxSizer(wxVERTICAL);
+        sidePanel->SetSizer(sideSizer);
+
+        m_side = new wxScrolledWindow(sidePanel, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+                                      wxVSCROLL | wxBORDER_NONE);
+        StyleDarkWindow(m_side, theme::kTabBg);
+        m_side->SetScrollRate(8, 8);
+        m_sideSizer = new wxBoxSizer(wxVERTICAL);
+        m_side->SetSizer(m_sideSizer);
+        sideSizer->Add(m_side, 1, wxEXPAND);
+
+        auto* resetRow = new wxBoxSizer(wxHORIZONTAL);
+        resetRow->AddStretchSpacer(1);
+        auto* reset = new wxButton(sidePanel, wxID_ANY, "Reset", wxDefaultPosition, wxSize(86, 30));
+        StyleDarkButton(reset, true);
+        reset->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { m_canvas->ResetView(); });
+        resetRow->Add(reset, 0, wxALL, 10);
+        sideSizer->Add(resetRow, 0, wxEXPAND);
+
+        root->Add(m_canvas, 1, wxEXPAND);
+        root->Add(sidePanel, 0, wxEXPAND);
+        SetSizer(root);
+        m_canvas->SetGraphsChangedCallback([this]() { RebuildList(); });
+        RebuildList();
+    }
+
+    bool AddGraph(const GraphRequest& request) {
+        return m_canvas->AddGraph(request);
+    }
+
+    std::vector<GraphRequest> GraphRequests() const {
+        return m_canvas->GraphRequests();
+    }
+
+private:
+    void RebuildList() {
+        m_sideSizer->Clear(true);
+        auto* title = new wxStaticText(m_side, wxID_ANY, "Graphs");
+        StyleDarkLabel(title);
+        wxFont titleFont = title->GetFont();
+        titleFont.SetWeight(wxFONTWEIGHT_BOLD);
+        title->SetFont(titleFont);
+        m_sideSizer->Add(title, 0, wxALL, 12);
+
+        if (m_canvas->GraphCount() == 0) {
+            auto* empty = new wxStaticText(m_side, wxID_ANY, "No graphs");
+            StyleDarkLabel(empty, true);
+            m_sideSizer->Add(empty, 0, wxLEFT | wxRIGHT | wxBOTTOM, 12);
+        }
+
+        for (size_t i = 0; i < m_canvas->GraphCount(); i++) {
+            auto* row = new wxPanel(m_side);
+            StyleDarkWindow(row, theme::kPanelRaisedBg);
+            auto* rowSizer = new wxBoxSizer(wxHORIZONTAL);
+            auto* swatch = new wxPanel(row, wxID_ANY, wxDefaultPosition, wxSize(10, 22));
+            swatch->SetBackgroundColour(m_canvas->GraphColour(i));
+            auto* label = new wxStaticText(row, wxID_ANY, m_canvas->GraphLabel(i));
+            StyleDarkLabel(label);
+            auto* close = new wxButton(row, wxID_ANY, "x", wxDefaultPosition, wxSize(24, 24), wxBU_EXACTFIT);
+            StyleDarkButton(close);
+            close->Bind(wxEVT_BUTTON, [this, i](wxCommandEvent&) { m_canvas->RemoveGraph(i); });
+            rowSizer->Add(swatch, 0, wxALIGN_CENTER_VERTICAL | wxLEFT, 8);
+            rowSizer->Add(label, 1, wxALIGN_CENTER_VERTICAL | wxLEFT | wxRIGHT, 8);
+            rowSizer->Add(close, 0, wxALIGN_CENTER_VERTICAL | wxRIGHT, 6);
+            row->SetSizer(rowSizer);
+            m_sideSizer->Add(row, 0, wxEXPAND | wxLEFT | wxRIGHT | wxBOTTOM, 10);
+        }
+
+        m_side->FitInside();
+        m_side->Layout();
+    }
+
+    GraphCanvas* m_canvas = nullptr;
+    wxScrolledWindow* m_side = nullptr;
+    wxBoxSizer* m_sideSizer = nullptr;
+};
+
+// ============================================================
+// KumaPlotCanvas: draws KUMA plot data in a primitive viewport.
+// ============================================================
+class KumaPlotCanvas : public wxWindow {
+public:
+    KumaPlotCanvas(wxWindow* parent)
+        : wxWindow(parent, wxID_ANY, wxDefaultPosition, wxDefaultSize,
+                   wxBORDER_NONE) {
+        SetBackgroundStyle(wxBG_STYLE_PAINT);
+        SetBackgroundColour(ColourFromRgb(theme::kPanelBg));
+
+        Bind(wxEVT_PAINT, &KumaPlotCanvas::OnPaint, this);
+        Bind(wxEVT_MOUSEWHEEL, &KumaPlotCanvas::OnMouseWheel, this);
+        Bind(wxEVT_LEFT_DOWN, &KumaPlotCanvas::OnLeftDown, this);
+        Bind(wxEVT_LEFT_UP, &KumaPlotCanvas::OnLeftUp, this);
+        Bind(wxEVT_MOTION, &KumaPlotCanvas::OnMouseMove, this);
+        Bind(wxEVT_ERASE_BACKGROUND, [](wxEraseEvent&){});
+    }
+
+    void SetPlot(const KumaPlotRequest& request, const wxString& tabTitle) {
+        m_request = request;
+        m_kind = request.kind;
+        m_title = request.title.empty() ? tabTitle : request.title;
+        m_xLabel = request.xLabel.empty() ? "x" : request.xLabel;
+        m_yLabel = request.yLabel.empty() ? "y" : request.yLabel;
+        ParsePayload(request.payload);
+        ResetView();
+    }
+
+    KumaPlotRequest PlotRequest() const {
+        return m_request;
+    }
+
+    void ResetView() {
+        ComputeBounds();
+        Refresh(false);
+    }
+
+private:
+    struct Point {
+        long double x = 0.0L;
+        long double y = 0.0L;
+    };
+
+    struct HistogramBin {
+        long double lower = 0.0L;
+        long double upper = 0.0L;
+        long double midpoint = 0.0L;
+        long double count = 0.0L;
+        long double proportion = 0.0L;
+        long double density = 0.0L;
+    };
+
+    struct Bar {
+        long double label = 0.0L;
+        long double height = 0.0L;
+    };
+
+    struct Box {
+        long double minimum = 0.0L;
+        long double q1 = 0.0L;
+        long double median = 0.0L;
+        long double q3 = 0.0L;
+        long double maximum = 0.0L;
+        long double lowerFence = 0.0L;
+        long double upperFence = 0.0L;
+        long double lowerWhisker = 0.0L;
+        long double upperWhisker = 0.0L;
+        std::vector<long double> outliers;
+        bool valid = false;
+    };
+
+    enum class DragMode {
+        None,
+        Pan,
+        ScaleX,
+        ScaleY
+    };
+
+    static std::vector<std::string> SplitString(const std::string& text, char sep) {
+        std::vector<std::string> parts;
+        size_t start = 0;
+        while (start <= text.size()) {
+            size_t at = text.find(sep, start);
+            if (at == std::string::npos) {
+                parts.push_back(text.substr(start));
+                break;
+            }
+            parts.push_back(text.substr(start, at - start));
+            start = at + 1;
+        }
+        return parts;
+    }
+
+    static bool ParseLongDouble(const std::string& text, long double& out) {
+        char* end = nullptr;
+        out = strtold(text.c_str(), &end);
+        return end && *end == '\0' && isfinite(out);
+    }
+
+    wxRect PlotRect() const {
+        wxSize size = GetClientSize();
+        int left = 72;
+        int top = 58;
+        int right = 28;
+        int bottom = 76;
+        return wxRect(left, top,
+                      std::max(1, size.x - left - right),
+                      std::max(1, size.y - top - bottom));
+    }
+
+    double WorldToScreenX(long double x, const wxRect& plot) const {
+        long double t = (x - m_xMin) / (m_xMax - m_xMin);
+        return plot.x + (double)t * plot.width;
+    }
+
+    double WorldToScreenY(long double y, const wxRect& plot) const {
+        long double t = (y - m_yMin) / (m_yMax - m_yMin);
+        return plot.y + plot.height - (double)t * plot.height;
+    }
+
+    long double ScreenToWorldX(int sx, const wxRect& plot) const {
+        long double t = (long double)(sx - plot.x) / (long double)std::max(1, plot.width);
+        return m_xMin + t * (m_xMax - m_xMin);
+    }
+
+    long double ScreenToWorldY(int sy, const wxRect& plot) const {
+        long double t = (long double)(plot.y + plot.height - sy) / (long double)std::max(1, plot.height);
+        return m_yMin + t * (m_yMax - m_yMin);
+    }
+
+    long double NiceTick(long double span) const {
+        if (!isfinite(span) || span <= 0.0L) return 1.0L;
+        long double raw = span / 8.0L;
+        long double mag = powl(10.0L, floorl(log10l(raw)));
+        long double scaled = raw / mag;
+        if (scaled < 1.5L) return mag;
+        if (scaled < 3.5L) return 2.0L * mag;
+        if (scaled < 7.5L) return 5.0L * mag;
+        return 10.0L * mag;
+    }
+
+    long double XAxisWorldY() const {
+        return (m_yMin <= 0.0L && m_yMax >= 0.0L) ? 0.0L : m_yMin;
+    }
+
+    long double YAxisWorldX() const {
+        return (m_xMin <= 0.0L && m_xMax >= 0.0L) ? 0.0L : m_xMin;
+    }
+
+    bool HitXAxis(const wxPoint& pt, const wxRect& plot) const {
+        double sy = WorldToScreenY(XAxisWorldY(), plot);
+        return pt.x >= plot.x && pt.x <= plot.x + plot.width
+            && std::abs(pt.y - sy) <= 7;
+    }
+
+    bool HitYAxis(const wxPoint& pt, const wxRect& plot) const {
+        double sx = WorldToScreenX(YAxisWorldX(), plot);
+        return pt.y >= plot.y && pt.y <= plot.y + plot.height
+            && std::abs(pt.x - sx) <= 7;
+    }
+
+    DragMode AxisDragMode(const wxPoint& pt, const wxRect& plot) const {
+        bool hitX = HitXAxis(pt, plot);
+        bool hitY = HitYAxis(pt, plot);
+        if (hitX && hitY) {
+            double sx = WorldToScreenX(YAxisWorldX(), plot);
+            double sy = WorldToScreenY(XAxisWorldY(), plot);
+            return std::abs(pt.y - sy) <= std::abs(pt.x - sx)
+                ? DragMode::ScaleX
+                : DragMode::ScaleY;
+        }
+        if (hitX) return DragMode::ScaleX;
+        if (hitY) return DragMode::ScaleY;
+        return DragMode::Pan;
+    }
+
+    void UpdateAxisCursor(const wxPoint& pt) {
+        wxRect plot = PlotRect();
+        DragMode mode = AxisDragMode(pt, plot);
+        if (mode == DragMode::ScaleX) SetCursor(wxCursor(wxCURSOR_SIZEWE));
+        else if (mode == DragMode::ScaleY) SetCursor(wxCursor(wxCURSOR_SIZENS));
+        else SetCursor(wxCursor(wxCURSOR_ARROW));
+    }
+
+    void IncludeBounds(long double x, long double y, bool& have,
+                       long double& xMin, long double& xMax,
+                       long double& yMin, long double& yMax) {
+        if (!isfinite(x) || !isfinite(y)) return;
+        if (!have) {
+            xMin = xMax = x;
+            yMin = yMax = y;
+            have = true;
+            return;
+        }
+        xMin = std::min(xMin, x);
+        xMax = std::max(xMax, x);
+        yMin = std::min(yMin, y);
+        yMax = std::max(yMax, y);
+    }
+
+    bool ForceNonnegativeY() const {
+        return m_kind == KumaPlotRequestKind::Histogram
+            || m_kind == KumaPlotRequestKind::Frequency
+            || m_kind == KumaPlotRequestKind::Bar
+            || m_kind == KumaPlotRequestKind::Density
+            || m_kind == KumaPlotRequestKind::Dot
+            || m_kind == KumaPlotRequestKind::ECDF;
+    }
+
+    void ComputeBounds() {
+        bool have = false;
+        long double xMin = 0.0L;
+        long double xMax = 1.0L;
+        long double yMin = 0.0L;
+        long double yMax = 1.0L;
+
+        if (m_kind == KumaPlotRequestKind::Box && m_box.valid) {
+            IncludeBounds(1.0L, m_box.minimum, have, xMin, xMax, yMin, yMax);
+            IncludeBounds(1.0L, m_box.maximum, have, xMin, xMax, yMin, yMax);
+            for (long double outlier : m_box.outliers)
+                IncludeBounds(1.0L, outlier, have, xMin, xMax, yMin, yMax);
+            xMin = 0.0L;
+            xMax = 2.0L;
+        }
+
+        for (const auto& bin : m_bins) {
+            IncludeBounds(bin.lower, 0.0L, have, xMin, xMax, yMin, yMax);
+            IncludeBounds(bin.upper, bin.count, have, xMin, xMax, yMin, yMax);
+        }
+        for (size_t i = 0; i < m_bars.size(); i++) {
+            IncludeBounds((long double)i, 0.0L, have, xMin, xMax, yMin, yMax);
+            IncludeBounds((long double)i + 1.0L, m_bars[i].height, have, xMin, xMax, yMin, yMax);
+        }
+        for (const auto& point : m_points)
+            IncludeBounds(point.x, point.y, have, xMin, xMax, yMin, yMax);
+        if (m_lineValid) {
+            IncludeBounds(m_lineStart.x, m_lineStart.y, have, xMin, xMax, yMin, yMax);
+            IncludeBounds(m_lineEnd.x, m_lineEnd.y, have, xMin, xMax, yMin, yMax);
+        }
+
+        if (!have) {
+            xMin = 0.0L;
+            xMax = 1.0L;
+            yMin = ForceNonnegativeY() ? 0.0L : -1.0L;
+            yMax = 1.0L;
+        }
+
+        long double xPad = (xMax - xMin) * 0.08L;
+        long double yPad = (yMax - yMin) * 0.12L;
+        if (!isfinite(xPad) || xPad <= 0.0L) xPad = 1.0L;
+        if (!isfinite(yPad) || yPad <= 0.0L) yPad = 1.0L;
+        m_xMin = xMin - xPad;
+        m_xMax = xMax + xPad;
+        if (ForceNonnegativeY()) {
+            m_yMin = 0.0L;
+            m_yMax = yMax + yPad;
+            if (m_yMax <= 0.0L) m_yMax = 1.0L;
+        } else {
+            m_yMin = yMin - yPad;
+            m_yMax = yMax + yPad;
+            if (m_yMin == m_yMax) {
+                m_yMin -= 1.0L;
+                m_yMax += 1.0L;
+            }
+        }
+    }
+
+    void ParsePayload(const wxString& payload) {
+        m_points.clear();
+        m_bins.clear();
+        m_bars.clear();
+        m_box = Box{};
+        m_lineValid = false;
+
+        wxScopedCharBuffer raw = payload.ToUTF8();
+        std::string text = raw.data() ? raw.data() : "";
+        if (m_kind == KumaPlotRequestKind::Box) {
+            std::vector<std::string> parts = SplitString(text, '|');
+            std::vector<std::string> fields = parts.empty() ? std::vector<std::string>() : SplitString(parts[0], ',');
+            if (fields.size() >= 9
+                    && ParseLongDouble(fields[0], m_box.minimum)
+                    && ParseLongDouble(fields[1], m_box.q1)
+                    && ParseLongDouble(fields[2], m_box.median)
+                    && ParseLongDouble(fields[3], m_box.q3)
+                    && ParseLongDouble(fields[4], m_box.maximum)
+                    && ParseLongDouble(fields[5], m_box.lowerFence)
+                    && ParseLongDouble(fields[6], m_box.upperFence)
+                    && ParseLongDouble(fields[7], m_box.lowerWhisker)
+                    && ParseLongDouble(fields[8], m_box.upperWhisker)) {
+                m_box.valid = true;
+            }
+            if (parts.size() > 1 && !parts[1].empty()) {
+                for (const std::string& item : SplitString(parts[1], ';')) {
+                    long double value = 0.0L;
+                    if (ParseLongDouble(item, value)) m_box.outliers.push_back(value);
+                }
+            }
+            return;
+        }
+
+        if (m_kind == KumaPlotRequestKind::Regression) {
+            std::vector<std::string> parts = SplitString(text, '|');
+            if (!parts.empty()) {
+                std::vector<std::string> line = SplitString(parts[0], ',');
+                if (line.size() >= 4
+                        && ParseLongDouble(line[0], m_lineStart.x)
+                        && ParseLongDouble(line[1], m_lineStart.y)
+                        && ParseLongDouble(line[2], m_lineEnd.x)
+                        && ParseLongDouble(line[3], m_lineEnd.y)) {
+                    m_lineValid = true;
+                }
+            }
+            text = parts.size() > 1 ? parts[1] : "";
+        }
+
+        for (const std::string& item : SplitString(text, ';')) {
+            if (item.empty()) continue;
+            std::vector<std::string> fields = SplitString(item, ',');
+            if (m_kind == KumaPlotRequestKind::Histogram && fields.size() >= 6) {
+                HistogramBin bin;
+                if (ParseLongDouble(fields[0], bin.lower)
+                        && ParseLongDouble(fields[1], bin.upper)
+                        && ParseLongDouble(fields[2], bin.midpoint)
+                        && ParseLongDouble(fields[3], bin.count)
+                        && ParseLongDouble(fields[4], bin.proportion)
+                        && ParseLongDouble(fields[5], bin.density)) {
+                    m_bins.push_back(bin);
+                }
+            } else if (m_kind == KumaPlotRequestKind::Bar && fields.size() >= 2) {
+                Bar bar;
+                if (ParseLongDouble(fields[0], bar.label)
+                        && ParseLongDouble(fields[1], bar.height)) {
+                    m_bars.push_back(bar);
+                }
+            } else if ((m_kind == KumaPlotRequestKind::Frequency || m_kind == KumaPlotRequestKind::Dot)
+                       && fields.size() >= 2) {
+                Point point;
+                if (ParseLongDouble(fields[0], point.x) && ParseLongDouble(fields[1], point.y))
+                    m_points.push_back(point);
+            } else if (fields.size() >= 2) {
+                Point point;
+                if (ParseLongDouble(fields[0], point.x) && ParseLongDouble(fields[1], point.y))
+                    m_points.push_back(point);
+            }
+        }
+    }
+
+    void DrawGrid(wxGraphicsContext* gc, const wxRect& plot) {
+        long double xTick = NiceTick(m_xMax - m_xMin);
+        long double yTick = NiceTick(m_yMax - m_yMin);
+        wxFont font(wxFontInfo(9).Family(wxFONTFAMILY_DEFAULT));
+        gc->SetPen(wxPen(ColourFromRgb(0x243040u), 1));
+        gc->SetFont(font, ColourFromRgb(theme::kMutedText));
+
+        for (long double x = ceill(m_xMin / xTick) * xTick; x <= m_xMax; x += xTick) {
+            double sx = WorldToScreenX(x, plot);
+            gc->StrokeLine(sx, plot.y, sx, plot.y + plot.height);
+            wxString label = wxString::Format("%Lg", x);
+            wxDouble width = 0.0;
+            wxDouble height = 0.0;
+            gc->GetTextExtent(label, &width, &height);
+            gc->DrawText(label, sx - width / 2.0, plot.y + plot.height + 6);
+        }
+        for (long double y = ceill(m_yMin / yTick) * yTick; y <= m_yMax; y += yTick) {
+            double sy = WorldToScreenY(y, plot);
+            gc->StrokeLine(plot.x, sy, plot.x + plot.width, sy);
+            wxString label = wxString::Format("%Lg", y);
+            wxDouble width = 0.0;
+            wxDouble height = 0.0;
+            gc->GetTextExtent(label, &width, &height);
+            gc->DrawText(label, plot.x - width - 8, sy - height / 2.0);
+        }
+
+        gc->SetPen(wxPen(ColourFromRgb(theme::kMutedText), 2));
+        double xAxis = WorldToScreenY(XAxisWorldY(), plot);
+        double yAxis = WorldToScreenX(YAxisWorldX(), plot);
+        gc->StrokeLine(plot.x, xAxis, plot.x + plot.width, xAxis);
+        gc->StrokeLine(yAxis, plot.y + plot.height, yAxis, plot.y);
+        gc->StrokeLine(plot.x + plot.width, xAxis, plot.x + plot.width - 9, xAxis - 5);
+        gc->StrokeLine(plot.x + plot.width, xAxis, plot.x + plot.width - 9, xAxis + 5);
+        gc->StrokeLine(yAxis, plot.y, yAxis - 5, plot.y + 9);
+        gc->StrokeLine(yAxis, plot.y, yAxis + 5, plot.y + 9);
+    }
+
+    void DrawLabels(wxGraphicsContext* gc, const wxRect& plot) {
+        wxFont titleFont(wxFontInfo(13).Family(wxFONTFAMILY_DEFAULT).Bold());
+        gc->SetFont(titleFont, ColourFromRgb(theme::kText));
+        wxDouble titleWidth = 0.0;
+        wxDouble titleHeight = 0.0;
+        gc->GetTextExtent(m_title, &titleWidth, &titleHeight);
+        gc->DrawText(m_title, plot.x + (plot.width - titleWidth) / 2.0, 18);
+
+        wxFont labelFont(wxFontInfo(10).Family(wxFONTFAMILY_DEFAULT));
+        gc->SetFont(labelFont, ColourFromRgb(theme::kMutedText));
+        wxDouble xWidth = 0.0;
+        wxDouble xHeight = 0.0;
+        gc->GetTextExtent(m_xLabel, &xWidth, &xHeight);
+        gc->DrawText(m_xLabel, plot.x + (plot.width - xWidth) / 2.0, plot.y + plot.height + 40);
+        gc->DrawText(m_yLabel, 12, plot.y - 28);
+    }
+
+    void DrawBox(wxGraphicsContext* gc, const wxRect& plot) {
+        if (!m_box.valid) return;
+        double x = WorldToScreenX(1.0L, plot);
+        double boxHalf = std::min(44.0, plot.width * 0.08);
+        double q1 = WorldToScreenY(m_box.q1, plot);
+        double q3 = WorldToScreenY(m_box.q3, plot);
+        double med = WorldToScreenY(m_box.median, plot);
+        double low = WorldToScreenY(m_box.lowerWhisker, plot);
+        double high = WorldToScreenY(m_box.upperWhisker, plot);
+
+        gc->SetPen(wxPen(ColourFromRgb(theme::kAccentStrong), 2));
+        gc->SetBrush(wxBrush(ColourFromRgb(0x1F5662u)));
+        gc->DrawRectangle(x - boxHalf, std::min(q1, q3), boxHalf * 2.0, std::abs(q3 - q1));
+        gc->StrokeLine(x - boxHalf, med, x + boxHalf, med);
+        gc->StrokeLine(x, high, x, std::min(q1, q3));
+        gc->StrokeLine(x, std::max(q1, q3), x, low);
+        gc->StrokeLine(x - boxHalf * 0.65, high, x + boxHalf * 0.65, high);
+        gc->StrokeLine(x - boxHalf * 0.65, low, x + boxHalf * 0.65, low);
+        for (long double outlier : m_box.outliers) {
+            double y = WorldToScreenY(outlier, plot);
+            gc->DrawEllipse(x - 3, y - 3, 6, 6);
+        }
+    }
+
+    void DrawBars(wxGraphicsContext* gc, const wxRect& plot) {
+        gc->SetPen(wxPen(ColourFromRgb(theme::kAccentStrong), 1));
+        gc->SetBrush(wxBrush(ColourFromRgb(0x2A6F7Cu)));
+        for (size_t i = 0; i < m_bins.size(); i++) {
+            double x0 = WorldToScreenX(m_bins[i].lower, plot);
+            double x1 = WorldToScreenX(m_bins[i].upper, plot);
+            double y = WorldToScreenY(m_bins[i].count, plot);
+            double base = WorldToScreenY(0.0L, plot);
+            gc->DrawRectangle(std::min(x0, x1), y, std::max(1.0, std::abs(x1 - x0)), base - y);
+        }
+        for (size_t i = 0; i < m_bars.size(); i++) {
+            double center = WorldToScreenX((long double)i + 0.5L, plot);
+            double next = WorldToScreenX((long double)i + 1.0L, plot);
+            double width = std::max(4.0, std::abs(next - center) * 1.2);
+            double y = WorldToScreenY(m_bars[i].height, plot);
+            double base = WorldToScreenY(0.0L, plot);
+            gc->DrawRectangle(center - width / 2.0, y, width, base - y);
+        }
+    }
+
+    void DrawPoints(wxGraphicsContext* gc, const wxRect& plot) {
+        gc->SetPen(wxPen(ColourFromRgb(theme::kAccentStrong), 2));
+        gc->SetBrush(wxBrush(ColourFromRgb(theme::kAccent)));
+        for (const auto& point : m_points) {
+            if (m_kind == KumaPlotRequestKind::Dot) {
+                for (int i = 1; i <= (int)llround(point.y); i++) {
+                    double sx = WorldToScreenX(point.x, plot);
+                    double sy = WorldToScreenY((long double)i, plot);
+                    gc->DrawEllipse(sx - 3, sy - 3, 6, 6);
+                }
+            } else if (m_kind == KumaPlotRequestKind::Frequency) {
+                double sx = WorldToScreenX(point.x, plot);
+                double sy = WorldToScreenY(point.y, plot);
+                double base = WorldToScreenY(0.0L, plot);
+                gc->StrokeLine(sx, base, sx, sy);
+                gc->DrawEllipse(sx - 4, sy - 4, 8, 8);
+            } else {
+                double sx = WorldToScreenX(point.x, plot);
+                double sy = WorldToScreenY(point.y, plot);
+                gc->DrawEllipse(sx - 3, sy - 3, 6, 6);
+            }
+        }
+    }
+
+    void DrawLinePlot(wxGraphicsContext* gc, const wxRect& plot) {
+        if (m_points.size() < 2) return;
+        gc->SetPen(wxPen(ColourFromRgb(theme::kAccentStrong), 2));
+        if (m_kind == KumaPlotRequestKind::ECDF) {
+            long double prevX = m_xMin;
+            long double prevY = 0.0L;
+            for (const auto& point : m_points) {
+                gc->StrokeLine(WorldToScreenX(prevX, plot), WorldToScreenY(prevY, plot),
+                               WorldToScreenX(point.x, plot), WorldToScreenY(prevY, plot));
+                gc->StrokeLine(WorldToScreenX(point.x, plot), WorldToScreenY(prevY, plot),
+                               WorldToScreenX(point.x, plot), WorldToScreenY(point.y, plot));
+                prevX = point.x;
+                prevY = point.y;
+            }
+            gc->StrokeLine(WorldToScreenX(prevX, plot), WorldToScreenY(prevY, plot),
+                           WorldToScreenX(m_xMax, plot), WorldToScreenY(prevY, plot));
+            return;
+        }
+
+        for (size_t i = 1; i < m_points.size(); i++) {
+            gc->StrokeLine(WorldToScreenX(m_points[i - 1].x, plot), WorldToScreenY(m_points[i - 1].y, plot),
+                           WorldToScreenX(m_points[i].x, plot), WorldToScreenY(m_points[i].y, plot));
+        }
+    }
+
+    void DrawRegressionLine(wxGraphicsContext* gc, const wxRect& plot) {
+        if (!m_lineValid) return;
+        gc->SetPen(wxPen(ColourFromRgb(0xE5C07Bu), 2));
+        gc->StrokeLine(WorldToScreenX(m_lineStart.x, plot), WorldToScreenY(m_lineStart.y, plot),
+                       WorldToScreenX(m_lineEnd.x, plot), WorldToScreenY(m_lineEnd.y, plot));
+    }
+
+    void OnPaint(wxPaintEvent&) {
+        wxAutoBufferedPaintDC dc(this);
+        dc.SetBackground(wxBrush(ColourFromRgb(theme::kPanelBg)));
+        dc.Clear();
+
+        wxRect plot = PlotRect();
+        dc.SetBrush(wxBrush(ColourFromRgb(theme::kTerminalBg)));
+        dc.SetPen(wxPen(ColourFromRgb(theme::kBorder), 1));
+        dc.DrawRectangle(plot);
+
+        std::unique_ptr<wxGraphicsContext> gc(wxGraphicsContext::Create(dc));
+        if (!gc) return;
+        DrawGrid(gc.get(), plot);
+        DrawLabels(gc.get(), plot);
+
+        gc->Clip(plot.x, plot.y, plot.width, plot.height);
+        if (m_kind == KumaPlotRequestKind::Box) DrawBox(gc.get(), plot);
+        else if (m_kind == KumaPlotRequestKind::Histogram || m_kind == KumaPlotRequestKind::Bar) DrawBars(gc.get(), plot);
+        else if (m_kind == KumaPlotRequestKind::Density || m_kind == KumaPlotRequestKind::ECDF) DrawLinePlot(gc.get(), plot);
+        else {
+            DrawRegressionLine(gc.get(), plot);
+            DrawPoints(gc.get(), plot);
+        }
+        gc->ResetClip();
+    }
+
+    void ClampForcedY() {
+        if (!ForceNonnegativeY()) return;
+        m_yMin = 0.0L;
+        if (!isfinite(m_yMax) || m_yMax <= 0.0L) m_yMax = 1.0L;
+    }
+
+    void OnMouseWheel(wxMouseEvent& evt) {
+        if (evt.GetWheelAxis() != wxMOUSE_WHEEL_VERTICAL) {
+            evt.Skip();
+            return;
+        }
+        wxRect plot = PlotRect();
+        wxPoint pt = evt.GetPosition();
+        long double anchorX = ScreenToWorldX(pt.x, plot);
+        long double anchorY = ScreenToWorldY(pt.y, plot);
+        long double factor = evt.GetWheelRotation() > 0 ? 0.85L : 1.0L / 0.85L;
+        m_xMin = anchorX + (m_xMin - anchorX) * factor;
+        m_xMax = anchorX + (m_xMax - anchorX) * factor;
+        if (ForceNonnegativeY()) {
+            anchorY = std::clamp(anchorY, 0.0L, m_yMax);
+            m_yMax = anchorY + (m_yMax - anchorY) * factor;
+            ClampForcedY();
+        } else {
+            m_yMin = anchorY + (m_yMin - anchorY) * factor;
+            m_yMax = anchorY + (m_yMax - anchorY) * factor;
+        }
+        Refresh(false);
+    }
+
+    void OnLeftDown(wxMouseEvent& evt) {
+        SetFocus();
+        wxRect plot = PlotRect();
+        m_dragMode = AxisDragMode(evt.GetPosition(), plot);
+        m_dragging = true;
+        m_dragStart = evt.GetPosition();
+        m_dragXMin = m_xMin;
+        m_dragXMax = m_xMax;
+        m_dragYMin = m_yMin;
+        m_dragYMax = m_yMax;
+        if (!HasCapture()) CaptureMouse();
+    }
+
+    void OnLeftUp(wxMouseEvent&) {
+        if (!m_dragging) return;
+        m_dragging = false;
+        m_dragMode = DragMode::None;
+        if (HasCapture()) ReleaseMouse();
+    }
+
+    void OnMouseMove(wxMouseEvent& evt) {
+        if (!m_dragging || !evt.LeftIsDown()) {
+            UpdateAxisCursor(evt.GetPosition());
+            evt.Skip();
+            return;
+        }
+        wxRect plot = PlotRect();
+        wxPoint pt = evt.GetPosition();
+        if (m_dragMode == DragMode::ScaleX) {
+            long double center = (m_dragXMin + m_dragXMax) / 2.0L;
+            long double span = m_dragXMax - m_dragXMin;
+            long double factor = expl(-(long double)(pt.x - m_dragStart.x) / 160.0L);
+            factor = std::clamp(factor, 0.05L, 20.0L);
+            m_xMin = center - span * factor / 2.0L;
+            m_xMax = center + span * factor / 2.0L;
+            SetCursor(wxCursor(wxCURSOR_SIZEWE));
+        } else if (m_dragMode == DragMode::ScaleY) {
+            long double factor = expl((long double)(pt.y - m_dragStart.y) / 160.0L);
+            factor = std::clamp(factor, 0.05L, 20.0L);
+            if (ForceNonnegativeY()) {
+                long double span = m_dragYMax - m_dragYMin;
+                m_yMin = 0.0L;
+                m_yMax = span * factor;
+                ClampForcedY();
+            } else {
+                long double center = (m_dragYMin + m_dragYMax) / 2.0L;
+                long double span = m_dragYMax - m_dragYMin;
+                m_yMin = center - span * factor / 2.0L;
+                m_yMax = center + span * factor / 2.0L;
+            }
+            SetCursor(wxCursor(wxCURSOR_SIZENS));
+        } else {
+            long double dx = (long double)(pt.x - m_dragStart.x) / (long double)std::max(1, plot.width) * (m_dragXMax - m_dragXMin);
+            long double dy = (long double)(pt.y - m_dragStart.y) / (long double)std::max(1, plot.height) * (m_dragYMax - m_dragYMin);
+            m_xMin = m_dragXMin - dx;
+            m_xMax = m_dragXMax - dx;
+            if (!ForceNonnegativeY()) {
+                m_yMin = m_dragYMin + dy;
+                m_yMax = m_dragYMax + dy;
+            }
+        }
+        Refresh(false);
+    }
+
+    KumaPlotRequestKind m_kind = KumaPlotRequestKind::Scatter;
+    KumaPlotRequest m_request;
+    wxString m_title = "KUMA Plot";
+    wxString m_xLabel = "x";
+    wxString m_yLabel = "y";
+    Box m_box;
+    std::vector<HistogramBin> m_bins;
+    std::vector<Bar> m_bars;
+    std::vector<Point> m_points;
+    Point m_lineStart;
+    Point m_lineEnd;
+    bool m_lineValid = false;
+    bool m_dragging = false;
+    DragMode m_dragMode = DragMode::None;
+    wxPoint m_dragStart;
+    long double m_dragXMin = 0.0L;
+    long double m_dragXMax = 1.0L;
+    long double m_dragYMin = 0.0L;
+    long double m_dragYMax = 1.0L;
+    long double m_xMin = 0.0L;
+    long double m_xMax = 1.0L;
+    long double m_yMin = 0.0L;
+    long double m_yMax = 1.0L;
+};
+
+class KumaPlotPage : public wxPanel {
+public:
+    KumaPlotPage(wxWindow* parent, const KumaPlotRequest& request, const wxString& tabTitle)
+        : wxPanel(parent, wxID_ANY) {
+        StyleDarkWindow(this, theme::kPanelBg);
+        auto* root = new wxBoxSizer(wxVERTICAL);
+        m_canvas = new KumaPlotCanvas(this);
+        root->Add(m_canvas, 1, wxEXPAND);
+
+        auto* resetRow = new wxBoxSizer(wxHORIZONTAL);
+        resetRow->AddStretchSpacer(1);
+        auto* reset = new wxButton(this, wxID_ANY, "Reset", wxDefaultPosition, wxSize(86, 30));
+        StyleDarkButton(reset, true);
+        reset->Bind(wxEVT_BUTTON, [this](wxCommandEvent&) { m_canvas->ResetView(); });
+        resetRow->Add(reset, 0, wxRIGHT | wxBOTTOM, 12);
+        root->Add(resetRow, 0, wxEXPAND);
+
+        SetSizer(root);
+        m_canvas->SetPlot(request, tabTitle);
+    }
+
+    KumaPlotRequest PlotRequest() const {
+        return m_canvas->PlotRequest();
+    }
+
+private:
+    KumaPlotCanvas* m_canvas = nullptr;
 };
 
 // ============================================================
@@ -1528,7 +3009,11 @@ struct Tab {
     wxPanel*      tab;
     bool          closable;
     int           sessionNumber; // >= 1 for numbered Bestiary sessions, -1 otherwise
+    int           graphNumber = -1; // >= 1 for numbered Graph tabs, -1 otherwise
+    int           kumaPlotNumber = -1; // >= 1 for numbered KUMA Plot tabs, -1 otherwise
     TerminalView* terminal;      // nullptr for non-terminal pages
+    GraphPage*    graph;         // nullptr for non-graph pages
+    KumaPlotPage* kumaPlot;      // nullptr for non-KUMA plot pages
     int           scrollX = 0;
     int           scrollY = 0;
     std::shared_ptr<HelpPageState> helpPage;
@@ -1542,11 +3027,18 @@ public:
     static constexpr int kNewTabId  = wxID_HIGHEST + 103;
     static constexpr int kCloseTabId = wxID_HIGHEST + 104;
     static constexpr int kSelectTabBaseId = wxID_HIGHEST + 120;
+    static constexpr int kDefaultFrameWidth = 1100;
+    static constexpr int kDefaultFrameHeight = 760;
+    static constexpr int kMinFrameWidth = 960;
+    static constexpr int kMinFrameHeight = 640;
+    static constexpr double kMinFrameAspect = 4.0 / 3.0;
+    static constexpr double kMaxFrameAspect = 16.0 / 9.0;
 
     MainFrame()
-        : wxFrame(nullptr, wxID_ANY, "Bestiary", wxDefaultPosition, wxSize(720, 520)),
+        : wxFrame(nullptr, wxID_ANY, "Bestiary", wxDefaultPosition, wxSize(kDefaultFrameWidth, kDefaultFrameHeight)),
           m_selected(wxNOT_FOUND) {
                 StyleDarkWindow(this, theme::kFrameBg);
+        SetSizeHints(kMinFrameWidth, kMinFrameHeight);
 
         LoadPersistedZoom();
 
@@ -1609,19 +3101,65 @@ public:
         m_pages = new wxSimplebook(this);
                 StyleDarkWindow(m_pages, theme::kPanelBg);
         Bind(wxEVT_CHAR_HOOK, &MainFrame::OnCharHook, this);
+        Bind(wxEVT_SIZE, &MainFrame::OnFrameSize, this);
+        Bind(wxEVT_CLOSE_WINDOW, &MainFrame::OnClose, this);
 
         root->Add(m_tabStrip, 0, wxEXPAND);
         root->Add(m_pages, 1, wxEXPAND);
         SetSizer(root);
 
         AddStartPage();
+        LoadPersistedSession();
         Centre();
     }
 
 private:
+    void OnClose(wxCloseEvent& evt) {
+        SavePersistedSession();
+        SavePersistedZoom();
+        evt.Skip();
+    }
+
+    wxSize GraphFriendlyFrameSize(const wxSize& size) const {
+        int width = std::max(size.x, kMinFrameWidth);
+        int height = std::max(size.y, kMinFrameHeight);
+        double aspect = (double)width / (double)height;
+
+        if (aspect < kMinFrameAspect)
+            width = (int)ceil((double)height * kMinFrameAspect);
+        else if (aspect > kMaxFrameAspect)
+            height = (int)ceil((double)width / kMaxFrameAspect);
+
+        return wxSize(width, height);
+    }
+
+    void OnFrameSize(wxSizeEvent& evt) {
+        if (!m_adjustingFrameSize && !IsMaximized() && !IsFullScreen()) {
+            wxSize current = evt.GetSize();
+            wxSize adjusted = GraphFriendlyFrameSize(current);
+            if (adjusted != current) {
+                m_adjustingFrameSize = true;
+                SetSize(adjusted);
+                m_adjustingFrameSize = false;
+                return;
+            }
+        }
+        evt.Skip();
+    }
+
     int NextSessionNumber() {
         for (int n = 1; ; n++)
             if (m_openNumbers.find(n) == m_openNumbers.end()) return n;
+    }
+
+    int NextGraphNumber() {
+        for (int n = 1; ; n++)
+            if (m_openGraphNumbers.find(n) == m_openGraphNumbers.end()) return n;
+    }
+
+    int NextKumaPlotNumber() {
+        for (int n = 1; ; n++)
+            if (m_openKumaPlotNumbers.find(n) == m_openKumaPlotNumbers.end()) return n;
     }
 
     void UpdateStartPageScale() {
@@ -1699,7 +3237,7 @@ private:
         m_startTitleBasePointSize = titleFont.GetPointSize();
         center->Add(title, 0, wxALIGN_CENTER | wxBOTTOM, 8);
 
-        auto* version = new wxStaticText(page, wxID_ANY, "v1.0.2");
+        auto* version = new wxStaticText(page, wxID_ANY, "v2.0.0");
         StyleDarkLabel(version, true);
         wxFont versionFont = version->GetFont();
         versionFont.SetPointSize(versionFont.GetPointSize() + 1);
@@ -1809,6 +3347,8 @@ private:
 
     void AddPage(const wxString& title, wxWindow* page, bool closable,
                  int sessionNumber, TerminalView* terminal,
+                 int graphNumber = -1, GraphPage* graph = nullptr,
+                 int kumaPlotNumber = -1, KumaPlotPage* kumaPlot = nullptr,
                  std::shared_ptr<HelpPageState> helpPageState = nullptr) {
         m_pages->AddPage(page, title);
         Tab tab{};
@@ -1817,7 +3357,11 @@ private:
         tab.tab = nullptr;
         tab.closable = closable;
         tab.sessionNumber = sessionNumber;
+        tab.graphNumber = graphNumber;
+        tab.kumaPlotNumber = kumaPlotNumber;
         tab.terminal = terminal;
+        tab.graph = graph;
+        tab.kumaPlot = kumaPlot;
         tab.helpPage = std::move(helpPageState);
         m_tabs.push_back(tab);
         // Apply current shared zoom level so a freshly opened help tab matches
@@ -1841,6 +3385,8 @@ private:
 
         auto* term = new TerminalView(m_pages);
         term->SetCloseCallback([this, term]() { CloseTabByPage(term); });
+        term->SetGraphRequestCallback([this](const GraphRequest& request) { HandleGraphRequest(request); });
+        term->SetKumaPlotRequestCallback([this](const KumaPlotRequest& request) { HandleKumaPlotRequest(request); });
         term->SetZoomDelta(m_terminalZoomDelta);
         AddPage(title, term, true, number, term);
 
@@ -1849,6 +3395,129 @@ private:
             wxString sp = scriptPath;
             CallAfter([term, sp]() { term->RunScript(sp); });
         }
+    }
+
+    wxString WriteRestoredScript(int number, const std::vector<wxString>& commands) {
+        if (commands.empty()) return wxString();
+        wxString dir = BestiarySessionDirectory();
+        if (dir.empty()) return wxString();
+        wxString path = wxFileName(dir, wxString::Format("restore-%d.bsy", number)).GetFullPath();
+        wxScopedCharBuffer filePath = path.ToUTF8();
+        FILE* fp = fopen(filePath.data(), "w");
+        if (!fp) return wxString();
+
+        bool wroteCommand = false;
+        for (const wxString& command : commands) {
+            wxScopedCharBuffer u8 = command.ToUTF8();
+            if (u8.data() && u8.length() > 0) fwrite(u8.data(), 1, u8.length(), fp);
+            if (command.empty() || command.Last() != '\n') fputc('\n', fp);
+            wroteCommand = true;
+        }
+        fclose(fp);
+        if (!wroteCommand) {
+            remove(filePath.data());
+            return wxString();
+        }
+        return path;
+    }
+
+    void AddRestoredBestiaryTab(const wxString& title, const std::vector<wxString>& commands,
+                                const std::vector<wxString>& transcript) {
+        int number = NextSessionNumber();
+        m_openNumbers.insert(number);
+
+        auto* term = new TerminalView(m_pages);
+        term->SetCloseCallback([this, term]() { CloseTabByPage(term); });
+        term->SetGraphRequestCallback([this](const GraphRequest& request) { HandleGraphRequest(request); });
+        term->SetKumaPlotRequestCallback([this](const KumaPlotRequest& request) { HandleKumaPlotRequest(request); });
+        term->SetZoomDelta(m_terminalZoomDelta);
+        term->SetCommandHistory(commands);
+        term->SetTranscriptLines(transcript);
+        AddPage(title.empty() ? wxString::Format("Bestiary %d", number) : title, term, true, number, term);
+
+        wxString exe = BestiaryExecutablePath();
+        wxString script = WriteRestoredScript(number, commands);
+        wxArrayString args;
+        if (!script.empty()) {
+            args.Add("--restore");
+            args.Add(script);
+        }
+        args.Add("--no-startup-message");
+        term->Spawn(exe, args);
+    }
+
+    GraphPage* FindGraphPage(int number) const {
+        for (const auto& tab : m_tabs) {
+            if (tab.graphNumber == number) return tab.graph;
+        }
+        return nullptr;
+    }
+
+    void HandleGraphRequest(const GraphRequest& request) {
+        if (request.target > 0) {
+            if (request.target > INT_MAX) return;
+            GraphPage* existing = FindGraphPage((int)request.target);
+            if (existing) {
+                existing->AddGraph(request);
+                for (size_t i = 0; i < m_tabs.size(); i++) {
+                    if (m_tabs[i].graph == existing) {
+                        SelectTab((int)i);
+                        break;
+                    }
+                }
+                return;
+            }
+        }
+        AddGraphTab(request);
+    }
+
+    void AddGraphTab(const GraphRequest& request) {
+        int number = request.target > 0 && request.target <= INT_MAX
+            ? (int)request.target
+            : NextGraphNumber();
+        if (m_openGraphNumbers.find(number) != m_openGraphNumbers.end())
+            number = NextGraphNumber();
+        m_openGraphNumbers.insert(number);
+
+        auto* graph = new GraphPage(m_pages);
+        GraphRequest adjusted = request;
+        adjusted.target = number;
+        graph->AddGraph(adjusted);
+        AddPage(wxString::Format("Graph %d", number), graph, true, -1, nullptr, number, graph);
+    }
+
+    void AddRestoredGraphTab(int number, const std::vector<GraphRequest>& requests) {
+        if (number < 1 || m_openGraphNumbers.find(number) != m_openGraphNumbers.end())
+            number = NextGraphNumber();
+        m_openGraphNumbers.insert(number);
+
+        auto* graph = new GraphPage(m_pages);
+        for (GraphRequest request : requests) {
+            request.target = number;
+            graph->AddGraph(request);
+        }
+        AddPage(wxString::Format("Graph %d", number), graph, true, -1, nullptr, number, graph);
+    }
+
+    void HandleKumaPlotRequest(const KumaPlotRequest& request) {
+        AddKumaPlotTab(request);
+    }
+
+    void AddKumaPlotTab(const KumaPlotRequest& request) {
+        int number = NextKumaPlotNumber();
+        m_openKumaPlotNumbers.insert(number);
+        wxString title = wxString::Format("KUMA Plot %d", number);
+        auto* plot = new KumaPlotPage(m_pages, request, title);
+        AddPage(title, plot, true, -1, nullptr, -1, nullptr, number, plot);
+    }
+
+    void AddRestoredKumaPlotTab(int number, const KumaPlotRequest& request) {
+        if (number < 1 || m_openKumaPlotNumbers.find(number) != m_openKumaPlotNumbers.end())
+            number = NextKumaPlotNumber();
+        m_openKumaPlotNumbers.insert(number);
+        wxString title = wxString::Format("KUMA Plot %d", number);
+        auto* plot = new KumaPlotPage(m_pages, request, title);
+        AddPage(title, plot, true, -1, nullptr, -1, nullptr, number, plot);
     }
 
     void OpenScriptTab() {
@@ -2478,6 +4147,237 @@ private:
         config->Flush();
     }
 
+    static constexpr const char* kSessionConfigGroup = "/Session";
+
+    wxString SessionTabGroup(size_t index) const {
+        return wxString::Format("%s/Tab%zu", kSessionConfigGroup, index);
+    }
+
+    int FindTabByTitle(const wxString& title) const {
+        for (size_t i = 0; i < m_tabs.size(); i++)
+            if (m_tabs[i].title == title) return (int)i;
+        return wxNOT_FOUND;
+    }
+
+    static long GraphKindToLong(GraphRequestKind kind) {
+        return kind == GraphRequestKind::Implicit ? 1
+            : (kind == GraphRequestKind::Vertical ? 2 : 0);
+    }
+
+    static GraphRequestKind LongToGraphKind(long value) {
+        if (value == 1) return GraphRequestKind::Implicit;
+        if (value == 2) return GraphRequestKind::Vertical;
+        return GraphRequestKind::Explicit;
+    }
+
+    static long KumaPlotKindToLong(KumaPlotRequestKind kind) {
+        return (long)kind;
+    }
+
+    static KumaPlotRequestKind LongToKumaPlotKind(long value) {
+        if (value == 0) return KumaPlotRequestKind::Box;
+        if (value == 1) return KumaPlotRequestKind::Histogram;
+        if (value == 2) return KumaPlotRequestKind::Frequency;
+        if (value == 3) return KumaPlotRequestKind::Bar;
+        if (value == 4) return KumaPlotRequestKind::Density;
+        if (value == 5) return KumaPlotRequestKind::Dot;
+        if (value == 6) return KumaPlotRequestKind::ECDF;
+        if (value == 7) return KumaPlotRequestKind::QQ;
+        if (value == 9) return KumaPlotRequestKind::Regression;
+        return KumaPlotRequestKind::Scatter;
+    }
+
+    static bool TranscriptLineStartsNewPrompt(const wxString& line) {
+        wxString text = line;
+        text.Trim(false);
+        return text.StartsWith(">")
+            || text.StartsWith("...")
+            || text.StartsWith("=>")
+            || text.StartsWith("Bestiary ")
+            || text.StartsWith("\\help ")
+            || text.StartsWith("[Bestiary ");
+    }
+
+    static std::vector<wxString> UnwrapLegacyTranscriptRows(const std::vector<wxString>& rows,
+                                                           long savedCols) {
+        std::vector<wxString> out;
+        size_t wrapWidth = savedCols > 0 ? (size_t)savedCols : 40;
+
+        for (const wxString& row : rows) {
+            if (!out.empty() && out.back().length() + 1 >= wrapWidth
+                    && !TranscriptLineStartsNewPrompt(row)) {
+                out.back() += row;
+            } else {
+                out.push_back(row);
+            }
+        }
+        return out;
+    }
+
+    void SavePersistedSession() {
+        SaveTabScrollState(m_selected);
+        for (size_t i = 0; i < m_tabs.size(); i++) SaveTabScrollState((int)i);
+
+        wxConfigBase* config = wxConfigBase::Get(true);
+        if (!config) return;
+        config->DeleteGroup(kSessionConfigGroup);
+        config->Write(wxString(kSessionConfigGroup) + "/Selected", (long)m_selected);
+        config->Write(wxString(kSessionConfigGroup) + "/TabCount",
+                      (long)std::max(0, (int)m_tabs.size() - 1));
+
+        size_t outIndex = 0;
+        for (size_t i = 1; i < m_tabs.size(); i++, outIndex++) {
+            const Tab& tab = m_tabs[i];
+            wxString group = SessionTabGroup(outIndex);
+            config->Write(group + "/Title", tab.title);
+            config->Write(group + "/ScrollX", (long)tab.scrollX);
+            config->Write(group + "/ScrollY", (long)tab.scrollY);
+
+            if (tab.terminal) {
+                config->Write(group + "/Type", "terminal");
+                const auto& commands = tab.terminal->CommandHistory();
+                config->Write(group + "/CommandCount", (long)commands.size());
+                for (size_t j = 0; j < commands.size(); j++)
+                    config->Write(group + wxString::Format("/Command%zu", j), commands[j]);
+                std::vector<wxString> transcript = tab.terminal->TranscriptLines();
+                config->Write(group + "/TranscriptLogical", 1L);
+                config->Write(group + "/TranscriptCount", (long)transcript.size());
+                for (size_t j = 0; j < transcript.size(); j++)
+                    config->Write(group + wxString::Format("/Transcript%zu", j), transcript[j]);
+            } else if (tab.graph) {
+                config->Write(group + "/Type", "graph");
+                config->Write(group + "/Number", (long)tab.graphNumber);
+                std::vector<GraphRequest> requests = tab.graph->GraphRequests();
+                config->Write(group + "/GraphCount", (long)requests.size());
+                for (size_t j = 0; j < requests.size(); j++) {
+                    wxString item = group + wxString::Format("/Graph%zu", j);
+                    config->Write(item + "/Kind", GraphKindToLong(requests[j].kind));
+                    config->Write(item + "/Target", (long)requests[j].target);
+                    config->Write(item + "/Label", requests[j].label);
+                    config->Write(item + "/Serialized", requests[j].serialized);
+                }
+            } else if (tab.kumaPlot) {
+                config->Write(group + "/Type", "kuma");
+                config->Write(group + "/Number", (long)tab.kumaPlotNumber);
+                KumaPlotRequest request = tab.kumaPlot->PlotRequest();
+                config->Write(group + "/Kind", KumaPlotKindToLong(request.kind));
+                config->Write(group + "/PlotTitle", request.title);
+                config->Write(group + "/XLabel", request.xLabel);
+                config->Write(group + "/YLabel", request.yLabel);
+                config->Write(group + "/Payload", request.payload);
+            } else if (tab.helpPage) {
+                config->Write(group + "/Type", "help");
+            }
+        }
+        config->Flush();
+    }
+
+    void RestoreHelpScroll(int index, int scrollX, int scrollY) {
+        if (index < 0 || index >= (int)m_tabs.size()) return;
+        m_tabs[index].scrollX = scrollX;
+        m_tabs[index].scrollY = scrollY;
+        CallAfter([this, index]() { RestoreTabScrollState(index); });
+    }
+
+    void LoadPersistedSession() {
+        wxConfigBase* config = wxConfigBase::Get(true);
+        if (!config) return;
+
+        long tabCount = 0;
+        if (!config->Read(wxString(kSessionConfigGroup) + "/TabCount", &tabCount, 0) || tabCount <= 0)
+            return;
+
+        for (long i = 0; i < tabCount; i++) {
+            wxString group = SessionTabGroup((size_t)i);
+            wxString type;
+            wxString title;
+            long scrollX = 0;
+            long scrollY = 0;
+            config->Read(group + "/Type", &type, "");
+            config->Read(group + "/Title", &title, "");
+            config->Read(group + "/ScrollX", &scrollX, 0);
+            config->Read(group + "/ScrollY", &scrollY, 0);
+
+            if (type == "terminal") {
+                long commandCount = 0;
+                long transcriptCount = 0;
+                long transcriptLogical = 0;
+                std::vector<wxString> commands;
+                std::vector<wxString> transcript;
+                config->Read(group + "/CommandCount", &commandCount, 0);
+                for (long j = 0; j < commandCount; j++) {
+                    wxString command;
+                    config->Read(group + wxString::Format("/Command%ld", j), &command, "");
+                    if (!command.empty()) commands.push_back(command);
+                }
+                config->Read(group + "/TranscriptCount", &transcriptCount, 0);
+                config->Read(group + "/TranscriptLogical", &transcriptLogical, 0);
+                for (long j = 0; j < transcriptCount; j++) {
+                    wxString line;
+                    config->Read(group + wxString::Format("/Transcript%ld", j), &line, "");
+                    transcript.push_back(line);
+                }
+                if (!transcriptLogical) transcript = UnwrapLegacyTranscriptRows(transcript, 0);
+                AddRestoredBestiaryTab(title, commands, transcript);
+            } else if (type == "graph") {
+                long number = 0;
+                long graphCount = 0;
+                std::vector<GraphRequest> requests;
+                config->Read(group + "/Number", &number, 0);
+                config->Read(group + "/GraphCount", &graphCount, 0);
+                for (long j = 0; j < graphCount; j++) {
+                    wxString item = group + wxString::Format("/Graph%ld", j);
+                    long kind = 0;
+                    long target = 0;
+                    GraphRequest request;
+                    config->Read(item + "/Kind", &kind, 0);
+                    config->Read(item + "/Target", &target, number);
+                    config->Read(item + "/Label", &request.label, "");
+                    config->Read(item + "/Serialized", &request.serialized, "");
+                    request.kind = LongToGraphKind(kind);
+                    request.target = target;
+                    if (!request.serialized.empty()) requests.push_back(request);
+                }
+                AddRestoredGraphTab((int)number, requests);
+            } else if (type == "kuma") {
+                long number = 0;
+                long kind = 8;
+                KumaPlotRequest request;
+                config->Read(group + "/Number", &number, 0);
+                config->Read(group + "/Kind", &kind, 8);
+                config->Read(group + "/PlotTitle", &request.title, "");
+                config->Read(group + "/XLabel", &request.xLabel, "");
+                config->Read(group + "/YLabel", &request.yLabel, "");
+                config->Read(group + "/Payload", &request.payload, "");
+                request.kind = LongToKumaPlotKind(kind);
+                AddRestoredKumaPlotTab((int)number, request);
+            } else if (type == "help") {
+                if (title == "Help") {
+                    AddHelpTab();
+                    RestoreHelpScroll(FindTabByTitle("Help"), (int)scrollX, (int)scrollY);
+                } else {
+                    for (size_t sectionIndex = 0; sectionIndex < BestiaryHelpPage::kSectionCount; sectionIndex++) {
+                        const auto& section = BestiaryHelpPage::kSections[sectionIndex];
+                        wxString tabTitle = section.beast == BestiaryHelpPage::Beast::Basic
+                            ? "Help - Basic"
+                            : "Help - " + HelpBeastName(section);
+                        if (tabTitle != title) continue;
+                        AddBeastHelpTab(section.beast);
+                        RestoreHelpScroll(FindTabByTitle(tabTitle), (int)scrollX, (int)scrollY);
+                        break;
+                    }
+                }
+            }
+        }
+
+        long selected = 0;
+        config->Read(wxString(kSessionConfigGroup) + "/Selected", &selected, 0);
+        CallAfter([this, selected]() {
+            int index = std::clamp((int)selected, 0, std::max(0, (int)m_tabs.size() - 1));
+            SelectTab(index);
+        });
+    }
+
     void SearchCurrentHelpPage() {
         if (m_selected < 0 || m_selected >= (int)m_tabs.size()) return;
         std::shared_ptr<HelpPageState> helpPage = m_tabs[m_selected].helpPage;
@@ -2708,7 +4608,7 @@ private:
             evt.Skip();
         });
         scheduleRelayout();
-        AddPage(tabTitle, page, true, -1, nullptr, helpPageState);
+        AddPage(tabTitle, page, true, -1, nullptr, -1, nullptr, -1, nullptr, helpPageState);
     }
 
     void AddHelpTab() {
@@ -2781,7 +4681,7 @@ private:
             evt.Skip();
         });
         scheduleRelayout();
-        AddPage("Help", page, true, -1, nullptr, helpPageState);
+        AddPage("Help", page, true, -1, nullptr, -1, nullptr, -1, nullptr, helpPageState);
     }
 
     void SelectTab(int index) {
@@ -2808,6 +4708,10 @@ private:
 
             if (m_tabs[i].sessionNumber >= 1)
                 m_openNumbers.erase(m_tabs[i].sessionNumber);
+            if (m_tabs[i].graphNumber >= 1)
+                m_openGraphNumbers.erase(m_tabs[i].graphNumber);
+            if (m_tabs[i].kumaPlotNumber >= 1)
+                m_openKumaPlotNumbers.erase(m_tabs[i].kumaPlotNumber);
 
             wxWindow* ownedPage = m_tabs[i].page;
             int pageIndex = m_pages->FindPage(ownedPage);
@@ -2829,6 +4733,10 @@ private:
 
             if (m_tabs[i].sessionNumber >= 1)
                 m_openNumbers.erase(m_tabs[i].sessionNumber);
+            if (m_tabs[i].graphNumber >= 1)
+                m_openGraphNumbers.erase(m_tabs[i].graphNumber);
+            if (m_tabs[i].kumaPlotNumber >= 1)
+                m_openKumaPlotNumbers.erase(m_tabs[i].kumaPlotNumber);
 
             wxWindow* page = m_tabs[i].page;
             int pageIndex = m_pages->FindPage(page);
@@ -2849,6 +4757,8 @@ private:
     wxVector<Tab>     m_tabs;
     int               m_selected;
     std::set<int>     m_openNumbers;
+    std::set<int>     m_openGraphNumbers;
+    std::set<int>     m_openKumaPlotNumbers;
     int               m_dragTabIndex = wxNOT_FOUND;
     bool              m_draggingTabs = false;
     wxWindow*         m_dragTabOrigin = nullptr;
@@ -2871,6 +4781,7 @@ private:
     // tune them independently; closing a tab does not lose the setting.
     int               m_helpZoomDelta = 0;
     int               m_terminalZoomDelta = 0;
+    bool              m_adjustingFrameSize = false;
 };
 
 #ifdef __WXMSW__

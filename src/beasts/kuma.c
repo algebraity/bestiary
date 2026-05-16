@@ -521,6 +521,198 @@ static int compareStatsNumbers(const void* a, const void* b) {
     return (cmp > 0) - (cmp < 0);
 }
 
+// Copy and sort a valid stats array
+static Number* sortedNumberCopy(Number* data, size_t size) {
+    // Reject invalid arrays before allocating storage
+    if (!isValidStatsArray(data, size)) return NULL;
+
+    // Copy input values so callers are never mutated
+    Number* sorted = malloc(size * sizeof(Number));
+    if (!sorted) return NULL;
+    for (size_t i = 0; i < size; i++) sorted[i] = data[i];
+    qsort(sorted, size, sizeof(Number), compareStatsNumbers);
+    return sorted;
+}
+
+// Convert a valid stats array to long double coordinates
+static long double* numberArrayToLongDouble(Number* data, size_t size) {
+    // Reject invalid arrays before allocating storage
+    if (!isValidStatsArray(data, size)) return NULL;
+
+    // Convert each value through the shared Number conversion helper
+    long double* values = malloc(size * sizeof(long double));
+    if (!values) return NULL;
+    for (size_t i = 0; i < size; i++) {
+        if (!numberToLongDouble(data[i], &values[i])) {
+            free(values);
+            return NULL;
+        }
+    }
+    return values;
+}
+
+// Sort a long double array in ascending order
+static int compareLongDoubleValues(const void* a, const void* b) {
+    // Compare finite plotting coordinates directly
+    long double x = *(const long double*)a;
+    long double y = *(const long double*)b;
+    return (x > y) - (x < y);
+}
+
+// Compute a p-quantile of sorted long double data by linear interpolation
+static long double sortedLongDoubleQuantile(long double* sorted, size_t size, long double p) {
+    // Clamp percentile positions to the available sample range
+    if (!sorted || size == 0) return NAN;
+    if (p <= 0.0L) return sorted[0];
+    if (p >= 1.0L) return sorted[size - 1];
+
+    // Interpolate between adjacent order statistics
+    long double pos = p * (long double)(size - 1);
+    size_t lower = (size_t)floorl(pos);
+    if (lower >= size - 1) return sorted[size - 1];
+    long double weight = pos - (long double)lower;
+    return sorted[lower] + weight * (sorted[lower + 1] - sorted[lower]);
+}
+
+// Return the sample standard deviation of long double data
+static long double longDoubleSampleStddev(long double* values, size_t size) {
+    // Reject missing or singleton samples
+    if (!values || size < 2) return NAN;
+
+    // Compute the sample mean
+    long double total = 0.0L;
+    for (size_t i = 0; i < size; i++) total += values[i];
+    long double avg = total / (long double)size;
+
+    // Compute the unbiased sample variance
+    long double ss = 0.0L;
+    for (size_t i = 0; i < size; i++) {
+        long double diff = values[i] - avg;
+        ss += diff * diff;
+    }
+    return sqrtl(ss / (long double)(size - 1));
+}
+
+// Evaluate a distribution CDF as a long double
+static bool distributionCDFLongDouble(ProbabilityDistribution* dist, long double x, long double* out) {
+    // Reject invalid storage and unavailable distribution CDFs
+    if (!dist || !out || !distributionHasCDF(dist)) return false;
+
+    // Call the distribution accessor and convert the result
+    Number result = probabilityCDF(dist, constructNumberFromDouble(x));
+    if (!numberToLongDouble(result, out)) return false;
+    return isfinite(*out);
+}
+
+// Compute a discrete distribution quantile from finite support
+static bool discreteDistributionQuantile(ProbabilityDistribution* dist, long double p, long double* out) {
+    // Reject invalid output storage and unsupported probabilities
+    if (!dist || !out || p < 0.0L || p > 1.0L) return false;
+
+    // Enumerate finite support values when KUMA can do so exactly
+    Number* values = NULL;
+    Number* probabilities = NULL;
+    size_t size = 0;
+    if (!finiteDiscreteSupport(dist, &values, &probabilities, &size)) return false;
+
+    // Search for the smallest support value whose CDF reaches p
+    bool found = false;
+    long double best = 0.0L;
+    for (size_t i = 0; i < size; i++) {
+        long double x = 0.0L;
+        long double cdf = 0.0L;
+        if (!numberToLongDouble(values[i], &x) || !distributionCDFLongDouble(dist, x, &cdf)) {
+            freeNumberArrays(values, probabilities);
+            return false;
+        }
+        if (cdf + 1e-15L >= p && (!found || x < best)) {
+            best = x;
+            found = true;
+        }
+    }
+
+    freeNumberArrays(values, probabilities);
+    if (!found) return false;
+    *out = best;
+    return true;
+}
+
+// Find a finite bracket for a continuous distribution quantile
+static bool continuousQuantileBracket(ProbabilityDistribution* dist, long double p, long double* lower, long double* upper) {
+    // Prefer finite known support when the distribution has it
+    if (continuousSupport(dist, lower, upper)) return true;
+
+    // Use named infinite-support distributions when available
+    long double mu = 0.0L;
+    long double sigma = 0.0L;
+    if (getNormalParams(dist, &mu, &sigma)) {
+        *lower = mu - 10.0L * sigma;
+        *upper = mu + 10.0L * sigma;
+        return true;
+    }
+
+    long double lambda = 0.0L;
+    if (getExponentialParams(dist, &lambda)) {
+        *lower = 0.0L;
+        *upper = p >= 1.0L ? 64.0L / lambda : -logl(fmaxl(1e-18L, 1.0L - p)) / lambda;
+        if (*upper <= *lower) *upper = 1.0L / lambda;
+        return true;
+    }
+
+    // Fall back to mean and standard deviation accessors
+    Number meanValue = probabilityMean(dist);
+    Number sdValue = probabilityStddev(dist);
+    if (!numberToLongDouble(meanValue, &mu) || !numberToLongDouble(sdValue, &sigma) || sigma <= 0.0L) return false;
+    *lower = mu - 10.0L * sigma;
+    *upper = mu + 10.0L * sigma;
+    return isfinite(*lower) && isfinite(*upper) && *lower < *upper;
+}
+
+// Compute a distribution quantile for QQ plot data
+static bool distributionQuantile(ProbabilityDistribution* dist, long double p, long double* out) {
+    // Reject invalid inputs and unsupported distributions
+    if (!dist || !out || p <= 0.0L || p >= 1.0L || !distributionHasCDF(dist)) return false;
+
+    // Use finite discrete support directly
+    if (dist->type == KUMA_DIST_DISCRETE) return discreteDistributionQuantile(dist, p, out);
+
+    // Build a bracket for bisection
+    long double lower = 0.0L;
+    long double upper = 0.0L;
+    if (!continuousQuantileBracket(dist, p, &lower, &upper)) return false;
+
+    // Expand the bracket until it contains the target probability
+    long double cLower = 0.0L;
+    long double cUpper = 0.0L;
+    if (!distributionCDFLongDouble(dist, lower, &cLower) || !distributionCDFLongDouble(dist, upper, &cUpper)) return false;
+    long double span = upper - lower;
+    for (int i = 0; i < 64 && cLower > p; i++) {
+        upper = lower;
+        lower -= span;
+        span *= 2.0L;
+        if (!distributionCDFLongDouble(dist, lower, &cLower)) return false;
+    }
+    span = upper - lower;
+    for (int i = 0; i < 64 && cUpper < p; i++) {
+        lower = upper;
+        upper += span;
+        span *= 2.0L;
+        if (!distributionCDFLongDouble(dist, upper, &cUpper)) return false;
+    }
+    if (cLower > p || cUpper < p) return false;
+
+    // Bisect to a stable plotting quantile
+    for (int i = 0; i < 100; i++) {
+        long double mid = (lower + upper) / 2.0L;
+        long double cMid = 0.0L;
+        if (!distributionCDFLongDouble(dist, mid, &cMid)) return false;
+        if (cMid < p) lower = mid;
+        else upper = mid;
+    }
+    *out = (lower + upper) / 2.0L;
+    return isfinite(*out);
+}
+
 // Returns true if a Number can be used for KUMA methods, else false
 bool isValidStatsNumber(Number x) {
     // Check validity using the active Number variant
@@ -2169,6 +2361,543 @@ Number linearRegressionPredict(Number slope, Number intercept, Number x) {
     Number product = multNumbers(slope, x);
     if (product.type == NUMBER_NAN) return product;
     return addNumbers(product, intercept);
+}
+
+/* ---------- Plot data functions ---------- */
+
+// Compute five-number and outlier data for a boxplot
+KumaBoxPlotData* boxplot(Number* data, size_t size) {
+    // Convert and sort data for quantile and whisker calculations
+    long double* values = numberArrayToLongDouble(data, size);
+    if (!values) return NULL;
+    qsort(values, size, sizeof(long double), compareLongDoubleValues);
+
+    // Allocate the owned result before filling fields
+    KumaBoxPlotData* plot = calloc(1, sizeof(KumaBoxPlotData));
+    if (!plot) {
+        free(values);
+        return NULL;
+    }
+
+    // Compute the five-number summary and Tukey fences
+    plot->minimum = values[0];
+    plot->q1 = sortedLongDoubleQuantile(values, size, 0.25L);
+    plot->median = sortedLongDoubleQuantile(values, size, 0.5L);
+    plot->q3 = sortedLongDoubleQuantile(values, size, 0.75L);
+    plot->maximum = values[size - 1];
+    long double iqrValue = plot->q3 - plot->q1;
+    plot->lowerFence = plot->q1 - 1.5L * iqrValue;
+    plot->upperFence = plot->q3 + 1.5L * iqrValue;
+    plot->lowerWhisker = plot->minimum;
+    plot->upperWhisker = plot->maximum;
+
+    // Count outliers across the full sample
+    for (size_t i = 0; i < size; i++) {
+        if (values[i] < plot->lowerFence || values[i] > plot->upperFence) plot->outlierCount++;
+    }
+
+    // Locate the lower whisker at the first non-outlier
+    for (size_t i = 0; i < size; i++) {
+        if (values[i] >= plot->lowerFence && values[i] <= plot->upperFence) {
+            plot->lowerWhisker = values[i];
+            break;
+        }
+    }
+
+    // Locate the upper whisker at the last non-outlier
+    for (size_t i = size; i > 0; i--) {
+        size_t index = i - 1;
+        if (values[index] >= plot->lowerFence && values[index] <= plot->upperFence) {
+            plot->upperWhisker = values[index];
+            break;
+        }
+    }
+
+    // Copy outlier coordinates into owned storage
+    if (plot->outlierCount > 0) {
+        plot->outliers = malloc(plot->outlierCount * sizeof(long double));
+        if (!plot->outliers) {
+            free(values);
+            freeBoxPlotData(plot);
+            return NULL;
+        }
+        size_t outIndex = 0;
+        for (size_t i = 0; i < size; i++) {
+            if (values[i] < plot->lowerFence || values[i] > plot->upperFence)
+                plot->outliers[outIndex++] = values[i];
+        }
+    }
+
+    free(values);
+    return plot;
+}
+
+// Compute equal-width histogram bins
+KumaHistogramData* histogram(Number* data, size_t size, size_t binCount) {
+    // Convert data to plotting coordinates
+    long double* values = numberArrayToLongDouble(data, size);
+    if (!values) return NULL;
+
+    // Choose a default bin count when none is supplied
+    if (binCount == 0) binCount = (size_t)ceill(sqrtl((long double)size));
+    if (binCount == 0) {
+        free(values);
+        return NULL;
+    }
+
+    // Find the sample endpoints
+    long double lo = values[0];
+    long double hi = values[0];
+    for (size_t i = 1; i < size; i++) {
+        if (values[i] < lo) lo = values[i];
+        if (values[i] > hi) hi = values[i];
+    }
+
+    // Widen degenerate data so the histogram has visible bins
+    if (lo == hi) {
+        lo -= 0.5L;
+        hi += 0.5L;
+    }
+    long double width = (hi - lo) / (long double)binCount;
+    if (!isfinite(width) || width <= 0.0L) {
+        free(values);
+        return NULL;
+    }
+
+    // Allocate and initialize bins
+    KumaHistogramData* plot = calloc(1, sizeof(KumaHistogramData));
+    if (!plot) {
+        free(values);
+        return NULL;
+    }
+    plot->bins = calloc(binCount, sizeof(KumaHistogramBin));
+    if (!plot->bins) {
+        free(values);
+        freeHistogramData(plot);
+        return NULL;
+    }
+    plot->binCount = binCount;
+    plot->sampleSize = size;
+    plot->minimum = lo;
+    plot->maximum = hi;
+    plot->binWidth = width;
+    for (size_t i = 0; i < binCount; i++) {
+        plot->bins[i].lower = lo + (long double)i * width;
+        plot->bins[i].upper = i == binCount - 1 ? hi : lo + (long double)(i + 1) * width;
+        plot->bins[i].midpoint = (plot->bins[i].lower + plot->bins[i].upper) / 2.0L;
+    }
+
+    // Count each value into the appropriate bin
+    for (size_t i = 0; i < size; i++) {
+        size_t index = (size_t)floorl((values[i] - lo) / width);
+        if (index >= binCount) index = binCount - 1;
+        plot->bins[index].count++;
+    }
+
+    // Compute plot heights as proportions and probability densities
+    for (size_t i = 0; i < binCount; i++) {
+        plot->bins[i].proportion = (long double)plot->bins[i].count / (long double)size;
+        plot->bins[i].density = plot->bins[i].proportion / width;
+    }
+
+    free(values);
+    return plot;
+}
+
+// Compute value-count data for a frequency plot
+KumaFrequencyPlotData* frequencyPlot(Number* data, size_t size) {
+    // Delegate run counting to the existing frequency helper
+    size_t count = 0;
+    Frequency* freqs = frequencies(data, size, &count);
+    if (!freqs || count == 0) return NULL;
+
+    // Allocate the plot data wrapper
+    KumaFrequencyPlotData* plot = calloc(1, sizeof(KumaFrequencyPlotData));
+    if (!plot) {
+        freeFrequencies(freqs);
+        return NULL;
+    }
+    plot->items = calloc(count, sizeof(KumaFrequencyPlotItem));
+    if (!plot->items) {
+        freeFrequencies(freqs);
+        freeFrequencyPlotData(plot);
+        return NULL;
+    }
+
+    // Copy values, counts, numeric positions, and proportions
+    plot->count = count;
+    plot->sampleSize = size;
+    for (size_t i = 0; i < count; i++) {
+        long double position = 0.0L;
+        if (!numberToLongDouble(freqs[i].value, &position)) {
+            freeFrequencies(freqs);
+            freeFrequencyPlotData(plot);
+            return NULL;
+        }
+        plot->items[i].value = freqs[i].value;
+        plot->items[i].count = freqs[i].count;
+        plot->items[i].position = position;
+        plot->items[i].proportion = (long double)freqs[i].count / (long double)size;
+    }
+
+    freeFrequencies(freqs);
+    return plot;
+}
+
+// Compute explicit bar-graph data from labels and values
+KumaBarGraphData* barGraph(Number* labels, Number* values, size_t size) {
+    // Reject invalid labels, invalid values, and negative bar heights
+    if (!isValidStatsArray(labels, size) || !isValidStatsArray(values, size)) return NULL;
+
+    // Allocate one bar per input pair
+    KumaBarGraphData* plot = calloc(1, sizeof(KumaBarGraphData));
+    if (!plot) return NULL;
+    plot->bars = calloc(size, sizeof(KumaBarGraphItem));
+    if (!plot->bars) {
+        freeBarGraphData(plot);
+        return NULL;
+    }
+    plot->count = size;
+
+    // Copy labels and decode heights
+    for (size_t i = 0; i < size; i++) {
+        long double height = 0.0L;
+        if (!numberToLongDouble(values[i], &height) || height < 0.0L) {
+            freeBarGraphData(plot);
+            return NULL;
+        }
+        plot->bars[i].label = labels[i];
+        plot->bars[i].value = values[i];
+        plot->bars[i].height = height;
+    }
+    return plot;
+}
+
+// Compute a Gaussian kernel density estimate
+KumaDensityPlotData* densityPlot(Number* data, size_t size, size_t pointCount, Number bandwidth) {
+    // Convert data to plotting coordinates
+    long double* values = numberArrayToLongDouble(data, size);
+    if (!values) return NULL;
+    qsort(values, size, sizeof(long double), compareLongDoubleValues);
+
+    // Choose a default sample count and bandwidth when needed
+    if (pointCount == 0) pointCount = 128;
+    if (pointCount < 2) {
+        free(values);
+        return NULL;
+    }
+    long double h = 0.0L;
+    if (!numberToLongDouble(bandwidth, &h) || h <= 0.0L) {
+        long double sd = longDoubleSampleStddev(values, size);
+        h = 1.06L * (isfinite(sd) && sd > 0.0L ? sd : 1.0L) * powl((long double)size, -0.2L);
+    }
+    if (!isfinite(h) || h <= 0.0L) {
+        free(values);
+        return NULL;
+    }
+
+    // Allocate output sample points
+    KumaDensityPlotData* plot = calloc(1, sizeof(KumaDensityPlotData));
+    if (!plot) {
+        free(values);
+        return NULL;
+    }
+    plot->points = calloc(pointCount, sizeof(KumaPlotPoint));
+    if (!plot->points) {
+        free(values);
+        freeDensityPlotData(plot);
+        return NULL;
+    }
+    plot->count = pointCount;
+    plot->sampleSize = size;
+    plot->bandwidth = h;
+
+    // Sample the KDE over a padded data interval
+    long double lo = values[0] - 3.0L * h;
+    long double hi = values[size - 1] + 3.0L * h;
+    long double step = (hi - lo) / (long double)(pointCount - 1);
+    long double norm = 1.0L / ((long double)size * h * sqrtl(2.0L * M_PI));
+    for (size_t i = 0; i < pointCount; i++) {
+        long double x = lo + (long double)i * step;
+        long double total = 0.0L;
+        for (size_t j = 0; j < size; j++) {
+            long double z = (x - values[j]) / h;
+            total += expl(-0.5L * z * z);
+        }
+        plot->points[i].x = x;
+        plot->points[i].y = norm * total;
+    }
+
+    free(values);
+    return plot;
+}
+
+// Compute stacked dot-plot data from value frequencies
+KumaDotPlotData* dotPlot(Number* data, size_t size) {
+    // Reuse frequency plot data because a dot plot is value-count data
+    KumaFrequencyPlotData* freqs = frequencyPlot(data, size);
+    if (!freqs) return NULL;
+
+    // Transfer the item array into the dot-plot wrapper
+    KumaDotPlotData* plot = calloc(1, sizeof(KumaDotPlotData));
+    if (!plot) {
+        freeFrequencyPlotData(freqs);
+        return NULL;
+    }
+    plot->dots = freqs->items;
+    plot->count = freqs->count;
+    plot->sampleSize = freqs->sampleSize;
+    freqs->items = NULL;
+    freeFrequencyPlotData(freqs);
+    return plot;
+}
+
+// Compute empirical CDF jump points
+KumaECDFPlotData* ecdf(Number* data, size_t size) {
+    // Sort data and count distinct runs
+    Number* sorted = sortedNumberCopy(data, size);
+    if (!sorted) return NULL;
+    size_t distinct = countDistinct(sorted, size);
+    if (distinct == 0) {
+        free(sorted);
+        return NULL;
+    }
+
+    // Allocate one ECDF point per distinct sample value
+    KumaECDFPlotData* plot = calloc(1, sizeof(KumaECDFPlotData));
+    if (!plot) {
+        free(sorted);
+        return NULL;
+    }
+    plot->points = calloc(distinct, sizeof(KumaPlotPoint));
+    if (!plot->points) {
+        free(sorted);
+        freeECDFPlotData(plot);
+        return NULL;
+    }
+    plot->count = distinct;
+    plot->sampleSize = size;
+
+    // Fill jump coordinates using cumulative proportions
+    size_t point = 0;
+    size_t cumulative = 0;
+    for (size_t i = 0; i < size; ) {
+        size_t j = i + 1;
+        while (j < size && eqNumbers(sorted[j], sorted[i])) j++;
+        cumulative = j;
+        long double x = 0.0L;
+        if (!numberToLongDouble(sorted[i], &x)) {
+            free(sorted);
+            freeECDFPlotData(plot);
+            return NULL;
+        }
+        plot->points[point].x = x;
+        plot->points[point].y = (long double)cumulative / (long double)size;
+        point++;
+        i = j;
+    }
+
+    free(sorted);
+    return plot;
+}
+
+// Compute QQ plot coordinates against a probability distribution
+KumaQQPlotData* qqPlot(Number* data, size_t size, ProbabilityDistribution* dist) {
+    // Convert and sort sample data
+    if (!dist || !distributionHasCDF(dist)) return NULL;
+    long double* values = numberArrayToLongDouble(data, size);
+    if (!values) return NULL;
+    qsort(values, size, sizeof(long double), compareLongDoubleValues);
+
+    // Allocate one point per sample
+    KumaQQPlotData* plot = calloc(1, sizeof(KumaQQPlotData));
+    if (!plot) {
+        free(values);
+        return NULL;
+    }
+    plot->points = calloc(size, sizeof(KumaPlotPoint));
+    if (!plot->points) {
+        free(values);
+        freeQQPlotData(plot);
+        return NULL;
+    }
+    plot->count = size;
+
+    // Pair theoretical quantiles with sorted sample quantiles
+    for (size_t i = 0; i < size; i++) {
+        long double p = ((long double)i + 0.5L) / (long double)size;
+        long double q = 0.0L;
+        if (!distributionQuantile(dist, p, &q)) {
+            free(values);
+            freeQQPlotData(plot);
+            return NULL;
+        }
+        plot->points[i].x = q;
+        plot->points[i].y = values[i];
+    }
+
+    free(values);
+    return plot;
+}
+
+// Compute paired coordinates for a scatter plot
+KumaScatterPlotData* scatterPlot(Number* x, Number* y, size_t size) {
+    // Convert both arrays into coordinate storage
+    long double* xs = numberArrayToLongDouble(x, size);
+    long double* ys = numberArrayToLongDouble(y, size);
+    if (!xs || !ys) {
+        free(xs);
+        free(ys);
+        return NULL;
+    }
+
+    // Allocate one point per pair
+    KumaScatterPlotData* plot = calloc(1, sizeof(KumaScatterPlotData));
+    if (!plot) {
+        free(xs);
+        free(ys);
+        return NULL;
+    }
+    plot->points = calloc(size, sizeof(KumaPlotPoint));
+    if (!plot->points) {
+        free(xs);
+        free(ys);
+        freeScatterPlotData(plot);
+        return NULL;
+    }
+    plot->count = size;
+
+    // Copy coordinate pairs into the plot data
+    for (size_t i = 0; i < size; i++) {
+        plot->points[i].x = xs[i];
+        plot->points[i].y = ys[i];
+    }
+
+    free(xs);
+    free(ys);
+    return plot;
+}
+
+// Compute scatter data plus least-squares regression line endpoints
+KumaRegressionPlotData* regressionPlot(Number* x, Number* y, size_t size) {
+    // Build the scatter point data first
+    KumaScatterPlotData* scatter = scatterPlot(x, y, size);
+    if (!scatter) return NULL;
+
+    // Compute regression coefficients and convert them to real coordinates
+    Number slope = linearRegressionSlope(x, y, size);
+    Number intercept = linearRegressionIntercept(x, y, size);
+    long double m = 0.0L;
+    long double b = 0.0L;
+    if (slope.type == NUMBER_NAN || intercept.type == NUMBER_NAN
+            || !numberToLongDouble(slope, &m) || !numberToLongDouble(intercept, &b)) {
+        freeScatterPlotData(scatter);
+        return NULL;
+    }
+
+    // Find the plotted x-range for the regression segment
+    long double xMin = scatter->points[0].x;
+    long double xMax = scatter->points[0].x;
+    for (size_t i = 1; i < scatter->count; i++) {
+        if (scatter->points[i].x < xMin) xMin = scatter->points[i].x;
+        if (scatter->points[i].x > xMax) xMax = scatter->points[i].x;
+    }
+
+    // Transfer scatter storage into the regression plot wrapper
+    KumaRegressionPlotData* plot = calloc(1, sizeof(KumaRegressionPlotData));
+    if (!plot) {
+        freeScatterPlotData(scatter);
+        return NULL;
+    }
+    plot->points = scatter->points;
+    plot->count = scatter->count;
+    scatter->points = NULL;
+    freeScatterPlotData(scatter);
+    plot->slope = slope;
+    plot->intercept = intercept;
+    plot->lineStart = (KumaPlotPoint){ .x = xMin, .y = m * xMin + b };
+    plot->lineEnd = (KumaPlotPoint){ .x = xMax, .y = m * xMax + b };
+    return plot;
+}
+
+// Free boxplot data
+void freeBoxPlotData(KumaBoxPlotData* plot) {
+    // Free nested arrays before freeing the wrapper
+    if (!plot) return;
+    free(plot->outliers);
+    free(plot);
+}
+
+// Free histogram data
+void freeHistogramData(KumaHistogramData* plot) {
+    // Free nested arrays before freeing the wrapper
+    if (!plot) return;
+    free(plot->bins);
+    free(plot);
+}
+
+// Free frequency plot data
+void freeFrequencyPlotData(KumaFrequencyPlotData* plot) {
+    // Free nested arrays before freeing the wrapper
+    if (!plot) return;
+    free(plot->items);
+    free(plot);
+}
+
+// Free bar graph data
+void freeBarGraphData(KumaBarGraphData* plot) {
+    // Free nested arrays before freeing the wrapper
+    if (!plot) return;
+    free(plot->bars);
+    free(plot);
+}
+
+// Free density plot data
+void freeDensityPlotData(KumaDensityPlotData* plot) {
+    // Free nested arrays before freeing the wrapper
+    if (!plot) return;
+    free(plot->points);
+    free(plot);
+}
+
+// Free dot plot data
+void freeDotPlotData(KumaDotPlotData* plot) {
+    // Free nested arrays before freeing the wrapper
+    if (!plot) return;
+    free(plot->dots);
+    free(plot);
+}
+
+// Free ECDF plot data
+void freeECDFPlotData(KumaECDFPlotData* plot) {
+    // Free nested arrays before freeing the wrapper
+    if (!plot) return;
+    free(plot->points);
+    free(plot);
+}
+
+// Free QQ plot data
+void freeQQPlotData(KumaQQPlotData* plot) {
+    // Free nested arrays before freeing the wrapper
+    if (!plot) return;
+    free(plot->points);
+    free(plot);
+}
+
+// Free scatter plot data
+void freeScatterPlotData(KumaScatterPlotData* plot) {
+    // Free nested arrays before freeing the wrapper
+    if (!plot) return;
+    free(plot->points);
+    free(plot);
+}
+
+// Free regression plot data
+void freeRegressionPlotData(KumaRegressionPlotData* plot) {
+    // Free nested arrays before freeing the wrapper
+    if (!plot) return;
+    free(plot->points);
+    free(plot);
 }
 
 /* ---------- ProbabilityDistribution construction ---------- */

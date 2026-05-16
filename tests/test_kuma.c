@@ -615,6 +615,97 @@ static void testLinearRegression(void) {
     expectNan("regression predict rejects complex input", linearRegressionPredict(I(1), I(0), constructNumberFromComplex((ComplexNumber){1.0L, 1.0L})));
 }
 
+static void testPlotDataFunctions(void) {
+    SECTION("plot data functions");
+
+    Number boxData[] = {I(1), I(2), I(2), I(3), I(10)};
+    KumaBoxPlotData* box = boxplot(boxData, 5);
+    CHECK(box && closeReal(box->median, 2.0L), "boxplot median");
+    CHECK(box && closeReal(box->q1, 2.0L), "boxplot q1");
+    CHECK(box && closeReal(box->q3, 3.0L), "boxplot q3");
+    CHECK(box && closeReal(box->upperWhisker, 3.0L), "boxplot upper whisker excludes outlier");
+    CHECK(box && box->outlierCount == 1 && closeReal(box->outliers[0], 10.0L), "boxplot records outlier");
+    freeBoxPlotData(box);
+
+    Number histData[] = {I(0), I(1), I(2), I(3)};
+    KumaHistogramData* hist = histogram(histData, 4, 2);
+    CHECK(hist && hist->binCount == 2, "histogram bin count");
+    CHECK(hist && hist->bins[0].count == 2 && hist->bins[1].count == 2, "histogram counts");
+    CHECK(hist && closeReal(hist->bins[0].proportion, 0.5L), "histogram proportions");
+    freeHistogramData(hist);
+
+    Number freqData[] = {I(2), I(1), I(2), I(3), I(1)};
+    KumaFrequencyPlotData* freqPlot = frequencyPlot(freqData, 5);
+    CHECK(freqPlot && freqPlot->count == 3, "frequencyPlot count");
+    CHECK(freqPlot && eqNumbers(freqPlot->items[0].value, I(1)) && freqPlot->items[0].count == 2, "frequencyPlot first item");
+    CHECK(freqPlot && closeReal(freqPlot->items[2].proportion, 0.2L), "frequencyPlot proportion");
+    freeFrequencyPlotData(freqPlot);
+
+    Number labels[] = {I(1), I(2)};
+    Number heights[] = {I(3), F(7, 2)};
+    KumaBarGraphData* bars = barGraph(labels, heights, 2);
+    CHECK(bars && bars->count == 2, "barGraph count");
+    CHECK(bars && eqNumbers(bars->bars[1].label, I(2)) && closeReal(bars->bars[1].height, 3.5L), "barGraph item");
+    freeBarGraphData(bars);
+
+    Number badHeights[] = {I(1), I(-1)};
+    CHECK(!barGraph(labels, badHeights, 2), "barGraph rejects negative heights");
+
+    KumaDensityPlotData* density = densityPlot(histData, 4, 5, I(0));
+    CHECK(density && density->count == 5, "densityPlot sample count");
+    CHECK(density && density->bandwidth > 0.0L, "densityPlot bandwidth");
+    CHECK(density && isfinite(density->points[2].y) && density->points[2].y > 0.0L, "densityPlot finite density");
+    freeDensityPlotData(density);
+
+    KumaDotPlotData* dots = dotPlot(freqData, 5);
+    CHECK(dots && dots->count == 3, "dotPlot count");
+    CHECK(dots && dots->dots[1].count == 2, "dotPlot run count");
+    freeDotPlotData(dots);
+
+    Number ecdfData[] = {I(1), I(1), I(2)};
+    KumaECDFPlotData* ecdfPlot = ecdf(ecdfData, 3);
+    CHECK(ecdfPlot && ecdfPlot->count == 2, "ecdf point count");
+    CHECK(ecdfPlot && closeReal(ecdfPlot->points[0].x, 1.0L) && closeReal(ecdfPlot->points[0].y, 2.0L / 3.0L), "ecdf first jump");
+    CHECK(ecdfPlot && closeReal(ecdfPlot->points[1].y, 1.0L), "ecdf reaches one");
+    freeECDFPlotData(ecdfPlot);
+
+    ProbabilityDistribution* normal = constructNormalDistribution(I(0), I(1));
+    Number qqData[] = {I(-1), I(0), I(1)};
+    KumaQQPlotData* qq = qqPlot(qqData, 3, normal);
+    CHECK(qq && qq->count == 3, "qqPlot point count");
+    CHECK(qq && qq->points[0].x < qq->points[1].x && qq->points[1].x < qq->points[2].x, "qqPlot theoretical quantiles sorted");
+    CHECK(qq && closeReal(qq->points[1].y, 0.0L), "qqPlot sample median");
+    freeQQPlotData(qq);
+    freeProbabilityDistribution(normal);
+
+    Number xs[] = {I(1), I(2), I(3)};
+    Number ys[] = {I(2), I(4), I(6)};
+    KumaScatterPlotData* scatter = scatterPlot(xs, ys, 3);
+    CHECK(scatter && scatter->count == 3, "scatterPlot point count");
+    CHECK(scatter && closeReal(scatter->points[2].x, 3.0L) && closeReal(scatter->points[2].y, 6.0L), "scatterPlot point");
+    freeScatterPlotData(scatter);
+
+    KumaRegressionPlotData* reg = regressionPlot(xs, ys, 3);
+    CHECK(reg && reg->count == 3, "regressionPlot point count");
+    CHECK(reg && reg->slope.type == NUMBER_FRACTION && reg->slope.as.frac.num == 2, "regressionPlot slope");
+    CHECK(reg && closeReal(reg->lineStart.y, 2.0L) && closeReal(reg->lineEnd.y, 6.0L), "regressionPlot line endpoints");
+    freeRegressionPlotData(reg);
+
+    Number invalid[] = {I(1), constructNumberFromComplex((ComplexNumber){1.0L, 1.0L})};
+    CHECK(!histogram(invalid, 2, 2), "plot data rejects complex samples");
+    freeBoxPlotData(NULL);
+    freeHistogramData(NULL);
+    freeFrequencyPlotData(NULL);
+    freeBarGraphData(NULL);
+    freeDensityPlotData(NULL);
+    freeDotPlotData(NULL);
+    freeECDFPlotData(NULL);
+    freeQQPlotData(NULL);
+    freeScatterPlotData(NULL);
+    freeRegressionPlotData(NULL);
+    CHECK(true, "plot free helpers accept NULL");
+}
+
 static void testBernoulliDistributionFunctions(void) {
     SECTION("Bernoulli distribution functions");
 
@@ -1191,6 +1282,7 @@ int main(void) {
     testSampleCovariance();
     testCorrelation();
     testLinearRegression();
+    testPlotDataFunctions();
     testBernoulliDistributionFunctions();
     testRemainingDiscreteDistributionFunctions();
     testContinuousDistributionFunctions();

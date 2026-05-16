@@ -2,6 +2,11 @@
 #define NEKO_H
 
 #include <stdbool.h>
+#include <stddef.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -145,6 +150,31 @@ typedef struct NekoOdeSystemResult {
     int iterations;
 } NekoOdeSystemResult;
 
+typedef struct NekoGraphPoint {
+    long double x;
+    long double y;
+    bool valid;
+} NekoGraphPoint;
+
+typedef struct NekoGraphSegment {
+    long double x1;
+    long double y1;
+    long double x2;
+    long double y2;
+} NekoGraphSegment;
+
+typedef struct NekoExplicitGraphSample {
+    NekoStatus status;
+    NekoGraphPoint* points;
+    size_t count;
+} NekoExplicitGraphSample;
+
+typedef struct NekoImplicitGraphSample {
+    NekoStatus status;
+    NekoGraphSegment* segments;
+    size_t count;
+} NekoImplicitGraphSample;
+
 struct NekoOde {
     NekoOdeKind kind;
     union {
@@ -214,13 +244,21 @@ NekoExpr* nekoStep(NekoExpr* arg);
 NekoExpr* nekoCloneExpr(const NekoExpr* expr);
 void nekoFreeExpr(NekoExpr* expr);
 void nekoPrintExpr(const NekoExpr* expr);
+char* nekoExprToString(const NekoExpr* expr);
+char* nekoSerializeExpr(const NekoExpr* expr);
+NekoExpr* nekoDeserializeExpr(const char* text);
 long double nekoEvalExpr(const NekoExpr* expr, const char* var, long double x);
+long double nekoEvalExpr2D(const NekoExpr* expr, const char* xvar, long double x, const char* yvar, long double y);
 NekoExpr* nekoSimplify(NekoExpr* expr);
 NekoDiffResult nekoDifferentiateExpr(const NekoExpr* expr, const char* var);
 NekoFunc* nekoFuncFromExpr(const NekoExpr* expr);
 NekoFunc* nekoFuncFromCallback(NekoEvalFn callback, void* userdata);
 void nekoFreeFunc(NekoFunc* func);
 long double nekoEvalFunc(const NekoFunc* func, long double x);
+NekoExplicitGraphSample nekoSampleExplicitGraph(const NekoExpr* expr, long double xmin, long double xmax, size_t samples);
+NekoImplicitGraphSample nekoSampleImplicitGraph(const NekoExpr* expr, long double xmin, long double xmax, long double ymin, long double ymax, size_t xsteps, size_t ysteps);
+void nekoFreeExplicitGraphSample(NekoExplicitGraphSample sample);
+void nekoFreeImplicitGraphSample(NekoImplicitGraphSample sample);
 
 /* ---------- Integration and applications ---------- */
 bool nekoCanIntegrateUSub(const NekoExpr* expr, const char* var);
@@ -247,5 +285,9 @@ NekoOdeResult nekoEvalOde(const NekoOde* ode, long double x, int steps);
 NekoOdeSystemResult nekoEvalOdeSystem(const NekoOde* ode, long double x, int steps);
 void nekoFreeOdeSystemResult(NekoOdeSystemResult result);
 
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

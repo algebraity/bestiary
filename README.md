@@ -1,6 +1,6 @@
 ![](https://git.keimai.space/algebraity/bestiary/raw/branch/main/bestiary-banner.png)
 
-# Bestiary - v1.0.2: Release the BEASTs!
+# Bestiary - v2.0.0: Release the BEASTs!
 
 ...the Bundles of Efficient Algorithms for Science and Technology, that is!!
 
@@ -8,7 +8,7 @@ Bestiary is a LaTeX-inspired mathematical computing environment built around sev
 
 Each BEAST is written from scratch in C, and the wxWidgets-based GUI application, which allows for easy access to documentation while working and running multiple Bestiary shells in parallel, is written in the C++ language. For full documentation on each of the hundreds of commands and operations available in Bestiary, see the "Help" tab in the application. More information on each BEAST and its functionality can be found below.
 
-Bestiary is currently in active development, but as of v1.0.2, it can be expected to be stable and efficient for regular use. Future releases will add new features to the core BEAST libraries where useful and fix any bugs that may be discovered, but the core architecture and functionality will remain the same. Bestiary has mostly been tested on the GNU/Linux operating system, so it is expected to be less stable on Windows, but it is supported and developed for Windows as well.
+Bestiary is currently in active development, but as of v2.0.0, it can be expected to be stable and efficient for regular use. Future releases will add new features to the core BEAST libraries where useful and fix any bugs that may be discovered, but the core architecture and functionality will remain the same. Bestiary has mostly been tested on the GNU/Linux operating system, so it is expected to be less stable on Windows, but it is supported and developed for Windows as well.
 
 ## Installation
 
@@ -61,7 +61,7 @@ Note that, as Bestiary is primarily developed for GNU/Linux, there may be some i
 To get an idea of how Bestiary is used and why it is powerful, consider a series of commands executed in Bestiary:
 
 ```
-Bestiary v1.0.2 -- Ctrl+C cancels, Ctrl+D quits, Ctrl+L clears screen
+Bestiary v2.0.0 -- Ctrl+C cancels, Ctrl+D quits, Ctrl+L clears screen
 \help lists commands, \help{commandName} displays command info
 > A = \begin{matrix} 1 & 1 \\ 1 & 0 \end{matrix}
 => ()
@@ -117,7 +117,7 @@ To write a script, simply create a `.bsy` file with a series of commands as you 
 
 ## Meet the BEASTs
 
-Bestiary is powered by 7 C-based mathematics libraries, each of which is named after the Japanese word for an animal, which also functions as a backronym for the full name. They each provide different commands and functions to the program, and they build on and require each other to be complete.
+Bestiary is powered by 7 core C-based mathematics libraries, each of which is named after the Japanese word for an animal, which also functions as a backronym for the full name. There are also many additional seconardy BEASTs which make up Bestiary. They each provide different commands and functions to the program, and they build on and require each other to be complete.
 
 * HEBI (蛇): Highly Efficient Basic math Interpreter (basic math and shared libraries)
   * the versatile serpent, providing shared libraries used by the other BEASTs
@@ -195,14 +195,14 @@ build/dist/windows/bestiary-windows.zip
 If you want the version tag embedded in the archive names, pass `VERSION=`:
 
 ```sh
-make VERSION=v0.1.0 release-artifacts
+make VERSION=v2.0.0 release-artifacts
 ```
 
 That produces names such as:
 
 ```sh
-build/dist/linux/bestiary-v0.1.0-linux.tar.gz
-build/dist/windows/bestiary-v0.1.0-windows.zip
+build/dist/linux/bestiary-v2.0.0-linux.tar.gz
+build/dist/windows/bestiary-v2.0.0-windows.zip
 ```
 
 The release archives intentionally include only the release executables and runtime files:

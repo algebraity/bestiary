@@ -9,7 +9,7 @@
 #include "script.h"
 #include "value.h"
 
-static const ScriptRunOptions DEFAULT_OPTIONS = {0, 0, 1};
+static const ScriptRunOptions DEFAULT_OPTIONS = {0, 0, 1, 0, 0, 0};
 
 static const char* kindName(TokenKind k) {
     switch (k) {
@@ -158,8 +158,10 @@ static int evalScriptChunk(EvalContext* ctx,
     ParseError perr = {0};
     AstNode* ast = bstParse(toks, ntok, &perr);
     if (!ast) {
-        fprintf(stderr, "%s:%zu: parse error at %zu:%zu: %s\n",
-                filename, startLine, perr.line, perr.col, perr.msg ? perr.msg : "unknown");
+        if (!options->quietErrors) {
+            fprintf(stderr, "%s:%zu: parse error at %zu:%zu: %s\n",
+                    filename, startLine, perr.line, perr.col, perr.msg ? perr.msg : "unknown");
+        }
         freeTokens(toks, ntok);
         return 0;
     }
@@ -168,7 +170,35 @@ static int evalScriptChunk(EvalContext* ctx,
         astPrint(ast, 2);
     }
 
-    Value value = eval(ctx, ast);
+    Value value = valNone();
+    if (options->skipGraphCommands && ast->kind == AST_CALL
+            && strcmp(ast->as.call.name, "graph") == 0) {
+        value = valNone();
+    } else if (options->lazyAssignments && ast->kind == AST_ASSIGN) {
+        value = evalCtxSetLazyAssignment(ctx, ast->as.assign.name, ast->as.assign.rhs)
+            ? valNone()
+            : valError("failed to store lazy restore assignment");
+    } else if (options->lazyAssignments && ast->kind == AST_SEQ) {
+        for (size_t i = 0; i < ast->as.seq.n; i++) {
+            AstNode* stmt = ast->as.seq.stmts[i];
+            if (options->skipGraphCommands && stmt->kind == AST_CALL
+                    && strcmp(stmt->as.call.name, "graph") == 0) {
+                continue;
+            }
+            if (stmt->kind == AST_ASSIGN) {
+                if (!evalCtxSetLazyAssignment(ctx, stmt->as.assign.name, stmt->as.assign.rhs)) {
+                    value = valError("failed to store lazy restore assignment");
+                    break;
+                }
+                continue;
+            }
+            valFree(value);
+            value = eval(ctx, stmt);
+            if (value.kind == VAL_ERROR) break;
+        }
+    } else {
+        value = eval(ctx, ast);
+    }
     if (options->printResults) {
         fputs("=> ", stdout);
         valPrint(value);
@@ -235,6 +265,7 @@ int bstRunScriptFile(EvalContext* ctx,
 
         if (braceDepth == 0) {
             local.linesEvaluated++;
+            evalCtxRecordInput(ctx, chunk);
             if (!evalScriptChunk(ctx, chunk, filename, chunkStartLine, &opts)) local.errors++;
             free(chunk);
             chunk = NULL;

@@ -2,6 +2,7 @@
 #define _POSIX_C_SOURCE 200809L
 #endif
 
+#include<ctype.h>
 #include<stdio.h>
 #include<stdlib.h>
 #include<string.h>
@@ -26,6 +27,7 @@
 static int opt_dump_tokens = 0;
 static int opt_dump_ast    = 0;
 static int opt_plain_input = 0;
+static int opt_no_startup_message = 0;
 
 typedef enum {
     REPL_STATE_IDLE = 0,
@@ -795,6 +797,66 @@ static char* readBalancedInput(void) {
     return text;
 }
 
+static void emitSessionInput(const char* line) {
+    static const char hex[] = "0123456789ABCDEF";
+    if (!line) return;
+    if (!getenv("BESTIARY_GUI")) return;
+    fputs("\033]777;BESTIARY_INPUT\t", stdout);
+    for (const unsigned char* p = (const unsigned char*)line; *p; p++) {
+        fputc(hex[*p >> 4], stdout);
+        fputc(hex[*p & 0x0F], stdout);
+    }
+    fputc('\a', stdout);
+    fflush(stdout);
+}
+
+static int restoreHistoryHasContent(const char* text) {
+    for (const char* p = text; p && *p; p++) {
+        if (!isspace((unsigned char)*p)) return 1;
+    }
+    return 0;
+}
+
+static void restoreHistoryTrimFinalNewlines(char* text) {
+    size_t len = strlen(text ? text : "");
+    while (len > 0 && (text[len - 1] == '\n' || text[len - 1] == '\r')) {
+        text[--len] = '\0';
+    }
+}
+
+static void loadRestoreHistory(const char* filename) {
+    if (!filename || !*filename) return;
+    FILE* fp = fopen(filename, "r");
+    if (!fp) return;
+
+    char line[1024];
+    char* chunk = NULL;
+    size_t len = 0;
+    size_t cap = 0;
+    size_t depth = 0;
+
+    while (fgets(line, sizeof(line), fp)) {
+        if (len == 0 && !restoreHistoryHasContent(line)) continue;
+        if (!appendText(&chunk, &len, &cap, line)) break;
+        if (!updateBraceDepth(line, &depth)) depth = 0;
+        if (depth == 0 && chunk) {
+            restoreHistoryTrimFinalNewlines(chunk);
+            if (restoreHistoryHasContent(chunk)) bstAddHistory(chunk);
+            free(chunk);
+            chunk = NULL;
+            len = 0;
+            cap = 0;
+        }
+    }
+
+    if (chunk) {
+        restoreHistoryTrimFinalNewlines(chunk);
+        if (restoreHistoryHasContent(chunk)) bstAddHistory(chunk);
+        free(chunk);
+    }
+    fclose(fp);
+}
+
 static void handleSigint(int signo) {
     (void)signo;
     g_sigint_seen = 1;
@@ -818,16 +880,25 @@ int main(int argc, char** argv) {
     struct sigaction sa;
 #endif
     const char* script_filename = NULL;
+    const char* restore_filename = NULL;
 
     for (int i = 1; i < argc; i++) {
         if      (strcmp(argv[i], "--tokens") == 0) opt_dump_tokens = 1;
         else if (strcmp(argv[i], "--ast")    == 0) opt_dump_ast    = 1;
         else if (strcmp(argv[i], "--plain")  == 0) opt_plain_input = 1;
+        else if (strcmp(argv[i], "--no-startup-message") == 0) opt_no_startup_message = 1;
+        else if (strcmp(argv[i], "--restore") == 0 && i + 1 < argc)
+            restore_filename = argv[++i];
         else if (!script_filename) script_filename = argv[i];
         else {
-            fprintf(stderr, "usage: %s [--tokens] [--ast] [--plain] [script-file]\n", argv[0]);
+            fprintf(stderr, "usage: %s [--tokens] [--ast] [--plain] [--no-startup-message] [--restore script-file] [script-file]\n", argv[0]);
             return 2;
         }
+    }
+
+    if (restore_filename && script_filename) {
+        fprintf(stderr, "usage: %s [--tokens] [--ast] [--plain] [--no-startup-message] [--restore script-file] [script-file]\n", argv[0]);
+        return 2;
     }
 
 #ifndef BST_PLATFORM_WINDOWS
@@ -842,8 +913,15 @@ int main(int argc, char** argv) {
     registerBuiltins();
     EvalContext* ctx = evalCtxNew();
 
+    if (restore_filename) {
+        ScriptRunOptions options = {opt_dump_tokens, opt_dump_ast, 0, 1, 1, 1};
+        ScriptRunResult result = {0, 0, 0};
+        char error[512] = {0};
+        (void)bstRunScriptFile(ctx, restore_filename, &options, &result, error, sizeof(error));
+    }
+
     if (script_filename) {
-        ScriptRunOptions options = {opt_dump_tokens, opt_dump_ast, 1};
+        ScriptRunOptions options = {opt_dump_tokens, opt_dump_ast, 1, 0, 0, 0};
         ScriptRunResult result = {0, 0, 0};
         char error[512] = {0};
         int ok = bstRunScriptFile(ctx, script_filename, &options, &result, error, sizeof(error));
@@ -859,9 +937,12 @@ int main(int argc, char** argv) {
     bstLineInputInit(NULL);
     bstLineInputSetEvalContext(ctx);
     bstLineInputSetPlainMode(opt_plain_input);
+    if (restore_filename) loadRestoreHistory(restore_filename);
 
-    puts("Bestiary v1.0.2 -- Ctrl+C cancels, Ctrl+D quits, Ctrl+L clears screen");
-    puts("\\help lists commands, \\help{commandName} displays command info");
+    if (!opt_no_startup_message) {
+        puts("Bestiary v2.0.0 -- Ctrl+C cancels, Ctrl+D quits, Ctrl+L clears screen");
+        puts("\\help lists commands, \\help{commandName} displays command info");
+    }
     for (;;) {
 #ifndef BST_PLATFORM_WINDOWS
         if (sigsetjmp(g_repl_jmp, 1) != 0) {
@@ -892,6 +973,8 @@ int main(int argc, char** argv) {
             continue;
         }
         bstAddHistory(line);
+        evalCtxRecordInput(ctx, line);
+        emitSessionInput(line);
 
         g_repl_state = REPL_STATE_EXEC;
         size_t ntok = 0;

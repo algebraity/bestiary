@@ -169,6 +169,18 @@ static void testListConstruction(void) {
     CHECK(out.kind == VAL_LIST && out.as.list.n == 0, "empty list construction");
     valFree(out);
 
+    out = evalLine(ctx, "\\len{x}");
+    CHECK(out.kind == VAL_INT && out.as.i == 3, "len returns list length");
+    valFree(out);
+
+    out = evalLine(ctx, "\\len{\\list{}}");
+    CHECK(out.kind == VAL_INT && out.as.i == 0, "len handles empty lists");
+    valFree(out);
+
+    out = evalLine(ctx, "\\len{1}");
+    CHECK(out.kind == VAL_ERROR, "len rejects non-list input");
+    valFree(out);
+
     evalCtxFree(ctx);
 }
 
@@ -952,7 +964,7 @@ static void testScriptMultilineBraceBlocks(void) {
     fclose(file);
 
     EvalContext* ctx = evalCtxNew();
-    ScriptRunOptions opts = {0, 0, 0};
+    ScriptRunOptions opts = {0, 0, 0, 0, 0, 0};
     ScriptRunResult result = {0, 0, 0};
     char error[256] = {0};
     int ok = bstRunScriptFile(ctx, path, &opts, &result, error, sizeof(error));
@@ -969,6 +981,60 @@ static void testScriptMultilineBraceBlocks(void) {
 
     evalCtxFree(ctx);
     unlink(path);
+}
+
+static void testRestoreScriptMode(void) {
+    SECTION("restore script mode");
+    char path[] = "/tmp/bestiary-restore-XXXXXX";
+    int fd = mkstemp(path);
+    CHECK(fd >= 0, "restore temp script created");
+    FILE* file = fd >= 0 ? fdopen(fd, "w") : NULL;
+    CHECK(file != NULL, "restore temp script opened");
+    if (file) {
+        fputs("x = \\list{1,2}\n", file);
+        fputs("\\graph{x^2}\n", file);
+        fputs("bad = 1 / 0\n", file);
+        fclose(file);
+    } else if (fd >= 0) {
+        close(fd);
+    }
+
+    EvalContext* ctx = evalCtxNew();
+    ScriptRunOptions opts = {0, 0, 0, 1, 1, 0};
+    ScriptRunResult result = {0, 0, 0};
+    char error[256] = {0};
+    int ok = bstRunScriptFile(ctx, path, &opts, &result, error, sizeof(error));
+    CHECK(ok && result.errors == 0, "restore script stores lazy assignments without graph reload errors");
+
+    Value out = evalLine(ctx, "x");
+    CHECK(out.kind == VAL_LIST && out.as.list.n == 2, "lazy restore assignment is forced on access");
+    valFree(out);
+
+    out = evalLine(ctx, "bad");
+    CHECK(out.kind == VAL_ERROR, "lazy restore delays failing computations until access");
+    valFree(out);
+
+    char exportPath[] = "/tmp/bestiary-restore-export-XXXXXX";
+    int exportFd = mkstemp(exportPath);
+    CHECK(exportFd >= 0, "restore export temp file created");
+    if (exportFd >= 0) close(exportFd);
+    char command[256];
+    snprintf(command, sizeof(command), "\\export{\"%s\"}", exportPath);
+    out = evalLine(ctx, command);
+    CHECK(out.kind == VAL_STRING, "restore export command succeeds");
+    valFree(out);
+
+    FILE* exported = fopen(exportPath, "r");
+    CHECK(exported != NULL, "restore export file can be read");
+    char buf[512] = {0};
+    size_t nread = exported ? fread(buf, 1, sizeof(buf) - 1, exported) : 0;
+    if (exported) fclose(exported);
+    CHECK(nread > 0 && strstr(buf, "\\graph{x^2}") != NULL,
+          "restore records skipped graph commands for export");
+
+    unlink(path);
+    unlink(exportPath);
+    evalCtxFree(ctx);
 }
 
 static void testPrintCommand(void) {
@@ -1447,6 +1513,62 @@ static void testUserFunctions(void) {
     evalCtxFree(ctx);
 }
 
+static void testGraphCommandAxes(void) {
+    SECTION("graph command axes");
+    EvalContext* ctx = evalCtxNew();
+    char buf[1024];
+
+    Value out = evalLine(ctx, "x = \\list{1,2}");
+    CHECK(out.kind == VAL_NONE, "x can be assigned before graphing");
+    valFree(out);
+
+    CHECK(evalLineToBuffer(ctx, "\\graph{x^2}", buf, sizeof(buf), &out),
+          "graph output captured");
+    CHECK(out.kind == VAL_STRING, "graph keeps x as an axis even when x is assigned");
+    CHECK(strstr(buf, "BESTIARY_GRAPH") && strstr(buf, "x ^ 2"),
+          "graph emits x-axis expression");
+    valFree(out);
+
+    CHECK(evalLineToBuffer(ctx, "\\graph{x^2 + y^2 = 9}", buf, sizeof(buf), &out),
+          "implicit graph output captured");
+    CHECK(out.kind == VAL_STRING, "graph accepts implicit equations with assigned x");
+    CHECK(strstr(buf, "BESTIARY_GRAPH") && strstr(buf, "-9 + y ^ 2 + x ^ 2"),
+          "graph emits implicit equation expression");
+    valFree(out);
+
+    evalCtxFree(ctx);
+}
+
+static void testExportCommand(void) {
+    SECTION("export command");
+    EvalContext* ctx = evalCtxNew();
+    char path[] = "/tmp/bestiary-export-XXXXXX";
+    int fd = mkstemp(path);
+    CHECK(fd >= 0, "export temp file created");
+    if (fd >= 0) close(fd);
+
+    evalCtxRecordInput(ctx, "x = 1");
+    evalCtxRecordInput(ctx, "y = x + 2");
+    evalCtxRecordInput(ctx, "\\export{\"ignored.bsy\"}");
+
+    char command[256];
+    snprintf(command, sizeof(command), "\\export{\"%s\"}", path);
+    Value out = evalLine(ctx, command);
+    CHECK(out.kind == VAL_STRING, "export command returns summary");
+    valFree(out);
+
+    FILE* fp = fopen(path, "r");
+    CHECK(fp != NULL, "export file can be read");
+    char buf[256] = {0};
+    size_t nread = fp ? fread(buf, 1, sizeof(buf) - 1, fp) : 0;
+    if (fp) fclose(fp);
+    CHECK(nread > 0 && strstr(buf, "x = 1") && strstr(buf, "y = x + 2"),
+          "export writes recorded inputs");
+    CHECK(strstr(buf, "\\export") == NULL, "export omits export commands");
+    unlink(path);
+    evalCtxFree(ctx);
+}
+
 int main(void) {
     registerBuiltins();
 
@@ -1463,11 +1585,14 @@ int main(void) {
     testConditionals();
     testMultilineBraceBlocks();
     testScriptMultilineBraceBlocks();
+    testRestoreScriptMode();
     testPrintCommand();
     testLoops();
     testCompoundAssignments();
     testUsagiCommands();
     testUserFunctions();
+    testGraphCommandAxes();
+    testExportCommand();
 
     printf("\nCore tests: %d/%d passed\n", testsPassed, testsRun);
     return testsPassed == testsRun ? 0 : 1;

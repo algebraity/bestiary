@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <math.h>
 #include <string.h>
+#include <stdlib.h>
 #include "neko.h"
 
 static int testsRun = 0;
@@ -618,6 +619,43 @@ static void testOdeSolvers(void) {
     nekoFreeExpr(zeroExpr);
 }
 
+static void testGraphingSupport(void) {
+    section("graphing support");
+
+    // Two-variable evaluation substitutes x and y independently
+    NekoExpr* implicit = nekoSub(
+        nekoAdd(nekoPow(nekoVar("x"), nekoConst(2.0L)),
+                nekoPow(nekoVar("y"), nekoConst(2.0L))),
+        nekoConst(1.0L)
+    );
+    CHECK_CLOSE(nekoEvalExpr2D(implicit, "x", 3.0L, "y", 4.0L), 24.0L, 1e-12, "two-variable graph evaluation");
+
+    // Explicit sampling evaluates y = x^2 on an interval
+    NekoExpr* square = nekoPow(nekoVar("x"), nekoConst(2.0L));
+    NekoExplicitGraphSample explicitSample = nekoSampleExplicitGraph(square, -1.0L, 1.0L, 3);
+    CHECK(explicitSample.status == NEKO_OK && explicitSample.count == 3, "explicit graph sample constructed");
+    CHECK_CLOSE(explicitSample.points[0].y, 1.0L, 1e-12, "explicit sample left value");
+    CHECK_CLOSE(explicitSample.points[1].y, 0.0L, 1e-12, "explicit sample middle value");
+    CHECK_CLOSE(explicitSample.points[2].y, 1.0L, 1e-12, "explicit sample right value");
+    nekoFreeExplicitGraphSample(explicitSample);
+
+    // Implicit sampling finds contour segments for the unit circle
+    NekoImplicitGraphSample implicitSample = nekoSampleImplicitGraph(implicit, -1.5L, 1.5L, -1.5L, 1.5L, 24, 24);
+    CHECK(implicitSample.status == NEKO_OK, "implicit graph sample status");
+    CHECK(implicitSample.count > 0, "implicit graph sample has contour segments");
+    nekoFreeImplicitGraphSample(implicitSample);
+
+    // Serialization round-trips a graphable expression
+    char* serialized = nekoSerializeExpr(implicit);
+    NekoExpr* decoded = serialized ? nekoDeserializeExpr(serialized) : NULL;
+    CHECK(decoded != NULL && exprEqualTest(implicit, decoded), "graph expression serialization round-trip");
+    free(serialized);
+    nekoFreeExpr(decoded);
+
+    nekoFreeExpr(square);
+    nekoFreeExpr(implicit);
+}
+
 int main(void) {
     printf("Running neko tests...\n");
     testPolynomialDerivative();
@@ -629,6 +667,7 @@ int main(void) {
     testNumericalApplications();
     testSimplification();
     testOdeSolvers();
+    testGraphingSupport();
 
     printf("\n========================================\n");
     printf("Results: %d / %d tests passed\n", testsPassed, testsRun);

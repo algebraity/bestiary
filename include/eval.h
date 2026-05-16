@@ -10,6 +10,8 @@
 typedef struct EnvEntry {
     char* name;
     Value value;
+    AstNode* lazyExpr;
+    int lazyEvaluating;
     struct EnvEntry* next;
 } EnvEntry;
 
@@ -64,6 +66,9 @@ struct EvalContext {
     size_t loopDepth;
     size_t functionDepth;
     Value returnValue;
+    char** inputHistory;
+    size_t inputHistoryCount;
+    size_t inputHistoryCap;
 };
 
 struct UserFunction {
@@ -76,6 +81,11 @@ struct UserFunction {
 
 EvalContext* evalCtxNew(void);
 void         evalCtxFree(EvalContext* ctx);
+void         evalCtxRecordInput(EvalContext* ctx, const char* input);
+int          evalCtxExportScript(EvalContext* ctx, const char* filename,
+                                 char* error, size_t errorSize);
+int          evalCtxSetLazyAssignment(EvalContext* ctx, const char* name,
+                                      AstNode* rhs);
 
 // Walk the AST and produce a Value. Caller owns the returned Value and
 // must valFree it when done.

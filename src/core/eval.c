@@ -38,6 +38,29 @@ static char* dupstr(const char* s) {
     return r;
 }
 
+static Value evalGraphCall(EvalContext* ctx, AstNode* node);
+static ProbabilityDistribution* valueAsDistribution(Value value);
+static void sanitizeGraphField(char* text);
+static void evalCtxDropLastInputIfCommand(EvalContext* ctx, const char* command);
+static Value forceLazyEntry(EvalContext* ctx, Env* owner, EnvEntry* entry);
+
+typedef enum {
+    KUMA_PLOT_BOX = 0,
+    KUMA_PLOT_HISTOGRAM = 1,
+    KUMA_PLOT_FREQUENCY = 2,
+    KUMA_PLOT_BAR = 3,
+    KUMA_PLOT_DENSITY = 4,
+    KUMA_PLOT_DOT = 5,
+    KUMA_PLOT_ECDF = 6,
+    KUMA_PLOT_QQ = 7,
+    KUMA_PLOT_SCATTER = 8,
+    KUMA_PLOT_REGRESSION = 9
+} KumaPlotCommandKind;
+
+static void emitKumaPlotRequest(KumaPlotCommandKind kind, const char* title,
+                                const char* xLabel, const char* yLabel,
+                                const char* payload);
+
 /* ---------- Environment ---------- */
 
 // Construct an Env whose scope chains upward through `parent`
@@ -55,6 +78,7 @@ void envFree(Env* env) {
     while (cur) {
         EnvEntry* next = cur->next;
         valFree(cur->value);
+        astFree(cur->lazyExpr);
         free(cur->name);
         free(cur);
         cur = next;
@@ -62,15 +86,24 @@ void envFree(Env* env) {
     free(env);
 }
 
-// Look up `name` anywhere up the parent chain; returns 1 on hit
-int envGet(Env* env, const char* name, Value* out) {
+static EnvEntry* envFindEntry(Env* env, const char* name, Env** owner) {
     for (Env* e = env; e; e = e->parent) {
         for (EnvEntry* x = e->head; x; x = x->next) {
             if (strcmp(x->name, name) == 0) {
-                if (out) *out = x->value;
-                return 1;
+                if (owner) *owner = e;
+                return x;
             }
         }
+    }
+    return NULL;
+}
+
+// Look up `name` anywhere up the parent chain; returns 1 on hit
+int envGet(Env* env, const char* name, Value* out) {
+    EnvEntry* entry = envFindEntry(env, name, NULL);
+    if (entry) {
+        if (out) *out = entry->value;
+        return 1;
     }
     return 0;
 }
@@ -80,7 +113,10 @@ void envSet(Env* env, const char* name, Value v) {
     for (EnvEntry* x = env->head; x; x = x->next) {
         if (strcmp(x->name, name) == 0) {
             valFree(x->value);
+            astFree(x->lazyExpr);
             x->value = v;
+            x->lazyExpr = NULL;
+            x->lazyEvaluating = 0;
             return;
         }
     }
@@ -98,6 +134,40 @@ void envSet(Env* env, const char* name, Value v) {
     e->value = v;
     e->next  = env->head;
     env->head = e;
+}
+
+static int envSetLazy(Env* env, const char* name, AstNode* rhs) {
+    if (!env || !name || !rhs) return 0;
+    AstNode* lazy = astClone(rhs);
+    if (!lazy) return 0;
+
+    for (EnvEntry* x = env->head; x; x = x->next) {
+        if (strcmp(x->name, name) == 0) {
+            valFree(x->value);
+            astFree(x->lazyExpr);
+            x->value = valNone();
+            x->lazyExpr = lazy;
+            x->lazyEvaluating = 0;
+            return 1;
+        }
+    }
+
+    EnvEntry* e = calloc(1, sizeof(EnvEntry));
+    if (!e) {
+        astFree(lazy);
+        return 0;
+    }
+    e->name = dupstr(name);
+    if (!e->name) {
+        astFree(lazy);
+        free(e);
+        return 0;
+    }
+    e->value = valNone();
+    e->lazyExpr = lazy;
+    e->next = env->head;
+    env->head = e;
+    return 1;
 }
 
 /* ---------- User functions ---------- */
@@ -138,7 +208,10 @@ typedef struct {
 static const BuiltinDoc BUILTIN_DOCS[] = {
     { "help", "Displays command usage, accepted value types, and return type.", "zero arguments to list commands, or one command name as a Symbol or String", "String" },
     { "run", "Runs a text file as a Bestiary script, evaluating each nonblank line in the current context.", "String filename, or an unquoted filename in braces such as \\run{script.bsy}", "String summary, or Error if the file cannot be opened" },
+    { "export", "Exports the current shell input history to a Bestiary script.", "String filename, Symbol filename, or an unquoted filename in braces such as \\export{session.bsy}", "String summary, or Error if the file cannot be written" },
+    { "graph", "Opens a GUI graph tab for an explicit, vertical, or implicit graph.", "NEKO expression, numeric value, x = real constant, or expression in x and y; optionally followed by a positive Graph tab number", "String summary" },
     { "list", "Constructs a dynamic Bestiary list.", "zero or more values", "List" },
+    { "len", "Returns the length of a dynamic Bestiary list.", "List", "Int" },
     { "copy", "Creates an independently owned copy of a supported value.", "scalar, String, Symbol, List, Matrix, Vector, CombSet, Field, FieldElement, CD algebra, CD element, NEKO expression, KUMA distribution, KUMA random variable, or supported TORA value", "same kind as input" },
     { "sort", "Sorts a List of numeric values in ascending order.", "List containing only Int, Fraction, and Decimal values", "List" },
     { "sortedCopy", "Creates a sorted copy of a numeric List without mutating the original.", "List containing only Int, Fraction, and Decimal values", "List" },
@@ -423,6 +496,17 @@ static const BuiltinDoc BUILTIN_DOCS[] = {
     { "linearRegressionSlope", "Computes the least-squares regression slope for y on x.", "two same-length nonempty numeric Lists", "Int, Fraction, or Decimal" },
     { "linearRegressionIntercept", "Computes the least-squares regression intercept for y on x.", "two same-length nonempty numeric Lists", "Int, Fraction, or Decimal" },
     { "linearRegressionPredict", "Predicts y from slope, intercept, and x.", "numeric slope, numeric intercept, and numeric x", "Int, Fraction, or Decimal" },
+    { "boxPlot", "Opens a KUMA Plot tab containing a boxplot.", "nonempty numeric List, then optional title, x-axis label, and y-axis label", "String summary" },
+    { "histogram", "Opens a KUMA Plot tab containing a histogram.", "nonempty numeric List, optional nonnegative bin count, then optional title, x-axis label, and y-axis label", "String summary" },
+    { "frequencyPlot", "Opens a KUMA Plot tab containing a frequency plot.", "nonempty numeric List, then optional title, x-axis label, and y-axis label", "String summary" },
+    { "freqPlot", "Alias for frequencyPlot.", "nonempty numeric List, then optional title, x-axis label, and y-axis label", "String summary" },
+    { "barGraph", "Opens a KUMA Plot tab containing a bar graph.", "same-length numeric label and value Lists, then optional title, x-axis label, and y-axis label", "String summary" },
+    { "densityPlot", "Opens a KUMA Plot tab containing a kernel density estimate.", "nonempty numeric List, then optional title, x-axis label, and y-axis label", "String summary" },
+    { "dotPlot", "Opens a KUMA Plot tab containing a dot plot.", "nonempty numeric List, then optional title, x-axis label, and y-axis label", "String summary" },
+    { "ecdf", "Opens a KUMA Plot tab containing an empirical CDF.", "nonempty numeric List, then optional title, x-axis label, and y-axis label", "String summary" },
+    { "qqPlot", "Opens a KUMA Plot tab containing a QQ plot.", "nonempty numeric List, ProbabilityDistribution, then optional title, x-axis label, and y-axis label", "String summary" },
+    { "scatterPlot", "Opens a KUMA Plot tab containing a scatter plot.", "two same-length nonempty numeric Lists, then optional title, x-axis label, and y-axis label", "String summary" },
+    { "regressionPlot", "Opens a KUMA Plot tab containing scatter data and a least-squares regression line.", "two same-length nonempty numeric Lists, then optional title, x-axis label, and y-axis label", "String summary" },
     { "bernoulli", "Constructs a Bernoulli distribution.", "probability p", "ProbabilityDistribution" },
     { "binomial", "Constructs a binomial distribution.", "Int n >= 0 and probability p", "ProbabilityDistribution" },
     { "geometric", "Constructs a geometric distribution.", "probability p with 0 < p <= 1", "ProbabilityDistribution" },
@@ -729,7 +813,8 @@ static Value bi_run(EvalContext* ctx, Value* args, size_t nargs) {
     }
 
     const char* filename = args[0].as.str;
-    ScriptRunOptions options = {0, 0, 1};
+    evalCtxDropLastInputIfCommand(ctx, "run");
+    ScriptRunOptions options = {0, 0, 1, 0, 0, 0};
     ScriptRunResult result = {0, 0, 0};
     char error[512] = {0};
     int ok = bstRunScriptFile(ctx, filename, &options, &result, error, sizeof(error));
@@ -743,6 +828,33 @@ static Value bi_run(EvalContext* ctx, Value* args, size_t nargs) {
              result.linesEvaluated,
              result.errors, result.errors == 1 ? "" : "s");
     return valString(summary);
+}
+
+static Value bi_export(EvalContext* ctx, Value* args, size_t nargs) {
+    if (nargs != 1) {
+        for (size_t i = 0; i < nargs; i++) valFree(args[i]);
+        return valError("\\export expects one filename");
+    }
+
+    if (args[0].kind != VAL_STRING && args[0].kind != VAL_SYMBOL) {
+        valFree(args[0]);
+        return valError("\\export expects a filename as a String or Symbol");
+    }
+
+    const char* filename = args[0].as.str;
+    char error[512] = {0};
+    int ok = evalCtxExportScript(ctx, filename, error, sizeof(error));
+    char summary[256];
+    snprintf(summary, sizeof(summary), "Exported session script to %s.", filename);
+    valFree(args[0]);
+    if (!ok) return valError(error[0] ? error : "failed to export script");
+    return valString(summary);
+}
+
+static Value bi_graph(EvalContext* ctx, Value* args, size_t nargs) {
+    (void)ctx;
+    for (size_t i = 0; i < nargs; i++) valFree(args[i]);
+    return valError("\\graph must be evaluated from its raw expression form");
 }
 
 /* ---------- Eval context ---------- */
@@ -764,7 +876,123 @@ void evalCtxFree(EvalContext* ctx) {
     envFree(ctx->env);
     freeUserFunctions(ctx->functions);
     valFree(ctx->returnValue);
+    for (size_t i = 0; i < ctx->inputHistoryCount; i++) free(ctx->inputHistory[i]);
+    free(ctx->inputHistory);
     free(ctx);
+}
+
+static int inputStartsWithCommand(const char* input, const char* command) {
+    if (!input) return 0;
+    while (isspace((unsigned char)*input)) input++;
+    if (*input != '\\') return 0;
+    input++;
+    size_t len = strlen(command);
+    return strncmp(input, command, len) == 0
+        && (input[len] == '\0' || input[len] == '{' || isspace((unsigned char)input[len]));
+}
+
+static int inputStartsWithExport(const char* input) {
+    return inputStartsWithCommand(input, "export");
+}
+
+static void evalCtxDropLastInputIfCommand(EvalContext* ctx, const char* command) {
+    if (!ctx || ctx->inputHistoryCount == 0) return;
+    char* last = ctx->inputHistory[ctx->inputHistoryCount - 1];
+    if (!inputStartsWithCommand(last, command)) return;
+    free(last);
+    ctx->inputHistory[--ctx->inputHistoryCount] = NULL;
+}
+
+void evalCtxRecordInput(EvalContext* ctx, const char* input) {
+    if (!ctx || !input || !*input) return;
+
+    if (ctx->inputHistoryCount == ctx->inputHistoryCap) {
+        size_t nextCap = ctx->inputHistoryCap ? ctx->inputHistoryCap * 2 : 32;
+        char** next = realloc(ctx->inputHistory, nextCap * sizeof(char*));
+        if (!next) return;
+        ctx->inputHistory = next;
+        ctx->inputHistoryCap = nextCap;
+    }
+
+    char* copy = dupstr(input);
+    if (!copy) return;
+    ctx->inputHistory[ctx->inputHistoryCount++] = copy;
+}
+
+int evalCtxExportScript(EvalContext* ctx, const char* filename,
+                        char* error, size_t errorSize) {
+    if (!ctx || !filename || !*filename) {
+        if (error && errorSize) snprintf(error, errorSize, "missing export filename");
+        return 0;
+    }
+
+    FILE* fp = fopen(filename, "w");
+    if (!fp) {
+        if (error && errorSize) snprintf(error, errorSize, "could not write script: %s", filename);
+        return 0;
+    }
+
+    for (size_t i = 0; i < ctx->inputHistoryCount; i++) {
+        const char* input = ctx->inputHistory[i];
+        if (inputStartsWithExport(input)) continue;
+        if (fputs(input, fp) == EOF) {
+            fclose(fp);
+            if (error && errorSize) snprintf(error, errorSize, "failed while writing script: %s", filename);
+            return 0;
+        }
+        size_t len = strlen(input);
+        if (len == 0 || input[len - 1] != '\n') {
+            if (fputc('\n', fp) == EOF) {
+                fclose(fp);
+                if (error && errorSize) snprintf(error, errorSize, "failed while writing script: %s", filename);
+                return 0;
+            }
+        }
+    }
+
+    if (fclose(fp) != 0) {
+        if (error && errorSize) snprintf(error, errorSize, "failed to close script: %s", filename);
+        return 0;
+    }
+    if (error && errorSize) error[0] = '\0';
+    return 1;
+}
+
+int evalCtxSetLazyAssignment(EvalContext* ctx, const char* name, AstNode* rhs) {
+    if (!ctx || !ctx->env || !name || !*name || !rhs) return 0;
+    return envSetLazy(ctx->env, name, rhs);
+}
+
+static Value forceLazyEntry(EvalContext* ctx, Env* owner, EnvEntry* entry) {
+    if (!ctx || !owner || !entry) return valError("invalid lazy restore binding");
+    if (!entry->lazyExpr) return valClone(entry->value);
+    if (entry->lazyEvaluating) return valError("cyclic lazy restore dependency");
+
+    entry->lazyEvaluating = 1;
+    Env* active = ctx->env;
+    ctx->env = owner;
+    Value value = eval(ctx, entry->lazyExpr);
+    ctx->env = active;
+    entry->lazyEvaluating = 0;
+
+    if (value.kind == VAL_ERROR) return value;
+
+    valFree(entry->value);
+    entry->value = value;
+    astFree(entry->lazyExpr);
+    entry->lazyExpr = NULL;
+    return valClone(entry->value);
+}
+
+static Value resolveIdentifierValue(EvalContext* ctx, const char* name, int* found) {
+    Env* owner = NULL;
+    EnvEntry* entry = envFindEntry(ctx ? ctx->env : NULL, name, &owner);
+    if (!entry) {
+        if (found) *found = 0;
+        return valNone();
+    }
+    if (found) *found = 1;
+    return forceLazyEntry(ctx, owner, entry);
 }
 
 /* ---------- Dispatcher ---------- */
@@ -2621,10 +2849,9 @@ Value eval(EvalContext* ctx, AstNode* node) {
         case AST_STRING:  return valString(node->as.ident);
 
         case AST_IDENT: {
-            Value v;
-            // envGet returns a borrowed view; clone so the caller can
-            // freely valFree without disturbing env
-            if (envGet(ctx->env, node->as.ident, &v)) return valClone(v);
+            int found = 0;
+            Value v = resolveIdentifierValue(ctx, node->as.ident, &found);
+            if (found) return v;
             if (strcmp(node->as.ident, "i") == 0) {
                 return valComplex((ComplexNumber){ .real = 0.0, .imag = 1.0 });
             }
@@ -2700,6 +2927,7 @@ Value eval(EvalContext* ctx, AstNode* node) {
             if (strcmp(node->as.call.name, "while") == 0) return evalWhileCall(ctx, node);
             if (strcmp(node->as.call.name, "for") == 0) return evalForCall(ctx, node);
             if (strcmp(node->as.call.name, "def") == 0) return defineUserFunction(ctx, node);
+            if (strcmp(node->as.call.name, "graph") == 0) return evalGraphCall(ctx, node);
             if (strcmp(node->as.call.name, "mathbb") == 0) {
                 if (node->as.call.nargs != 1) return valError("\\mathbb expects one argument");
                 AstNode* arg = firstLogicalCallArg(node);
@@ -2852,13 +3080,20 @@ Value eval(EvalContext* ctx, AstNode* node) {
         }
 
         case AST_INDEX_ASSIGN: {
-            Value target;
-            if (!envGet(ctx->env, node->as.indexAssign.name, &target)) {
+            Env* owner = NULL;
+            EnvEntry* entry = envFindEntry(ctx->env, node->as.indexAssign.name, &owner);
+            if (!entry) {
                 char buf[160];
                 snprintf(buf, sizeof(buf), "cannot index-assign unbound variable %s",
                          node->as.indexAssign.name ? node->as.indexAssign.name : "");
                 return valError(buf);
             }
+            if (entry->lazyExpr) {
+                Value forced = forceLazyEntry(ctx, owner, entry);
+                if (forced.kind == VAL_ERROR) return forced;
+                valFree(forced);
+            }
+            Value target = entry->value;
             if (target.kind != VAL_LIST) return valError("indexed assignment expects a List");
 
             Value index = eval(ctx, node->as.indexAssign.index);
@@ -2919,6 +3154,17 @@ static Value bi_list(EvalContext* c, Value* a, size_t n) {
     }
     for (size_t i = 0; i < n; i++) items[i] = a[i];
     return valList(items, n);
+}
+
+static Value bi_len(EvalContext* c, Value* a, size_t n) {
+    (void)c; (void)n;
+    if (a[0].kind != VAL_LIST) {
+        valFree(a[0]);
+        return valError("\\len expects a List");
+    }
+    size_t length = a[0].as.list.n;
+    valFree(a[0]);
+    return valSizeT(length, "\\len");
 }
 
 static Value sortListValue(Value list, const char* cmdName) {
@@ -3324,6 +3570,649 @@ static Value bi_linearRegressionPredict(EvalContext* c, Value* a, size_t n) {
     valFree(a[1]);
     valFree(a[2]);
     return valueFromKumaNumber(out, "linearRegressionPredict");
+}
+
+typedef struct {
+    char* text;
+    size_t len;
+    size_t cap;
+} KumaPlotText;
+
+// Convert a KUMA number to a finite plotting coordinate
+static int kumaPlotNumberToLongDouble(Number number, long double* out) {
+    if (!out) return 0;
+    switch (number.type) {
+        case NUMBER_INT:
+            *out = (long double)number.as.i;
+            return 1;
+        case NUMBER_FRACTION:
+            if (number.as.frac.denom == 0) return 0;
+            *out = (long double)number.as.frac.num / (long double)number.as.frac.denom;
+            return isfinite(*out);
+        case NUMBER_REAL:
+            *out = number.as.x;
+            return isfinite(*out);
+        default:
+            return 0;
+    }
+}
+
+// Grow a serialized KUMA plot payload buffer
+static int kumaPlotTextEnsure(KumaPlotText* text, size_t extra) {
+    if (!text) return 0;
+    size_t need = text->len + extra + 1;
+    if (need <= text->cap) return 1;
+    size_t nextCap = text->cap ? text->cap : 128;
+    while (nextCap < need) {
+        if (nextCap > SIZE_MAX / 2) return 0;
+        nextCap *= 2;
+    }
+    char* next = realloc(text->text, nextCap);
+    if (!next) return 0;
+    text->text = next;
+    text->cap = nextCap;
+    return 1;
+}
+
+// Append formatted text to a serialized KUMA plot payload
+static int kumaPlotTextAppendf(KumaPlotText* text, const char* fmt, ...) {
+    if (!text || !fmt) return 0;
+
+    va_list args;
+    va_start(args, fmt);
+    va_list copy;
+    va_copy(copy, args);
+    int needed = vsnprintf(NULL, 0, fmt, copy);
+    va_end(copy);
+    if (needed < 0) {
+        va_end(args);
+        return 0;
+    }
+
+    if (!kumaPlotTextEnsure(text, (size_t)needed)) {
+        va_end(args);
+        return 0;
+    }
+    vsnprintf(text->text + text->len, text->cap - text->len, fmt, args);
+    va_end(args);
+    text->len += (size_t)needed;
+    return 1;
+}
+
+// Copy a String or Symbol argument as a plot metadata field
+static int kumaPlotMetadataText(Value value, char** out) {
+    if (!out) return 0;
+    if (value.kind != VAL_STRING && value.kind != VAL_SYMBOL) return 0;
+    *out = dupstr(value.as.str ? value.as.str : "");
+    return *out != NULL;
+}
+
+// Read optional title and axis labels for a KUMA plot command
+static int kumaPlotReadMetadata(Value* a, size_t n, size_t start,
+                                const char* defaultX, const char* defaultY,
+                                char** title, char** xLabel, char** yLabel,
+                                char* err, size_t errSize, const char* name) {
+    if (!title || !xLabel || !yLabel) return 0;
+    if (n < start || n > start + 3) {
+        snprintf(err, errSize, "\\%s expects optional title, x-axis label, and y-axis label", name);
+        return 0;
+    }
+
+    *title = dupstr("");
+    *xLabel = dupstr(defaultX ? defaultX : "x");
+    *yLabel = dupstr(defaultY ? defaultY : "y");
+    if (!*title || !*xLabel || !*yLabel) {
+        snprintf(err, errSize, "\\%s failed to allocate labels", name);
+        return 0;
+    }
+
+    char** fields[3] = { title, xLabel, yLabel };
+    for (size_t i = start; i < n; i++) {
+        free(*fields[i - start]);
+        *fields[i - start] = NULL;
+        if (!kumaPlotMetadataText(a[i], fields[i - start])) {
+            snprintf(err, errSize, "\\%s plot title and axis labels must be Strings or Symbols", name);
+            return 0;
+        }
+    }
+    sanitizeGraphField(*title);
+    sanitizeGraphField(*xLabel);
+    sanitizeGraphField(*yLabel);
+    return 1;
+}
+
+// Free every evaluated argument for a KUMA plot command
+static void kumaPlotFreeArgs(Value* a, size_t n) {
+    for (size_t i = 0; i < n; i++) valFree(a[i]);
+}
+
+// Finish a serialized KUMA plot command by emitting it to the GUI
+static Value kumaPlotFinish(Value* a, size_t n, KumaPlotCommandKind kind,
+                            char* title, char* xLabel, char* yLabel,
+                            KumaPlotText payload) {
+    sanitizeGraphField(payload.text);
+    emitKumaPlotRequest(kind, title, xLabel, yLabel, payload.text);
+    kumaPlotFreeArgs(a, n);
+    free(title);
+    free(xLabel);
+    free(yLabel);
+    free(payload.text);
+    return valString("Opened KUMA plot.");
+}
+
+// Build a serialized KUMA boxplot request
+static Value bi_boxPlot(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    if (n < 1) {
+        kumaPlotFreeArgs(a, n);
+        return valError("\\boxPlot expects a nonempty numeric List");
+    }
+
+    Number* data = NULL;
+    size_t size = 0;
+    char* title = NULL;
+    char* xLabel = NULL;
+    char* yLabel = NULL;
+    char err[160] = {0};
+    if (!valueListToKumaNumbers(a[0], &data, &size)
+            || !kumaPlotReadMetadata(a, n, 1, "Sample", "Value",
+                                     &title, &xLabel, &yLabel, err, sizeof(err), "boxPlot")) {
+        free(data);
+        kumaPlotFreeArgs(a, n);
+        free(title);
+        free(xLabel);
+        free(yLabel);
+        return valError(err[0] ? err : "\\boxPlot expects a nonempty numeric List");
+    }
+
+    KumaBoxPlotData* plot = boxplot(data, size);
+    free(data);
+    if (!plot) {
+        kumaPlotFreeArgs(a, n);
+        free(title);
+        free(xLabel);
+        free(yLabel);
+        return valError("\\boxPlot failed");
+    }
+
+    KumaPlotText payload = {0};
+    int ok = kumaPlotTextAppendf(&payload, "%Lg,%Lg,%Lg,%Lg,%Lg,%Lg,%Lg,%Lg,%Lg|",
+                                 plot->minimum, plot->q1, plot->median, plot->q3,
+                                 plot->maximum, plot->lowerFence, plot->upperFence,
+                                 plot->lowerWhisker, plot->upperWhisker);
+    for (size_t i = 0; ok && i < plot->outlierCount; i++) {
+        ok = kumaPlotTextAppendf(&payload, "%s%Lg", i ? ";" : "", plot->outliers[i]);
+    }
+    freeBoxPlotData(plot);
+    if (!ok) {
+        kumaPlotFreeArgs(a, n);
+        free(title);
+        free(xLabel);
+        free(yLabel);
+        free(payload.text);
+        return valError("\\boxPlot failed to serialize plot data");
+    }
+    return kumaPlotFinish(a, n, KUMA_PLOT_BOX, title, xLabel, yLabel, payload);
+}
+
+// Build a serialized KUMA histogram request
+static Value bi_histogramPlot(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    if (n < 1) {
+        kumaPlotFreeArgs(a, n);
+        return valError("\\histogram expects a nonempty numeric List");
+    }
+
+    Number* data = NULL;
+    size_t size = 0;
+    size_t metaStart = 1;
+    size_t binCount = 0;
+    long long rawBins = 0;
+    if (n > 1 && valueToCombSetInt(a[1], &rawBins)) {
+        if (rawBins < 0) {
+            kumaPlotFreeArgs(a, n);
+            return valError("\\histogram bin count must be nonnegative");
+        }
+        binCount = (size_t)rawBins;
+        metaStart = 2;
+    }
+
+    char* title = NULL;
+    char* xLabel = NULL;
+    char* yLabel = NULL;
+    char err[160] = {0};
+    if (!valueListToKumaNumbers(a[0], &data, &size)
+            || !kumaPlotReadMetadata(a, n, metaStart, "Value", "Count",
+                                     &title, &xLabel, &yLabel, err, sizeof(err), "histogram")) {
+        free(data);
+        kumaPlotFreeArgs(a, n);
+        free(title);
+        free(xLabel);
+        free(yLabel);
+        return valError(err[0] ? err : "\\histogram expects a nonempty numeric List");
+    }
+
+    KumaHistogramData* plot = histogram(data, size, binCount);
+    free(data);
+    if (!plot) {
+        kumaPlotFreeArgs(a, n);
+        free(title);
+        free(xLabel);
+        free(yLabel);
+        return valError("\\histogram failed");
+    }
+
+    KumaPlotText payload = {0};
+    int ok = 1;
+    for (size_t i = 0; ok && i < plot->binCount; i++) {
+        KumaHistogramBin bin = plot->bins[i];
+        ok = kumaPlotTextAppendf(&payload, "%s%Lg,%Lg,%Lg,%zu,%Lg,%Lg",
+                                 i ? ";" : "", bin.lower, bin.upper, bin.midpoint,
+                                 bin.count, bin.proportion, bin.density);
+    }
+    freeHistogramData(plot);
+    if (!ok) {
+        kumaPlotFreeArgs(a, n);
+        free(title);
+        free(xLabel);
+        free(yLabel);
+        free(payload.text);
+        return valError("\\histogram failed to serialize plot data");
+    }
+    return kumaPlotFinish(a, n, KUMA_PLOT_HISTOGRAM, title, xLabel, yLabel, payload);
+}
+
+// Build a serialized KUMA frequency or dot plot request
+static Value kumaFrequencyLikePlotCommand(Value* a, size_t n, const char* name,
+                                          KumaPlotCommandKind kind) {
+    if (n < 1) {
+        kumaPlotFreeArgs(a, n);
+        char buf[160];
+        snprintf(buf, sizeof(buf), "\\%s expects a nonempty numeric List", name);
+        return valError(buf);
+    }
+
+    Number* data = NULL;
+    size_t size = 0;
+    char* title = NULL;
+    char* xLabel = NULL;
+    char* yLabel = NULL;
+    char err[160] = {0};
+    if (!valueListToKumaNumbers(a[0], &data, &size)
+            || !kumaPlotReadMetadata(a, n, 1, "Value", "Frequency",
+                                     &title, &xLabel, &yLabel, err, sizeof(err), name)) {
+        free(data);
+        kumaPlotFreeArgs(a, n);
+        free(title);
+        free(xLabel);
+        free(yLabel);
+        char buf[160];
+        snprintf(buf, sizeof(buf), "\\%s expects a nonempty numeric List", name);
+        return valError(err[0] ? err : buf);
+    }
+
+    KumaFrequencyPlotData* plot = kind == KUMA_PLOT_DOT
+        ? (KumaFrequencyPlotData*)dotPlot(data, size)
+        : frequencyPlot(data, size);
+    free(data);
+    if (!plot) {
+        kumaPlotFreeArgs(a, n);
+        free(title);
+        free(xLabel);
+        free(yLabel);
+        char buf[128];
+        snprintf(buf, sizeof(buf), "\\%s failed", name);
+        return valError(buf);
+    }
+
+    KumaPlotText payload = {0};
+    int ok = 1;
+    for (size_t i = 0; ok && i < plot->count; i++) {
+        KumaFrequencyPlotItem item = plot->items[i];
+        ok = kumaPlotTextAppendf(&payload, "%s%Lg,%zu,%Lg",
+                                 i ? ";" : "", item.position, item.count, item.proportion);
+    }
+    if (kind == KUMA_PLOT_DOT) freeDotPlotData((KumaDotPlotData*)plot);
+    else freeFrequencyPlotData(plot);
+    if (!ok) {
+        kumaPlotFreeArgs(a, n);
+        free(title);
+        free(xLabel);
+        free(yLabel);
+        free(payload.text);
+        char buf[160];
+        snprintf(buf, sizeof(buf), "\\%s failed to serialize plot data", name);
+        return valError(buf);
+    }
+    return kumaPlotFinish(a, n, kind, title, xLabel, yLabel, payload);
+}
+
+static Value bi_frequencyPlot(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    return kumaFrequencyLikePlotCommand(a, n, "frequencyPlot", KUMA_PLOT_FREQUENCY);
+}
+
+static Value bi_freqPlot(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    return kumaFrequencyLikePlotCommand(a, n, "freqPlot", KUMA_PLOT_FREQUENCY);
+}
+
+static Value bi_dotPlot(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    return kumaFrequencyLikePlotCommand(a, n, "dotPlot", KUMA_PLOT_DOT);
+}
+
+// Build a serialized KUMA bar graph request
+static Value bi_barGraphPlot(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    if (n < 2) {
+        kumaPlotFreeArgs(a, n);
+        return valError("\\barGraph expects label and value Lists");
+    }
+
+    Number* labels = NULL;
+    Number* values = NULL;
+    size_t labelCount = 0;
+    size_t valueCount = 0;
+    char* title = NULL;
+    char* xLabel = NULL;
+    char* yLabel = NULL;
+    char err[160] = {0};
+    if (!valueListToKumaNumbers(a[0], &labels, &labelCount)
+            || !valueListToKumaNumbers(a[1], &values, &valueCount)
+            || labelCount != valueCount
+            || !kumaPlotReadMetadata(a, n, 2, "Label", "Value",
+                                     &title, &xLabel, &yLabel, err, sizeof(err), "barGraph")) {
+        free(labels);
+        free(values);
+        kumaPlotFreeArgs(a, n);
+        free(title);
+        free(xLabel);
+        free(yLabel);
+        return valError(err[0] ? err : "\\barGraph expects same-length numeric label and value Lists");
+    }
+
+    KumaBarGraphData* plot = barGraph(labels, values, labelCount);
+    free(labels);
+    free(values);
+    if (!plot) {
+        kumaPlotFreeArgs(a, n);
+        free(title);
+        free(xLabel);
+        free(yLabel);
+        return valError("\\barGraph failed");
+    }
+
+    KumaPlotText payload = {0};
+    int ok = 1;
+    for (size_t i = 0; ok && i < plot->count; i++) {
+        long double label = 0.0L;
+        if (!kumaPlotNumberToLongDouble(plot->bars[i].label, &label)) {
+            ok = 0;
+            break;
+        }
+        ok = kumaPlotTextAppendf(&payload, "%s%Lg,%Lg",
+                                 i ? ";" : "", label, plot->bars[i].height);
+    }
+    freeBarGraphData(plot);
+    if (!ok) {
+        kumaPlotFreeArgs(a, n);
+        free(title);
+        free(xLabel);
+        free(yLabel);
+        free(payload.text);
+        return valError("\\barGraph failed to serialize plot data");
+    }
+    return kumaPlotFinish(a, n, KUMA_PLOT_BAR, title, xLabel, yLabel, payload);
+}
+
+// Build a serialized KUMA density plot request
+static Value bi_densityPlot(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    if (n < 1) {
+        kumaPlotFreeArgs(a, n);
+        return valError("\\densityPlot expects a nonempty numeric List");
+    }
+
+    Number* data = NULL;
+    size_t size = 0;
+    Number bandwidth = { .type = NUMBER_NAN, .as.x = NAN };
+    char* title = NULL;
+    char* xLabel = NULL;
+    char* yLabel = NULL;
+    char err[160] = {0};
+    if (!valueListToKumaNumbers(a[0], &data, &size)
+            || !kumaPlotReadMetadata(a, n, 1, "Value", "Density",
+                                     &title, &xLabel, &yLabel, err, sizeof(err), "densityPlot")) {
+        free(data);
+        kumaPlotFreeArgs(a, n);
+        free(title);
+        free(xLabel);
+        free(yLabel);
+        return valError(err[0] ? err : "\\densityPlot expects a nonempty numeric List");
+    }
+
+    KumaDensityPlotData* plot = densityPlot(data, size, 0, bandwidth);
+    free(data);
+    if (!plot) {
+        kumaPlotFreeArgs(a, n);
+        free(title);
+        free(xLabel);
+        free(yLabel);
+        return valError("\\densityPlot failed");
+    }
+
+    KumaPlotText payload = {0};
+    int ok = 1;
+    for (size_t i = 0; ok && i < plot->count; i++) {
+        ok = kumaPlotTextAppendf(&payload, "%s%Lg,%Lg",
+                                 i ? ";" : "", plot->points[i].x, plot->points[i].y);
+    }
+    freeDensityPlotData(plot);
+    if (!ok) {
+        kumaPlotFreeArgs(a, n);
+        free(title);
+        free(xLabel);
+        free(yLabel);
+        free(payload.text);
+        return valError("\\densityPlot failed to serialize plot data");
+    }
+    return kumaPlotFinish(a, n, KUMA_PLOT_DENSITY, title, xLabel, yLabel, payload);
+}
+
+// Build a serialized KUMA empirical-CDF request
+static Value bi_ecdfPlot(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    if (n < 1) {
+        kumaPlotFreeArgs(a, n);
+        return valError("\\ecdf expects a nonempty numeric List");
+    }
+
+    Number* data = NULL;
+    size_t size = 0;
+    char* title = NULL;
+    char* xLabel = NULL;
+    char* yLabel = NULL;
+    char err[160] = {0};
+    if (!valueListToKumaNumbers(a[0], &data, &size)
+            || !kumaPlotReadMetadata(a, n, 1, "Value", "F(x)",
+                                     &title, &xLabel, &yLabel, err, sizeof(err), "ecdf")) {
+        free(data);
+        kumaPlotFreeArgs(a, n);
+        free(title);
+        free(xLabel);
+        free(yLabel);
+        return valError(err[0] ? err : "\\ecdf expects a nonempty numeric List");
+    }
+
+    KumaECDFPlotData* plot = ecdf(data, size);
+    free(data);
+    if (!plot) {
+        kumaPlotFreeArgs(a, n);
+        free(title);
+        free(xLabel);
+        free(yLabel);
+        return valError("\\ecdf failed");
+    }
+
+    KumaPlotText payload = {0};
+    int ok = 1;
+    for (size_t i = 0; ok && i < plot->count; i++) {
+        ok = kumaPlotTextAppendf(&payload, "%s%Lg,%Lg",
+                                 i ? ";" : "", plot->points[i].x, plot->points[i].y);
+    }
+    freeECDFPlotData(plot);
+    if (!ok) {
+        kumaPlotFreeArgs(a, n);
+        free(title);
+        free(xLabel);
+        free(yLabel);
+        free(payload.text);
+        return valError("\\ecdf failed to serialize plot data");
+    }
+    return kumaPlotFinish(a, n, KUMA_PLOT_ECDF, title, xLabel, yLabel, payload);
+}
+
+// Build a serialized KUMA QQ plot request
+static Value bi_qqPlot(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    if (n < 2) {
+        kumaPlotFreeArgs(a, n);
+        return valError("\\qqPlot expects data and a distribution");
+    }
+
+    Number* data = NULL;
+    size_t size = 0;
+    ProbabilityDistribution* dist = valueAsDistribution(a[1]);
+    char* title = NULL;
+    char* xLabel = NULL;
+    char* yLabel = NULL;
+    char err[160] = {0};
+    if (!dist || !valueListToKumaNumbers(a[0], &data, &size)
+            || !kumaPlotReadMetadata(a, n, 2, "Theoretical quantile", "Sample quantile",
+                                     &title, &xLabel, &yLabel, err, sizeof(err), "qqPlot")) {
+        free(data);
+        kumaPlotFreeArgs(a, n);
+        free(title);
+        free(xLabel);
+        free(yLabel);
+        return valError(err[0] ? err : "\\qqPlot expects a nonempty numeric List and a distribution");
+    }
+
+    KumaQQPlotData* plot = qqPlot(data, size, dist);
+    free(data);
+    if (!plot) {
+        kumaPlotFreeArgs(a, n);
+        free(title);
+        free(xLabel);
+        free(yLabel);
+        return valError("\\qqPlot failed");
+    }
+
+    KumaPlotText payload = {0};
+    int ok = 1;
+    for (size_t i = 0; ok && i < plot->count; i++) {
+        ok = kumaPlotTextAppendf(&payload, "%s%Lg,%Lg",
+                                 i ? ";" : "", plot->points[i].x, plot->points[i].y);
+    }
+    freeQQPlotData(plot);
+    if (!ok) {
+        kumaPlotFreeArgs(a, n);
+        free(title);
+        free(xLabel);
+        free(yLabel);
+        free(payload.text);
+        return valError("\\qqPlot failed to serialize plot data");
+    }
+    return kumaPlotFinish(a, n, KUMA_PLOT_QQ, title, xLabel, yLabel, payload);
+}
+
+// Build a serialized KUMA scatter or regression plot request
+static Value kumaPairedPointPlotCommand(Value* a, size_t n, const char* name,
+                                        KumaPlotCommandKind kind) {
+    if (n < 2) {
+        kumaPlotFreeArgs(a, n);
+        char buf[128];
+        snprintf(buf, sizeof(buf), "\\%s expects x and y Lists", name);
+        return valError(buf);
+    }
+
+    Number* x = NULL;
+    Number* y = NULL;
+    size_t xSize = 0;
+    size_t ySize = 0;
+    char* title = NULL;
+    char* xLabel = NULL;
+    char* yLabel = NULL;
+    char err[160] = {0};
+    if (!valueListToKumaNumbers(a[0], &x, &xSize)
+            || !valueListToKumaNumbers(a[1], &y, &ySize)
+            || xSize != ySize
+            || !kumaPlotReadMetadata(a, n, 2, "x", "y",
+                                     &title, &xLabel, &yLabel, err, sizeof(err), name)) {
+        free(x);
+        free(y);
+        kumaPlotFreeArgs(a, n);
+        free(title);
+        free(xLabel);
+        free(yLabel);
+        char buf[160];
+        snprintf(buf, sizeof(buf), "\\%s expects two same-length nonempty numeric Lists", name);
+        return valError(err[0] ? err : buf);
+    }
+
+    KumaPlotText payload = {0};
+    int ok = 1;
+    if (kind == KUMA_PLOT_REGRESSION) {
+        KumaRegressionPlotData* plot = regressionPlot(x, y, xSize);
+        free(x);
+        free(y);
+        if (!plot) ok = 0;
+        else {
+            ok = kumaPlotTextAppendf(&payload, "%Lg,%Lg,%Lg,%Lg|",
+                                     plot->lineStart.x, plot->lineStart.y,
+                                     plot->lineEnd.x, plot->lineEnd.y);
+            for (size_t i = 0; ok && i < plot->count; i++) {
+                ok = kumaPlotTextAppendf(&payload, "%s%Lg,%Lg",
+                                         i ? ";" : "", plot->points[i].x, plot->points[i].y);
+            }
+            freeRegressionPlotData(plot);
+        }
+    } else {
+        KumaScatterPlotData* plot = scatterPlot(x, y, xSize);
+        free(x);
+        free(y);
+        if (!plot) ok = 0;
+        else {
+            for (size_t i = 0; ok && i < plot->count; i++) {
+                ok = kumaPlotTextAppendf(&payload, "%s%Lg,%Lg",
+                                         i ? ";" : "", plot->points[i].x, plot->points[i].y);
+            }
+            freeScatterPlotData(plot);
+        }
+    }
+
+    if (!ok) {
+        kumaPlotFreeArgs(a, n);
+        free(title);
+        free(xLabel);
+        free(yLabel);
+        free(payload.text);
+        char buf[128];
+        snprintf(buf, sizeof(buf), "\\%s failed", name);
+        return valError(buf);
+    }
+    return kumaPlotFinish(a, n, kind, title, xLabel, yLabel, payload);
+}
+
+static Value bi_scatterPlot(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    return kumaPairedPointPlotCommand(a, n, "scatterPlot", KUMA_PLOT_SCATTER);
+}
+
+static Value bi_regressionPlot(EvalContext* c, Value* a, size_t n) {
+    (void)c;
+    return kumaPairedPointPlotCommand(a, n, "regressionPlot", KUMA_PLOT_REGRESSION);
 }
 
 static Value kumaDistributionOutput(ProbabilityDistribution* dist, const char* commandName) {
@@ -5952,6 +6841,259 @@ static int exprDependsOnVar(const NekoExpr* expr, const char* var) {
             return 0;
     }
     return 0;
+}
+
+typedef enum {
+    GRAPH_EXPLICIT = 0,
+    GRAPH_IMPLICIT = 1,
+    GRAPH_VERTICAL = 2
+} GraphCommandKind;
+
+// Replace terminal-control characters in graph request fields
+static void sanitizeGraphField(char* text) {
+    if (!text) return;
+    for (char* p = text; *p; p++) {
+        if (*p == '\t' || *p == '\n' || *p == '\r' || *p == '\a' || *p == 0x1b)
+            *p = ' ';
+    }
+}
+
+// Emit a graph request for the GUI terminal to intercept
+static void emitGraphRequest(GraphCommandKind kind, long long target, const char* label, const char* serialized) {
+    printf("\033]777;BESTIARY_GRAPH\t%d\t%lld\t%s\t%s\a",
+           (int)kind,
+           target,
+           label ? label : "",
+           serialized ? serialized : "");
+    fflush(stdout);
+}
+
+// Emit a KUMA plot request for the GUI terminal to intercept
+static void emitKumaPlotRequest(KumaPlotCommandKind kind, const char* title,
+                                const char* xLabel, const char* yLabel,
+                                const char* payload) {
+    printf("\033]777;BESTIARY_KUMA_PLOT\t%d\t%s\t%s\t%s\t%s\a",
+           (int)kind,
+           title ? title : "",
+           xLabel ? xLabel : "",
+           yLabel ? yLabel : "",
+           payload ? payload : "");
+    fflush(stdout);
+}
+
+// Find the single equation sign used by graph equations
+static const char* findGraphEquationEquals(const char* text) {
+    if (!text) return NULL;
+    for (const char* p = text; *p; p++) {
+        if (*p != '=') continue;
+        if ((p > text && (*(p - 1) == '=' || *(p - 1) == '<' || *(p - 1) == '>' || *(p - 1) == '!'))
+                || *(p + 1) == '=') {
+            continue;
+        }
+        return p;
+    }
+    return NULL;
+}
+
+// Copy and trim a graph equation side
+static char* graphTrimRange(const char* start, size_t len) {
+    while (len > 0 && isspace((unsigned char)*start)) {
+        start++;
+        len--;
+    }
+    while (len > 0 && isspace((unsigned char)start[len - 1])) len--;
+    char* out = malloc(len + 1);
+    if (!out) return NULL;
+    memcpy(out, start, len);
+    out[len] = '\0';
+    return out;
+}
+
+// Test whether a graph equation side is a single named axis
+static int graphSideIsName(const char* text, const char* name) {
+    return text && name && strcmp(text, name) == 0;
+}
+
+// Convert graph text into a graphable NEKO expression
+static NekoExpr* graphExprFromString(const char* text, GraphCommandKind* kind, char** label) {
+    if (!text || !kind || !label) return NULL;
+
+    // Split f(x,y) = g(x,y) into the implicit expression f - g
+    const char* eq = findGraphEquationEquals(text);
+    if (eq) {
+        char* lhsText = graphTrimRange(text, (size_t)(eq - text));
+        char* rhsText = graphTrimRange(eq + 1, strlen(eq + 1));
+        if (!lhsText || !rhsText || !*lhsText || !*rhsText) {
+            free(lhsText);
+            free(rhsText);
+            return NULL;
+        }
+
+        NekoExpr* lhs = parseNekoExprLiteral(lhsText);
+        NekoExpr* rhs = parseNekoExprLiteral(rhsText);
+        if (!lhs || !rhs) {
+            nekoFreeExpr(lhs);
+            nekoFreeExpr(rhs);
+            free(lhsText);
+            free(rhsText);
+            return NULL;
+        }
+
+        // Preserve the special vertical-line form x = c
+        if (graphSideIsName(lhsText, "x") && rhs->kind == NEKO_EXPR_CONST) {
+            long double c = rhs->as.constant;
+            nekoFreeExpr(lhs);
+            nekoFreeExpr(rhs);
+            free(lhsText);
+            free(rhsText);
+            *kind = GRAPH_VERTICAL;
+            char buf[96];
+            snprintf(buf, sizeof(buf), "x = %Lg", c);
+            *label = dupstr(buf);
+            return nekoConst(c);
+        }
+
+        // Preserve the explicit-function form y = f(x)
+        if (graphSideIsName(lhsText, "y") && !exprDependsOnVar(rhs, "y")) {
+            nekoFreeExpr(lhs);
+            free(lhsText);
+            free(rhsText);
+            *kind = GRAPH_EXPLICIT;
+            rhs = nekoSimplify(rhs);
+            *label = nekoExprToString(rhs);
+            return rhs;
+        }
+
+        free(lhsText);
+        free(rhsText);
+        NekoExpr* expr = nekoSimplify(nekoSub(lhs, rhs));
+        *kind = GRAPH_IMPLICIT;
+        *label = nekoExprToString(expr);
+        return expr;
+    }
+
+    // Parse ordinary graph text as a NEKO expression
+    NekoExpr* expr = parseNekoExprLiteral(text);
+    if (!expr) return NULL;
+    expr = nekoSimplify(expr);
+    *kind = exprDependsOnVar(expr, "y") ? GRAPH_IMPLICIT : GRAPH_EXPLICIT;
+    *label = nekoExprToString(expr);
+    return expr;
+}
+
+// Convert a raw graph argument node into a graphable NEKO expression
+static NekoExpr* graphExprFromNode(EvalContext* ctx, AstNode* node, GraphCommandKind* kind, char** label) {
+    if (!ctx || !node || !kind || !label) return NULL;
+    *label = NULL;
+
+    // Handle raw graph text captured by the parser
+    if (node->kind == AST_STRING) {
+        return graphExprFromString(node->as.ident, kind, label);
+    }
+
+    // Handle vertical lines x = c and explicit assignments y = f(x)
+    if (node->kind == AST_ASSIGN) {
+        if (node->as.assign.name && strcmp(node->as.assign.name, "x") == 0) {
+            Value rhs = eval(ctx, node->as.assign.rhs);
+            if (valIsNumeric(rhs)) {
+                long double c = valToDouble(rhs);
+                valFree(rhs);
+                *kind = GRAPH_VERTICAL;
+                char buf[96];
+                snprintf(buf, sizeof(buf), "x = %Lg", c);
+                *label = dupstr(buf);
+                return nekoConst(c);
+            }
+
+            NekoExpr* rhsExpr = valueToNekoExpr(rhs);
+            valFree(rhs);
+            if (!rhsExpr) return NULL;
+            NekoExpr* expr = nekoSimplify(nekoSub(nekoVar("x"), rhsExpr));
+            *kind = GRAPH_IMPLICIT;
+            *label = nekoExprToString(expr);
+            return expr;
+        }
+        if (node->as.assign.name && strcmp(node->as.assign.name, "y") == 0) {
+            Value rhs = eval(ctx, node->as.assign.rhs);
+            NekoExpr* expr = valueToNekoExpr(rhs);
+            valFree(rhs);
+            expr = expr ? nekoSimplify(expr) : NULL;
+            if (!expr) return NULL;
+            if (exprDependsOnVar(expr, "y")) {
+                expr = nekoSimplify(nekoSub(nekoVar("y"), expr));
+                *kind = GRAPH_IMPLICIT;
+            } else {
+                *kind = GRAPH_EXPLICIT;
+            }
+            *label = nekoExprToString(expr);
+            return expr;
+        }
+        return NULL;
+    }
+
+    // Evaluate ordinary expressions through the existing Bestiary evaluator
+    Value value = eval(ctx, node);
+    NekoExpr* expr = NULL;
+    if (value.kind == VAL_STRING) {
+        expr = graphExprFromString(value.as.str, kind, label);
+        valFree(value);
+        return expr;
+    }
+    if (!expr) expr = valueToNekoExpr(value);
+    valFree(value);
+    if (!expr) return NULL;
+
+    // Simplify before selecting graph kind and display label
+    expr = nekoSimplify(expr);
+    *kind = exprDependsOnVar(expr, "y") ? GRAPH_IMPLICIT : GRAPH_EXPLICIT;
+    *label = nekoExprToString(expr);
+    return expr;
+}
+
+// Evaluate a raw graph command without assigning inside graph arguments
+static Value evalGraphCall(EvalContext* ctx, AstNode* node) {
+    if (!node || node->kind != AST_CALL || node->as.call.nargs < 1 || node->as.call.nargs > 2)
+        return valError("\\graph expects one graph expression and an optional graph number");
+
+    // Parse an optional graph tab number
+    long long target = 0;
+    if (node->as.call.nargs == 2) {
+        Value tabValue = eval(ctx, node->as.call.args[1]);
+        if (tabValue.kind != VAL_INT || tabValue.as.i < 1) {
+            valFree(tabValue);
+            return valError("\\graph graph number must be a positive Int");
+        }
+        target = tabValue.as.i;
+        valFree(tabValue);
+    }
+
+    // Convert the expression to a serialized NEKO payload
+    GraphCommandKind kind = GRAPH_EXPLICIT;
+    char* label = NULL;
+    NekoExpr* expr = graphExprFromNode(ctx, node->as.call.args[0], &kind, &label);
+    if (!expr) {
+        free(label);
+        return valError("\\graph expects a graphable NEKO expression, numeric value, or x = real constant");
+    }
+    char* serialized = nekoSerializeExpr(expr);
+    if (!serialized) {
+        free(label);
+        nekoFreeExpr(expr);
+        return valError("\\graph could not serialize expression");
+    }
+    if (!label) label = nekoExprToString(expr);
+    sanitizeGraphField(label);
+    sanitizeGraphField(serialized);
+
+    // Send the request and return a visible CLI summary
+    emitGraphRequest(kind, target, label, serialized);
+    char summary[256];
+    if (target > 0) snprintf(summary, sizeof(summary), "Added graph to Graph %lld.", target);
+    else snprintf(summary, sizeof(summary), "Opened graph.");
+    free(label);
+    free(serialized);
+    nekoFreeExpr(expr);
+    return valString(summary);
 }
 
 typedef struct {
@@ -12501,7 +13643,10 @@ static Value bi_vproj(EvalContext* c, Value* a, size_t n) {
 void registerBuiltins(void) {
     registerCommand("help", -1, bi_help);
     registerCommand("run", 1, bi_run);
+    registerCommand("export", 1, bi_export);
+    registerCommand("graph", -1, bi_graph);
     registerCommand("list", -1, bi_list);
+    registerCommand("len", 1, bi_len);
     registerCommand("sort", 1, bi_sort);
     registerCommand("sortedCopy", 1, bi_sortedCopy);
     registerCommand("shuffle", 1, bi_shuffle);
@@ -12766,6 +13911,17 @@ void registerBuiltins(void) {
     registerCommand("linearRegressionSlope",  2, bi_linearRegressionSlope);
     registerCommand("linearRegressionIntercept",  2, bi_linearRegressionIntercept);
     registerCommand("linearRegressionPredict",  3, bi_linearRegressionPredict);
+    registerCommand("boxPlot", -1, bi_boxPlot);
+    registerCommand("histogram", -1, bi_histogramPlot);
+    registerCommand("frequencyPlot", -1, bi_frequencyPlot);
+    registerCommand("freqPlot", -1, bi_freqPlot);
+    registerCommand("barGraph", -1, bi_barGraphPlot);
+    registerCommand("densityPlot", -1, bi_densityPlot);
+    registerCommand("dotPlot", -1, bi_dotPlot);
+    registerCommand("ecdf", -1, bi_ecdfPlot);
+    registerCommand("qqPlot", -1, bi_qqPlot);
+    registerCommand("scatterPlot", -1, bi_scatterPlot);
+    registerCommand("regressionPlot", -1, bi_regressionPlot);
     registerCommand("bernoulli",  1, bi_bernoulli);
     registerCommand("binomial",  2, bi_binomial);
     registerCommand("geometric",  1, bi_geometric);
