@@ -3404,10 +3404,17 @@ SubGroup** listAllMaximalSubgroups(Group* G, int* count) {
         free(subgroups);
         return NULL;
     }
+    bool* keep = calloc(numSubgroups, sizeof(bool));
+    if (!keep) {
+        free(maximal);
+        for (int i = 0; i < numSubgroups; i++) freeSubgroup(subgroups[i]);
+        free(subgroups);
+        return NULL;
+    }
 
     int numMaxSubgroups = 0;
     for (int i = 0; i < numSubgroups; i++) {
-        if (subgroups[i]->card == G->card) { freeSubgroup(subgroups[i]); continue; }
+        if (subgroups[i]->card == G->card) continue;
         bool isMaximal = true;
         for (int j = 0; j < numSubgroups; j++) {
             if (subgroups[j]->card <= subgroups[i]->card) continue;
@@ -3417,9 +3424,15 @@ SubGroup** listAllMaximalSubgroups(Group* G, int* count) {
                 break;
             }
         }
-        if (isMaximal) maximal[numMaxSubgroups++] = subgroups[i];
-        else freeSubgroup(subgroups[i]);
+        if (isMaximal) {
+            keep[i] = true;
+            maximal[numMaxSubgroups++] = subgroups[i];
+        }
     }
+    for (int i = 0; i < numSubgroups; i++) {
+        if (!keep[i]) freeSubgroup(subgroups[i]);
+    }
+    free(keep);
     free(subgroups);
 
     *count = numMaxSubgroups;

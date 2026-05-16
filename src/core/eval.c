@@ -743,10 +743,9 @@ static void appendUsage(char* buf, size_t bufSize, const char* name, int arity) 
 static Value bi_help(EvalContext* c, Value* a, size_t n) {
     (void)c;
     if (n == 0) {
-        char buf[4096] = "Commands:";
+        char buf[65536] = "Commands:";
         for (const CommandEntry* e = commandRegistry(); e; e = e->next) {
             if (strncmp(e->name, "__", 2) == 0) continue;
-            if (strcmp(e->name, "numIrrpes") == 0) continue;
             size_t used = strlen(buf);
             if (used + strlen(e->name) + 4 >= sizeof(buf)) {
                 snprintf(buf + used, sizeof(buf) - used, " ...");
@@ -771,10 +770,6 @@ static Value bi_help(EvalContext* c, Value* a, size_t n) {
     if (strncmp(raw, "__", 2) == 0) {
         valFree(a[0]);
         return valError("unknown command for help");
-    }
-    if (strcmp(raw, "numIrrpes") == 0) {
-        valFree(a[0]);
-        return valError("unknown command for help: \\numIrrpes");
     }
 
     const CommandEntry* entry = lookupCommand(raw);
@@ -5859,9 +5854,9 @@ static Value bi_quadraticExtension(EvalContext* c, Value* a, size_t n) {
     Field extension = constructQuadraticExtensionField(base, radicand, "u");
     freeFieldElement(&radicand);
     Value out = valField(extension);
+    freeField(&extension);
     valFree(a[0]);
     valFree(a[1]);
-    freeField(&extension);
     return out;
 }
 
@@ -13976,7 +13971,6 @@ void registerBuiltins(void) {
     registerCommand("quaternionMatrixRep",  1, bi_quaternionMatrixRep_cmd);
     registerCommand("quaternionToMatrix", -1, bi_quaternionToMatrix_cmd);
     registerCommand("cdLeftIdeal", -1, bi_cdLeftIdeal_cmd);
-    registerCommand("cdLeftideal", -1, bi_cdLeftIdeal_cmd);
     registerCommand("cdRightIdeal", -1, bi_cdRightIdeal_cmd);
     registerCommand("cdTwoSidedIdeal", -1, bi_cdTwoSidedIdeal_cmd);
     registerCommand("cdSubalgebra", -1, bi_cdSubalgebra_cmd);
@@ -14254,7 +14248,6 @@ void registerBuiltins(void) {
     registerCommand("isIrrep",  1, bi_isIrrep_cmd);
     registerCommand("listIrreps",  1, bi_listIrrpes_cmd);
     registerCommand("numIrreps",  1, bi_numIrreps_cmd);
-    registerCommand("numIrrpes",  1, bi_numIrreps_cmd);
     registerCommand("getIrrep",  2, bi_getIrrep_cmd);
     registerCommand("decomposeRep",  1, bi_decomposeRep_cmd);
     registerCommand("charTable",  1, bi_charTable_cmd);

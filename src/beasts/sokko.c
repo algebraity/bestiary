@@ -159,6 +159,7 @@ bool elemIsComplex(FieldElement x) {
 static bool matrixEntryCount(size_t rows, size_t cols, size_t* count) {
     if (count == NULL || rows == 0 || cols == 0 || rows > SIZE_MAX / cols) return false;
     *count = rows * cols;
+    if (*count > SIZE_MAX / sizeof(FieldElement)) return false;
     return true;
 }
 
@@ -334,6 +335,7 @@ void freeLU(LU* lu) {
         }
     }
     free(lu->data);
+    if (lu->field != NULL) freeMatrixField(lu->field);
     free(lu->perm);
     free(lu);
 }
@@ -549,14 +551,15 @@ LU* luDecompose(Matrix* matrix) {
 
     LU* lu = calloc(1, sizeof(LU));
     if (!lu) return NULL;
-    lu->field = matrix->field;
+    lu->field = copyMatrixField(matrix->field);
+    if (!lu->field) { freeLU(lu); return NULL; }
     lu->n = n;
     lu->sign = 1;
     lu->data = calloc(n * n, sizeof(FieldElement));
     lu->perm = malloc(n * sizeof(size_t));
     if (!lu->data || !lu->perm) { freeLU(lu); return NULL; }
     for (size_t i = 0; i < n * n; i++) {
-        lu->data[i] = copyFieldElement(matrix->data[i]);
+        lu->data[i] = copyFieldElementToField(lu->field, matrix->data[i]);
         if (!fieldElementIsValid(&lu->data[i])) { freeLU(lu); return NULL; }
     }
 
@@ -569,7 +572,7 @@ LU* luDecompose(Matrix* matrix) {
         // Choose a pivot using numeric magnitude when available, otherwise exact nonzero
         size_t pivot = k;
         bool foundPivot = false;
-        if (fieldSupportsNumericProjection(matrix->field)) {
+        if (fieldSupportsNumericProjection(lu->field)) {
             long double maxVal = 1e-12;
             for (size_t i = k; i < n; i++) {
                 long double v = elemAbs(a[i * n + k]);
