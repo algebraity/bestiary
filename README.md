@@ -10,6 +10,24 @@ Each BEAST is written from scratch in C. The wxWidgets-based GUI application, wh
 
 Bestiary is currently in active development, but as of v2.0.0, it can be expected to be stable and efficient for regular use. Future releases will add new features to the core BEAST libraries, add new BEASTs, and fix any bugs that may be discovered, but the core architecture, GUI layout, and basic functionality will remain the same. Bestiary has mostly been tested on the GNU/Linux operating system, so there is more support for it than for Windows, but it is supported and developed for Windows as well. Build files for an unofficial Mac version exist in the source, but MacOS is not supported at this time.
 
+## Features
+
+- LaTeX-inspired language: backslash commands, math-like syntax, native and LaTeX-style object definitions, variables, and expressions
+- Full programming language: loops, conditionals, dynamic arrays, user-defined functions, control flow
+- Unified CLI/REPL evaluator: hundreds of commands exposed through one environment, with shared syntax and object handling
+- GUI application: multiple shell tabs, scripting, searchable local help pages, graphing, automatic session save/restore
+- Graphing and visualization: 2D Graph tabs, 3D Graph tabs, KUMA Plot tabs, interactive pan/zoom/rotation/reset, PNG saving
+- HEBI: complex arithmetic, field arithmetic, basic mathematical functions, transcendental constants, shared data structures, PRG-powered randomness
+- Sokko: matrices, vectors, row and column reduction, determinants, eigenvalues, eigenvectors, LU decomposition, linear-algebra support for other BEASTs
+- USAGI: finite groups, rings, fields, subobjects, quotients, homomorphisms, ideals, constructors for common algebraic objects, advanced finite-algebra computations
+- NEKO: symbolic and numerical calculus, differentiation, integration, rootfinding, ODE solving, polynomial factorization over real and complex numbers, graph resampling support
+- TORA: finite-group representations, characters, irreducibility checks, character computations, fast character-table algorithms
+- PONI: kinematics, dynamics, forces, energy, work, vector-based physics calculations, multibody simulation tools
+- OOKAMI-ng: integer combinatorics, sumsets, difference sets, product sets, representation functions, additive/multiplicative energies, arithmetic progressions, geometric progressions
+- KUMA: probability and statistics, one- and two-variable statistics, common discrete and continuous distributions, random sampling, histograms, scatter plots, box plots, other statistical plots
+- Quaternionic: quaternions, octonions, Cayley-Dickson algebras over fields, CD arithmetic, zero-divisors, ideals, commutators, associators, quaternion matrix representations
+
+
 ## Installation
 
 To install Bestiary, download the latest release for your platform from the repository's Releases page. Extract the downloaded archive to a convenient location.
