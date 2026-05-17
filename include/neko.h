@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include "hebi.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -277,6 +278,8 @@ long double nekoEvalExpr(const NekoExpr* expr, const char* var, long double x);
 long double nekoEvalExpr2D(const NekoExpr* expr, const char* xvar, long double x, const char* yvar, long double y);
 long double nekoEvalExpr3D(const NekoExpr* expr, const char* xvar, long double x, const char* yvar, long double y, const char* zvar, long double z);
 NekoExpr* nekoSimplify(NekoExpr* expr);
+size_t nekoPolynomialFormulaRoots(const long double* coeffs, int degree, NekoExpr** roots, size_t maxRoots);
+size_t nekoPolynomialComplexFormulaRoots(const ComplexNumber* coeffs, int degree, NekoExpr** roots, size_t maxRoots);
 NekoDiffResult nekoDifferentiateExpr(const NekoExpr* expr, const char* var);
 NekoFunc* nekoFuncFromExpr(const NekoExpr* expr);
 NekoFunc* nekoFuncFromCallback(NekoEvalFn callback, void* userdata);

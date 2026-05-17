@@ -223,9 +223,9 @@ static const BuiltinDoc BUILTIN_DOCS[] = {
     { "randReal", "Generates a random real number in an inclusive range using HEBI's PRG.", "real numeric lower and upper", "Decimal" },
     { "randComplexComp", "Generates a random complex number from inclusive real and imaginary ranges using HEBI's PRG.", "real lower, real upper, imaginary lower, imaginary upper", "Complex" },
     { "randComplexMod", "Generates a random complex number whose modulus lies in an inclusive range using HEBI's PRG.", "nonnegative real modulus lower and upper", "Complex" },
-    { "solveQuadratic", "Solves a quadratic equation over the complex numbers.", "polynomial in x, List of coefficients, or coefficients a,b,c for a*x^2+b*x+c", "List of Decimal or Complex roots" },
-    { "solveCubic", "Solves a cubic equation over the complex numbers.", "polynomial in x, List of coefficients, or coefficients a,b,c,d for a*x^3+b*x^2+c*x+d", "List of Decimal or Complex roots" },
-    { "solveQuartic", "Solves a quartic equation over the complex numbers.", "polynomial in x, List of coefficients, or coefficients a,b,c,d,e for a*x^4+b*x^3+c*x^2+d*x+e", "List of Decimal or Complex roots" },
+    { "solveQuadratic", "Solves a quadratic equation by the exact quadratic formula over real or complex coefficients.", "polynomial in x, List of coefficients, or coefficients a,b,c for a*x^2+b*x+c", "List of exact formula expressions" },
+    { "solveCubic", "Solves a cubic equation by the exact cubic formula over real or complex coefficients.", "polynomial in x, List of coefficients, or coefficients a,b,c,d for a*x^3+b*x^2+c*x+d", "List of exact formula expressions" },
+    { "solveQuartic", "Solves a quartic equation by the exact quartic formula over real or complex coefficients.", "polynomial in x, List of coefficients, or coefficients a,b,c,d,e for a*x^4+b*x^3+c*x^2+d*x+e", "List of exact formula expressions" },
     { "if", "Evaluates the result branch when a condition is true, otherwise evaluates the optional else branch.", "Bool or truthy condition, result expression, and optional else expression", "selected branch value or none" },
     { "while", "Evaluates a body repeatedly while a condition remains true.", "truthy condition expression and loop body", "last body value or none" },
     { "for", "Evaluates an init, condition, and step header around a repeated body.", "header block of init; condition; step and loop body", "last body value or none" },
@@ -326,7 +326,7 @@ static const BuiltinDoc BUILTIN_DOCS[] = {
     { "int", "Integrates a NEKO expression with respect to x by default, optionally over numeric bounds, or with respect to an explicit variable.", "expression alone for symbolic integration in x; expression and Symbol/String variable for symbolic integration in that variable; expression plus numeric lower and upper bounds for definite integration in x; or expression, variable, lower bound, upper bound for definite integration in that variable", "NEKO expression for symbolic integrals, Decimal for definite integrals" },
     { "integral", "Alias for int.", "expression alone for symbolic integration in x; expression and Symbol/String variable for symbolic integration in that variable; expression plus numeric lower and upper bounds for definite integration in x; or expression, variable, lower bound, upper bound for definite integration in that variable", "NEKO expression for symbolic integrals, Decimal for definite integrals" },
     { "eval", "Evaluates a NEKO expression at a numeric value, using x by default or an explicit variable.", "expression and numeric value, or expression, Symbol/String variable, and numeric value", "Decimal" },
-    { "roots", "Finds roots of a supported expression in x, using real factorization before complex fallback for polynomials.", "Symbol/numeric/NEKO expression", "List of Decimal or Complex roots" },
+    { "roots", "Finds roots of a supported expression in x, using exact degree <= 4 formulae for real or complex polynomials before numerical fallback.", "Symbol/numeric/NEKO expression", "List of exact formula expressions for degree <= 4 polynomials, otherwise Decimal or Complex roots" },
     { "factorPoly", "Factors a polynomial in x over real roots currently found by the real factorer.", "Symbol/numeric/NEKO expression representing a polynomial in x", "NEKO expression" },
     { "factorPolyReal", "Factors a polynomial in x over real roots.", "Symbol/numeric/NEKO expression representing a polynomial in x", "NEKO expression" },
     { "factorPolyComplex", "Factors a polynomial in x over complex roots.", "Symbol/numeric/NEKO expression representing a polynomial in x", "Symbol containing a formatted complex factorization" },
@@ -1315,13 +1315,37 @@ static int valueIsNekoLike(Value v) {
 }
 
 static int valueCanBecomeNeko(Value v) {
-    return valueIsNekoLike(v) || valIsNumeric(v);
+    return valueIsNekoLike(v) || valIsNumeric(v) || v.kind == VAL_COMPLEX;
+}
+
+static int evalNearZero(long double x) {
+    return fabsl(x) < 1e-12L;
+}
+
+static NekoExpr* complexValueToNekoExpr(ComplexNumber z) {
+    if (evalNearZero(z.real)) z.real = 0.0L;
+    if (evalNearZero(z.imag)) z.imag = 0.0L;
+    if (z.imag == 0.0L) return nekoConst(z.real);
+
+    NekoExpr* imagUnit = nekoVar("i");
+    NekoExpr* imagTerm = NULL;
+    if (evalNearZero(z.imag - 1.0L)) {
+        imagTerm = imagUnit;
+    } else if (evalNearZero(z.imag + 1.0L)) {
+        imagTerm = nekoNeg(imagUnit);
+    } else {
+        imagTerm = nekoMul(nekoConst(z.imag), imagUnit);
+    }
+
+    if (z.real == 0.0L) return nekoSimplify(imagTerm);
+    return nekoSimplify(nekoAdd(nekoConst(z.real), imagTerm));
 }
 
 static NekoExpr* valueToNekoExpr(Value v) {
     if (v.kind == VAL_NEKO_EXPR) return nekoCloneExpr((NekoExpr*)v.as.ptr);
     if (v.kind == VAL_SYMBOL) return nekoVar(v.as.str ? v.as.str : "x");
     if (valIsNumeric(v)) return nekoConst(valToDouble(v));
+    if (v.kind == VAL_COMPLEX) return complexValueToNekoExpr(v.as.cplx);
     return NULL;
 }
 
@@ -8258,6 +8282,111 @@ static int extractPolyCoeffs(const NekoExpr* expr, const char* var, long double*
     }
 }
 
+static int complexCoeffNearZero(ComplexNumber z) {
+    return fabsl(z.real) < 1e-12L && fabsl(z.imag) < 1e-12L;
+}
+
+static int degreeFromComplexCoeffs(const ComplexNumber* coeffs, int degree) {
+    while (degree > 0 && complexCoeffNearZero(coeffs[degree])) degree--;
+    return degree;
+}
+
+static void clearComplexCoeffs(ComplexNumber* coeffs) {
+    for (int i = 0; i <= NEKO_REPL_MAX_POLY_DEG; i++)
+        coeffs[i] = (ComplexNumber){0.0L, 0.0L};
+}
+
+static int extractComplexPolyCoeffs(const NekoExpr* expr, const char* var,
+                                    ComplexNumber* coeffs, int* degree) {
+    if (!expr || !coeffs || !degree) return 0;
+    clearComplexCoeffs(coeffs);
+
+    switch (expr->kind) {
+        case NEKO_EXPR_CONST:
+            coeffs[0] = (ComplexNumber){expr->as.constant, 0.0L};
+            *degree = 0;
+            return 1;
+        case NEKO_EXPR_VAR:
+            if (expr->as.var && strcmp(expr->as.var, var) == 0) {
+                coeffs[1] = (ComplexNumber){1.0L, 0.0L};
+                *degree = 1;
+                return 1;
+            }
+            if (expr->as.var && strcmp(expr->as.var, "i") == 0) {
+                coeffs[0] = (ComplexNumber){0.0L, 1.0L};
+                *degree = 0;
+                return 1;
+            }
+            return 0;
+        case NEKO_EXPR_NEG:
+            if (!extractComplexPolyCoeffs(expr->as.unary.arg, var, coeffs, degree)) return 0;
+            for (int i = 0; i <= *degree; i++) coeffs[i] = complexNeg(coeffs[i]);
+            return 1;
+        case NEKO_EXPR_ADD:
+        case NEKO_EXPR_SUB: {
+            ComplexNumber lhs[NEKO_REPL_MAX_POLY_DEG + 1] = {0};
+            ComplexNumber rhs[NEKO_REPL_MAX_POLY_DEG + 1] = {0};
+            int dl = 0, dr = 0;
+            if (!extractComplexPolyCoeffs(expr->as.binary.lhs, var, lhs, &dl)) return 0;
+            if (!extractComplexPolyCoeffs(expr->as.binary.rhs, var, rhs, &dr)) return 0;
+            int d = dl > dr ? dl : dr;
+            for (int i = 0; i <= d; i++) {
+                coeffs[i] = expr->kind == NEKO_EXPR_ADD
+                    ? complexAdd(lhs[i], rhs[i])
+                    : complexSub(lhs[i], rhs[i]);
+            }
+            *degree = degreeFromComplexCoeffs(coeffs, d);
+            return 1;
+        }
+        case NEKO_EXPR_MUL: {
+            ComplexNumber lhs[NEKO_REPL_MAX_POLY_DEG + 1] = {0};
+            ComplexNumber rhs[NEKO_REPL_MAX_POLY_DEG + 1] = {0};
+            int dl = 0, dr = 0;
+            if (!extractComplexPolyCoeffs(expr->as.binary.lhs, var, lhs, &dl)) return 0;
+            if (!extractComplexPolyCoeffs(expr->as.binary.rhs, var, rhs, &dr)) return 0;
+            if (dl + dr > NEKO_REPL_MAX_POLY_DEG) return 0;
+            for (int i = 0; i <= dl; i++)
+                for (int j = 0; j <= dr; j++)
+                    coeffs[i + j] = complexAdd(coeffs[i + j], complexMul(lhs[i], rhs[j]));
+            *degree = degreeFromComplexCoeffs(coeffs, dl + dr);
+            return 1;
+        }
+        case NEKO_EXPR_DIV: {
+            ComplexNumber lhs[NEKO_REPL_MAX_POLY_DEG + 1] = {0};
+            ComplexNumber rhs[NEKO_REPL_MAX_POLY_DEG + 1] = {0};
+            int dl = 0, dr = 0;
+            if (!extractComplexPolyCoeffs(expr->as.binary.lhs, var, lhs, &dl)) return 0;
+            if (!extractComplexPolyCoeffs(expr->as.binary.rhs, var, rhs, &dr)) return 0;
+            if (dr != 0 || complexCoeffNearZero(rhs[0])) return 0;
+            for (int i = 0; i <= dl; i++) coeffs[i] = complexDiv(lhs[i], rhs[0]);
+            *degree = degreeFromComplexCoeffs(coeffs, dl);
+            return 1;
+        }
+        case NEKO_EXPR_POW: {
+            if (!expr->as.binary.rhs || expr->as.binary.rhs->kind != NEKO_EXPR_CONST) return 0;
+            int power = 0;
+            if (!isNonnegativeInteger(expr->as.binary.rhs->as.constant, &power)) return 0;
+            ComplexNumber base[NEKO_REPL_MAX_POLY_DEG + 1] = {0};
+            int db = 0;
+            if (!extractComplexPolyCoeffs(expr->as.binary.lhs, var, base, &db)) return 0;
+            coeffs[0] = (ComplexNumber){1.0L, 0.0L};
+            *degree = 0;
+            for (int k = 0; k < power; k++) {
+                ComplexNumber next[NEKO_REPL_MAX_POLY_DEG + 1] = {0};
+                if (*degree + db > NEKO_REPL_MAX_POLY_DEG) return 0;
+                for (int i = 0; i <= *degree; i++)
+                    for (int j = 0; j <= db; j++)
+                        next[i + j] = complexAdd(next[i + j], complexMul(coeffs[i], base[j]));
+                for (int i = 0; i <= NEKO_REPL_MAX_POLY_DEG; i++) coeffs[i] = next[i];
+                *degree = degreeFromComplexCoeffs(coeffs, *degree + db);
+            }
+            return 1;
+        }
+        default:
+            return 0;
+    }
+}
+
 static long double evalPolyCoeffs(const long double* coeffs, int degree, long double x) {
     long double y = coeffs[degree];
     for (int i = degree - 1; i >= 0; i--) y = y * x + coeffs[i];
@@ -8402,6 +8531,38 @@ static Value rootsList(long double* roots, int nroots) {
     if (!items && nroots > 0) return valError("out of memory while building root list");
     for (int i = 0; i < nroots; i++) items[i] = valDecimal(roots[i]);
     return valList(items, (size_t)nroots);
+}
+
+static Value exactFormulaRootsList(NekoExpr** roots, size_t count) {
+    Value* items = calloc(count, sizeof(Value));
+    if (!items && count > 0) {
+        for (size_t i = 0; i < count; i++) nekoFreeExpr(roots[i]);
+        return valError("out of memory while building exact root list");
+    }
+    for (size_t i = 0; i < count; i++) {
+        items[i] = roots[i] ? valPtr(VAL_NEKO_EXPR, roots[i])
+                            : valError("failed to build exact root formula");
+        roots[i] = NULL;
+    }
+    return valList(items, count);
+}
+
+static Value polynomialComplexFormulaRootsList(const ComplexNumber* coeffs, int degree) {
+    NekoExpr* roots[4] = {0};
+    size_t count = nekoPolynomialComplexFormulaRoots(coeffs, degree, roots, 4);
+    return exactFormulaRootsList(roots, count);
+}
+
+static int lowOrderComplexCoeffsAreReal(const ComplexNumber* coeffs, int degree) {
+    if (!coeffs) return 0;
+    for (int i = 0; i <= degree; i++)
+        if (fabsl(coeffs[i].imag) > 1e-12L) return 0;
+    return 1;
+}
+
+static void lowOrderComplexCoeffsToReal(const ComplexNumber* coeffs, int degree,
+                                        long double* out) {
+    for (int i = 0; i <= degree; i++) out[i] = coeffs[i].real;
 }
 
 static void appendRealRoot(long double* roots, int* nroots, long double root) {
@@ -8598,13 +8759,6 @@ static Value polynomialRootsRealThenComplexList(const long double* coeffs, int d
     return valList(items, (size_t)total);
 }
 
-static Value complexRootsList(ComplexNumber* roots, size_t count) {
-    Value* items = calloc(count, sizeof(Value));
-    if (!items && count > 0) return valError("out of memory while building root list");
-    for (size_t i = 0; i < count; i++) items[i] = valueFromComplexNumber(roots[i]);
-    return valList(items, count);
-}
-
 static void freeCommandArgs(Value* a, size_t n) {
     for (size_t i = 0; i < n; i++) valFree(a[i]);
 }
@@ -8633,15 +8787,15 @@ static int solverCoeffsFromExpression(Value value, size_t expected, ComplexNumbe
     }
     if (!expr) return 0;
 
-    long double realCoeffs[NEKO_REPL_MAX_POLY_DEG + 1] = {0};
+    ComplexNumber polyCoeffs[NEKO_REPL_MAX_POLY_DEG + 1] = {0};
     int degree = 0;
-    int ok = extractPolyCoeffs(expr, "x", realCoeffs, &degree);
+    int ok = extractComplexPolyCoeffs(expr, "x", polyCoeffs, &degree);
     nekoFreeExpr(expr);
     if (!ok || degree > (int)expected - 1) return 0;
 
     for (size_t i = 0; i < expected; i++) coeffs[i] = (ComplexNumber){0.0L, 0.0L};
     for (int power = 0; power <= degree; power++) {
-        coeffs[expected - 1 - (size_t)power] = (ComplexNumber){realCoeffs[power], 0.0L};
+        coeffs[expected - 1 - (size_t)power] = polyCoeffs[power];
     }
     return 1;
 }
@@ -8674,18 +8828,11 @@ static Value solvePolynomialCommand(Value* a, size_t n, size_t expected, const c
         return valError(buf);
     }
 
-    ComplexNumber roots[4] = {0};
-    size_t count = 0;
-    if (expected == 3) {
-        count = solveQuadratic(coeffs[0], coeffs[1], coeffs[2], roots);
-    } else if (expected == 4) {
-        count = solveCubic(coeffs[0], coeffs[1], coeffs[2], coeffs[3], roots);
-    } else {
-        count = solveQuartic(coeffs[0], coeffs[1], coeffs[2], coeffs[3], coeffs[4], roots);
-    }
-
+    ComplexNumber lowOrder[5] = {0};
+    for (size_t i = 0; i < expected; i++) lowOrder[i] = coeffs[expected - 1 - i];
+    Value out = polynomialComplexFormulaRootsList(lowOrder, (int)expected - 1);
     freeCommandArgs(a, n);
-    return complexRootsList(roots, count);
+    return out;
 }
 
 static Value bi_solveQuadratic(EvalContext* c, Value* a, size_t n) {
@@ -8842,11 +8989,18 @@ static Value bi_roots(EvalContext* c, Value* a, size_t n) {
 
     long double roots[NEKO_REPL_MAX_ROOTS] = {0};
     int nroots = 0;
-    long double coeffs[NEKO_REPL_MAX_POLY_DEG + 1] = {0};
+    ComplexNumber complexCoeffs[NEKO_REPL_MAX_POLY_DEG + 1] = {0};
     int degree = 0;
-    if (extractPolyCoeffs(expr, "x", coeffs, &degree)) {
+    if (extractComplexPolyCoeffs(expr, "x", complexCoeffs, &degree)) {
         nekoFreeExpr(expr);
-        return polynomialRootsRealThenComplexList(coeffs, degree);
+        if (degree <= 4)
+            return polynomialComplexFormulaRootsList(complexCoeffs, degree);
+        if (lowOrderComplexCoeffsAreReal(complexCoeffs, degree)) {
+            long double coeffs[NEKO_REPL_MAX_POLY_DEG + 1] = {0};
+            lowOrderComplexCoeffsToReal(complexCoeffs, degree, coeffs);
+            return polynomialRootsRealThenComplexList(coeffs, degree);
+        }
+        return valError("\\roots supports complex polynomial coefficients only through degree 4");
     } else {
         arbitraryRealRoots(expr, roots, &nroots);
     }

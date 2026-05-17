@@ -55,26 +55,9 @@ static int envList(EvalContext* ctx, const char* name, Value* out) {
     return 1;
 }
 
-static int valueIsRoot(Value value, long double real, long double imag) {
-    if (value.kind == VAL_COMPLEX) {
-        return fabsl(value.as.cplx.real - real) <= 1e-8L
-            && fabsl(value.as.cplx.imag - imag) <= 1e-8L;
-    }
-    if (imag != 0.0L || !valIsNumeric(value)) return 0;
-    return fabsl(valToDouble(value) - real) <= 1e-8L;
-}
-
 static int valueNumericEquals(Value value, long double expected) {
     if (!valIsNumeric(value)) return 0;
     return fabsl(valToDouble(value) - expected) <= 1e-8L;
-}
-
-static int listHasRoot(Value list, long double real, long double imag) {
-    if (list.kind != VAL_LIST) return 0;
-    for (size_t i = 0; i < list.as.list.n; i++) {
-        if (valueIsRoot(list.as.list.items[i], real, imag)) return 1;
-    }
-    return 0;
 }
 
 static int printValueToBuffer(Value value, char* buf, size_t bufSize) {
@@ -111,6 +94,20 @@ static int printValueToBuffer(Value value, char* buf, size_t bufSize) {
     size_t nread = fread(buf, 1, bufSize - 1, tmp);
     buf[nread] = '\0';
     fclose(tmp);
+    return 1;
+}
+
+static int valuePrintContains(Value value, const char* needle) {
+    char buf[4096];
+    return needle
+        && printValueToBuffer(value, buf, sizeof(buf))
+        && strstr(buf, needle) != NULL;
+}
+
+static int listItemsHaveKind(Value list, ValueKind kind) {
+    if (list.kind != VAL_LIST) return 0;
+    for (size_t i = 0; i < list.as.list.n; i++)
+        if (list.as.list.items[i].kind != kind) return 0;
     return 1;
 }
 
@@ -829,33 +826,70 @@ static void testPolynomialSolveCommands(void) {
 
     Value out = evalLine(ctx, "\\solveQuadratic{1,-3,2}");
     CHECK(out.kind == VAL_LIST && out.as.list.n == 2
-          && listHasRoot(out, 1.0L, 0.0L)
-          && listHasRoot(out, 2.0L, 0.0L),
-          "solveQuadratic accepts coefficient arguments");
+          && listItemsHaveKind(out, VAL_NEKO_EXPR)
+          && valuePrintContains(out, "[1, 2]"),
+          "solveQuadratic returns exact formula expressions for coefficient arguments");
     valFree(out);
 
     out = evalLine(ctx, "\\solveQuadratic{\"x^2 + 1\"}");
     CHECK(out.kind == VAL_LIST && out.as.list.n == 2
-          && listHasRoot(out, 0.0L, -1.0L)
-          && listHasRoot(out, 0.0L, 1.0L),
-          "solveQuadratic accepts polynomial strings");
+          && listItemsHaveKind(out, VAL_NEKO_EXPR)
+          && valuePrintContains(out, "[-i, i]"),
+          "solveQuadratic returns exact imaginary-unit expressions for polynomial strings");
+    valFree(out);
+
+    out = evalLine(ctx, "\\solveQuadratic{x^2 + 2*x + 3}");
+    CHECK(out.kind == VAL_LIST && out.as.list.n == 2
+          && listItemsHaveKind(out, VAL_NEKO_EXPR)
+          && valuePrintContains(out, "sqrt(8) * i"),
+          "solveQuadratic accepts unquoted polynomial expressions");
+    valFree(out);
+
+    out = evalLine(ctx, "\\solveQuadratic{1,i,1}");
+    CHECK(out.kind == VAL_LIST && out.as.list.n == 2
+          && listItemsHaveKind(out, VAL_NEKO_EXPR)
+          && valuePrintContains(out, "sqrt(5) * i"),
+          "solveQuadratic returns exact expressions for complex coefficients");
+    valFree(out);
+
+    out = evalLine(ctx, "\\solveQuadratic{x^2 + i*x + 1}");
+    CHECK(out.kind == VAL_LIST && out.as.list.n == 2
+          && listItemsHaveKind(out, VAL_NEKO_EXPR)
+          && valuePrintContains(out, "sqrt(5) * i"),
+          "solveQuadratic accepts unquoted polynomials with complex coefficients");
     valFree(out);
 
     out = evalLine(ctx, "\\solveCubic{\\list{1,-6,11,-6}}");
     CHECK(out.kind == VAL_LIST && out.as.list.n == 3
-          && listHasRoot(out, 1.0L, 0.0L)
-          && listHasRoot(out, 2.0L, 0.0L)
-          && listHasRoot(out, 3.0L, 0.0L),
-          "solveCubic accepts coefficient lists");
+          && listItemsHaveKind(out, VAL_NEKO_EXPR)
+          && valuePrintContains(out, "^ (1 / 3)")
+          && valuePrintContains(out, "sqrt(108) * i"),
+          "solveCubic returns exact Cardano expressions for coefficient lists");
     valFree(out);
 
     out = evalLine(ctx, "\\solveQuartic{1,0,-5,0,4}");
     CHECK(out.kind == VAL_LIST && out.as.list.n == 4
-          && listHasRoot(out, -2.0L, 0.0L)
-          && listHasRoot(out, -1.0L, 0.0L)
-          && listHasRoot(out, 1.0L, 0.0L)
-          && listHasRoot(out, 2.0L, 0.0L),
-          "solveQuartic accepts zero middle coefficients");
+          && listItemsHaveKind(out, VAL_NEKO_EXPR)
+          && valuePrintContains(out, "2")
+          && valuePrintContains(out, "-2")
+          && valuePrintContains(out, "1")
+          && valuePrintContains(out, "-1"),
+          "solveQuartic returns exact Ferrari expressions for zero middle coefficients");
+    valFree(out);
+
+    out = evalLine(ctx, "\\solveQuartic{1,0,-3,1,-0.75}");
+    CHECK(out.kind == VAL_LIST && out.as.list.n == 4
+          && listItemsHaveKind(out, VAL_NEKO_EXPR)
+          && valuePrintContains(out, "^ (1 / 3)")
+          && valuePrintContains(out, "sqrt("),
+          "solveQuartic handles the non-biquadratic Ferrari branch exactly");
+    valFree(out);
+
+    out = evalLine(ctx, "\\roots{x^2 + 1}");
+    CHECK(out.kind == VAL_LIST && out.as.list.n == 2
+          && listItemsHaveKind(out, VAL_NEKO_EXPR)
+          && valuePrintContains(out, "[-i, i]"),
+          "roots prefers exact formula expressions for supported polynomial degree");
     valFree(out);
 
     out = evalLine(ctx, "\\solveQuartic{}");

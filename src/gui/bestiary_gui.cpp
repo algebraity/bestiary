@@ -4210,6 +4210,7 @@ public:
         m_pages = new wxSimplebook(this);
                 StyleDarkWindow(m_pages, theme::kPanelBg);
         Bind(wxEVT_CHAR_HOOK, &MainFrame::OnCharHook, this);
+        Bind(wxEVT_SIZING, &MainFrame::OnFrameSizing, this);
         Bind(wxEVT_SIZE, &MainFrame::OnFrameSize, this);
         Bind(wxEVT_CLOSE_WINDOW, &MainFrame::OnClose, this);
 
@@ -4240,6 +4241,34 @@ private:
             height = (int)ceil((double)width / kMaxFrameAspect);
 
         return wxSize(width, height);
+    }
+
+    wxRect GraphFriendlyFrameRect(const wxRect& rect) const {
+        wxSize adjustedSize = GraphFriendlyFrameSize(rect.GetSize());
+        if (adjustedSize == rect.GetSize()) return rect;
+
+        wxRect adjusted = rect;
+        wxRect current = GetScreenRect();
+        bool leftEdgeMoved = rect.GetLeft() != current.GetLeft();
+        bool topEdgeMoved = rect.GetTop() != current.GetTop();
+        int right = rect.GetRight();
+        int bottom = rect.GetBottom();
+
+        adjusted.SetSize(adjustedSize);
+        if (leftEdgeMoved) adjusted.SetX(right - adjustedSize.x + 1);
+        if (topEdgeMoved) adjusted.SetY(bottom - adjustedSize.y + 1);
+
+        return adjusted;
+    }
+
+    void OnFrameSizing(wxSizeEvent& evt) {
+        if (!IsMaximized() && !IsFullScreen()) {
+            wxRect current = evt.GetRect();
+            wxRect adjusted = GraphFriendlyFrameRect(current);
+            if (adjusted != current)
+                evt.SetRect(adjusted);
+        }
+        evt.Skip();
     }
 
     void OnFrameSize(wxSizeEvent& evt) {

@@ -395,6 +395,862 @@ NekoExpr* nekoCloneExpr(const NekoExpr* expr) {
     return NULL;
 }
 
+/* ---------- Exact polynomial root formulae ---------- */
+
+static bool formulaNearZero(long double x) {
+    return fabsl(x) < 1e-12L;
+}
+
+static bool formulaComplexNearZero(ComplexNumber z) {
+    return formulaNearZero(z.real) && formulaNearZero(z.imag);
+}
+
+static ComplexNumber formulaComplexScale(ComplexNumber z, long double scalar) {
+    return (ComplexNumber){ .real = z.real * scalar, .imag = z.imag * scalar };
+}
+
+static NekoExpr* formulaConst(long double x) {
+    if (formulaNearZero(x)) x = 0.0L;
+    return nekoConst(x);
+}
+
+static bool formulaConstValue(const NekoExpr* expr, long double* out) {
+    if (!expr || expr->kind != NEKO_EXPR_CONST) return false;
+    if (out) *out = expr->as.constant;
+    return true;
+}
+
+static void formulaFreeRoots(NekoExpr** roots, size_t count) {
+    if (!roots) return;
+    for (size_t i = 0; i < count; i++) {
+        nekoFreeExpr(roots[i]);
+        roots[i] = NULL;
+    }
+}
+
+static NekoExpr* formulaNegOwned(NekoExpr* expr) {
+    long double value = 0.0L;
+    if (!expr) return NULL;
+    if (formulaConstValue(expr, &value)) {
+        nekoFreeExpr(expr);
+        return formulaConst(-value);
+    }
+    if (expr->kind == NEKO_EXPR_NEG) {
+        NekoExpr* out = expr->as.unary.arg;
+        expr->as.unary.arg = NULL;
+        nekoFreeExpr(expr);
+        return out;
+    }
+    return nekoNeg(expr);
+}
+
+static NekoExpr* formulaAddOwned(NekoExpr* lhs, NekoExpr* rhs) {
+    long double l = 0.0L, r = 0.0L;
+    if (!lhs || !rhs) {
+        nekoFreeExpr(lhs);
+        nekoFreeExpr(rhs);
+        return NULL;
+    }
+    if (formulaConstValue(lhs, &l) && formulaNearZero(l)) {
+        nekoFreeExpr(lhs);
+        return rhs;
+    }
+    if (formulaConstValue(rhs, &r) && formulaNearZero(r)) {
+        nekoFreeExpr(rhs);
+        return lhs;
+    }
+    if (formulaConstValue(lhs, &l) && formulaConstValue(rhs, &r)) {
+        nekoFreeExpr(lhs);
+        nekoFreeExpr(rhs);
+        return formulaConst(l + r);
+    }
+    return nekoAdd(lhs, rhs);
+}
+
+static NekoExpr* formulaSubOwned(NekoExpr* lhs, NekoExpr* rhs) {
+    long double l = 0.0L, r = 0.0L;
+    if (!lhs || !rhs) {
+        nekoFreeExpr(lhs);
+        nekoFreeExpr(rhs);
+        return NULL;
+    }
+    if (formulaConstValue(rhs, &r) && formulaNearZero(r)) {
+        nekoFreeExpr(rhs);
+        return lhs;
+    }
+    if (formulaConstValue(lhs, &l) && formulaNearZero(l)) {
+        nekoFreeExpr(lhs);
+        return formulaNegOwned(rhs);
+    }
+    if (formulaConstValue(lhs, &l) && formulaConstValue(rhs, &r)) {
+        nekoFreeExpr(lhs);
+        nekoFreeExpr(rhs);
+        return formulaConst(l - r);
+    }
+    return nekoSub(lhs, rhs);
+}
+
+static NekoExpr* formulaMulOwned(NekoExpr* lhs, NekoExpr* rhs) {
+    long double l = 0.0L, r = 0.0L;
+    if (!lhs || !rhs) {
+        nekoFreeExpr(lhs);
+        nekoFreeExpr(rhs);
+        return NULL;
+    }
+    if ((formulaConstValue(lhs, &l) && formulaNearZero(l))
+            || (formulaConstValue(rhs, &r) && formulaNearZero(r))) {
+        nekoFreeExpr(lhs);
+        nekoFreeExpr(rhs);
+        return formulaConst(0.0L);
+    }
+    if (formulaConstValue(lhs, &l) && formulaNearZero(l - 1.0L)) {
+        nekoFreeExpr(lhs);
+        return rhs;
+    }
+    if (formulaConstValue(rhs, &r) && formulaNearZero(r - 1.0L)) {
+        nekoFreeExpr(rhs);
+        return lhs;
+    }
+    if (formulaConstValue(lhs, &l) && formulaNearZero(l + 1.0L)) {
+        nekoFreeExpr(lhs);
+        return formulaNegOwned(rhs);
+    }
+    if (formulaConstValue(rhs, &r) && formulaNearZero(r + 1.0L)) {
+        nekoFreeExpr(rhs);
+        return formulaNegOwned(lhs);
+    }
+    if (formulaConstValue(lhs, &l) && formulaConstValue(rhs, &r)) {
+        nekoFreeExpr(lhs);
+        nekoFreeExpr(rhs);
+        return formulaConst(l * r);
+    }
+    return nekoMul(lhs, rhs);
+}
+
+static NekoExpr* formulaDivOwned(NekoExpr* lhs, NekoExpr* rhs) {
+    long double l = 0.0L, r = 0.0L;
+    if (!lhs || !rhs) {
+        nekoFreeExpr(lhs);
+        nekoFreeExpr(rhs);
+        return NULL;
+    }
+    if (formulaConstValue(rhs, &r) && formulaNearZero(r)) return nekoDiv(lhs, rhs);
+    if (formulaConstValue(rhs, &r) && formulaNearZero(r - 1.0L)) {
+        nekoFreeExpr(rhs);
+        return lhs;
+    }
+    if (formulaConstValue(rhs, &r) && formulaNearZero(r + 1.0L)) {
+        nekoFreeExpr(rhs);
+        return formulaNegOwned(lhs);
+    }
+    if (formulaConstValue(lhs, &l) && formulaNearZero(l)) {
+        nekoFreeExpr(lhs);
+        nekoFreeExpr(rhs);
+        return formulaConst(0.0L);
+    }
+    if (rhs->kind == NEKO_EXPR_CONST && !formulaNearZero(rhs->as.constant)
+            && lhs->kind == NEKO_EXPR_NEG) {
+        NekoExpr* inner = lhs->as.unary.arg;
+        lhs->as.unary.arg = NULL;
+        nekoFreeExpr(lhs);
+        return formulaNegOwned(formulaDivOwned(inner, rhs));
+    }
+    if (rhs->kind == NEKO_EXPR_CONST && !formulaNearZero(rhs->as.constant)
+            && lhs->kind == NEKO_EXPR_MUL) {
+        NekoExpr* left = lhs->as.binary.lhs;
+        NekoExpr* right = lhs->as.binary.rhs;
+        long double denom = rhs->as.constant;
+        NekoExpr* constantFactor = NULL;
+        NekoExpr* otherFactor = NULL;
+        if (formulaConstValue(left, &l)) {
+            constantFactor = left;
+            otherFactor = right;
+        } else if (formulaConstValue(right, &l)) {
+            constantFactor = right;
+            otherFactor = left;
+        }
+        if (constantFactor && otherFactor) {
+            long double quotient = l / denom;
+            long double rounded = roundl(quotient);
+            if (fabsl(quotient - rounded) < 1e-12L) {
+                lhs->as.binary.lhs = NULL;
+                lhs->as.binary.rhs = NULL;
+                nekoFreeExpr(lhs);
+                nekoFreeExpr(constantFactor);
+                nekoFreeExpr(rhs);
+                if (formulaNearZero(rounded - 1.0L)) return otherFactor;
+                if (formulaNearZero(rounded + 1.0L)) return formulaNegOwned(otherFactor);
+                return formulaMulOwned(formulaConst(rounded), otherFactor);
+            }
+        }
+    }
+    if (formulaConstValue(lhs, &l) && formulaConstValue(rhs, &r) && !formulaNearZero(r)) {
+        long double quotient = l / r;
+        long double rounded = roundl(quotient);
+        if (fabsl(quotient - rounded) < 1e-12L) {
+            nekoFreeExpr(lhs);
+            nekoFreeExpr(rhs);
+            return formulaConst(rounded);
+        }
+    }
+    return nekoDiv(lhs, rhs);
+}
+
+static NekoExpr* formulaScaleOwned(NekoExpr* expr, long double numerator, long double denominator) {
+    long double value = 0.0L;
+    if (formulaConstValue(expr, &value) && !formulaNearZero(denominator)) {
+        long double scaled = value * numerator / denominator;
+        long double rounded = roundl(scaled);
+        if (fabsl(scaled - rounded) < 1e-12L) {
+            nekoFreeExpr(expr);
+            return formulaConst(rounded);
+        }
+    }
+    return formulaMulOwned(formulaDivOwned(formulaConst(numerator), formulaConst(denominator)), expr);
+}
+
+static NekoExpr* formulaImagUnit(void) {
+    return nekoVar("i");
+}
+
+static NekoExpr* formulaImagTerm(long double imag) {
+    if (formulaNearZero(imag)) return formulaConst(0.0L);
+    if (formulaNearZero(imag - 1.0L)) return formulaImagUnit();
+    if (formulaNearZero(imag + 1.0L)) return formulaNegOwned(formulaImagUnit());
+    return formulaMulOwned(formulaConst(imag), formulaImagUnit());
+}
+
+static NekoExpr* formulaComplexConst(ComplexNumber z) {
+    if (formulaNearZero(z.real)) z.real = 0.0L;
+    if (formulaNearZero(z.imag)) z.imag = 0.0L;
+    if (z.imag == 0.0L) return formulaConst(z.real);
+
+    if (z.real == 0.0L) return formulaImagTerm(z.imag);
+    if (z.imag > 0.0L)
+        return formulaAddOwned(formulaConst(z.real), formulaImagTerm(z.imag));
+    return formulaSubOwned(formulaConst(z.real), formulaImagTerm(-z.imag));
+}
+
+static NekoExpr* formulaSquareClone(const NekoExpr* expr) {
+    return formulaMulOwned(nekoCloneExpr(expr), nekoCloneExpr(expr));
+}
+
+static NekoExpr* formulaCubeClone(const NekoExpr* expr) {
+    return formulaMulOwned(formulaSquareClone(expr), nekoCloneExpr(expr));
+}
+
+static NekoExpr* formulaFourthClone(const NekoExpr* expr) {
+    return formulaMulOwned(formulaSquareClone(expr), formulaSquareClone(expr));
+}
+
+static NekoExpr* formulaSqrtOwned(NekoExpr* arg) {
+    long double value = 0.0L;
+    if (!arg) return NULL;
+    if (formulaConstValue(arg, &value)) {
+        if (value >= 0.0L) {
+            long double root = sqrtl(value);
+            long double rounded = roundl(root);
+            if (fabsl(root - rounded) < 1e-12L) {
+                nekoFreeExpr(arg);
+                return formulaConst(rounded);
+            }
+        } else {
+            nekoFreeExpr(arg);
+            return formulaMulOwned(formulaSqrtOwned(formulaConst(-value)), formulaImagUnit());
+        }
+    }
+    return nekoSqrt(arg);
+}
+
+static NekoExpr* formulaComplexSqrtConst(ComplexNumber z) {
+    if (formulaNearZero(z.real)) z.real = 0.0L;
+    if (formulaNearZero(z.imag)) z.imag = 0.0L;
+    if (z.imag == 0.0L) return formulaSqrtOwned(formulaConst(z.real));
+
+    NekoExpr* modulus = formulaSqrtOwned(
+        formulaAddOwned(formulaConst(z.real * z.real), formulaConst(z.imag * z.imag)));
+    NekoExpr* realPart = formulaSqrtOwned(
+        formulaDivOwned(formulaAddOwned(nekoCloneExpr(modulus), formulaConst(z.real)), formulaConst(2.0L)));
+    NekoExpr* imagPart = formulaSqrtOwned(
+        formulaDivOwned(formulaSubOwned(modulus, formulaConst(z.real)), formulaConst(2.0L)));
+    NekoExpr* imagTerm = formulaMulOwned(imagPart, formulaImagUnit());
+    return z.imag < 0.0L ? formulaSubOwned(realPart, imagTerm)
+                         : formulaAddOwned(realPart, imagTerm);
+}
+
+static NekoExpr* formulaCbrtOwned(NekoExpr* arg) {
+    long double value = 0.0L;
+    if (!arg) return NULL;
+    if (formulaConstValue(arg, &value)) {
+        long double root = cbrtl(value);
+        long double rounded = roundl(root);
+        if (fabsl(root - rounded) < 1e-12L) {
+            nekoFreeExpr(arg);
+            return formulaConst(rounded);
+        }
+    }
+    return nekoPow(arg, formulaDivOwned(formulaConst(1.0L), formulaConst(3.0L)));
+}
+
+static NekoExpr* formulaOmega(int power) {
+    if (power == 0) return formulaConst(1.0L);
+
+    NekoExpr* radical = formulaSqrtOwned(formulaConst(-3.0L));
+    NekoExpr* numerator = power == 1
+        ? formulaAddOwned(formulaConst(-1.0L), radical)
+        : formulaSubOwned(formulaConst(-1.0L), radical);
+    return formulaDivOwned(numerator, formulaConst(2.0L));
+}
+
+static int formulaDegreeFromCoeffs(const long double* coeffs, int degree) {
+    if (!coeffs) return -1;
+    while (degree > 0 && formulaNearZero(coeffs[degree])) degree--;
+    return degree;
+}
+
+static size_t formulaLinearRoots(long double a, long double b, NekoExpr** roots, size_t maxRoots) {
+    if (!roots || maxRoots < 1 || formulaNearZero(a)) return 0;
+    roots[0] = formulaNegOwned(formulaDivOwned(formulaConst(b), formulaConst(a)));
+    return roots[0] ? 1 : 0;
+}
+
+static size_t formulaQuadraticRoots(long double a, long double b, long double c,
+                                    NekoExpr** roots, size_t maxRoots) {
+    if (!roots || maxRoots < 2) return 0;
+    if (formulaNearZero(a)) return formulaLinearRoots(b, c, roots, maxRoots);
+
+    NekoExpr* discriminant = formulaSubOwned(
+        formulaConst(b * b),
+        formulaConst(4.0L * a * c));
+    NekoExpr* radical = formulaSqrtOwned(discriminant);
+    if (!radical) return 0;
+
+    roots[0] = formulaDivOwned(
+        formulaSubOwned(formulaConst(-b), nekoCloneExpr(radical)),
+        formulaConst(2.0L * a));
+    roots[1] = formulaDivOwned(
+        formulaAddOwned(formulaConst(-b), radical),
+        formulaConst(2.0L * a));
+    if (!roots[0] || !roots[1]) {
+        formulaFreeRoots(roots, 2);
+        return 0;
+    }
+    return 2;
+}
+
+static size_t formulaCubicRoots(long double a, long double b, long double c, long double d,
+                                NekoExpr** roots, size_t maxRoots) {
+    if (!roots || maxRoots < 3) return 0;
+    if (formulaNearZero(a)) return formulaQuadraticRoots(b, c, d, roots, maxRoots);
+
+    long double delta0 = b * b - 3.0L * a * c;
+    long double delta1 = 2.0L * b * b * b - 9.0L * a * b * c + 27.0L * a * a * d;
+    if (formulaNearZero(delta0) && formulaNearZero(delta1)) {
+        NekoExpr* root = formulaNegOwned(formulaDivOwned(formulaConst(b), formulaConst(3.0L * a)));
+        if (!root) return 0;
+        roots[0] = root;
+        roots[1] = nekoCloneExpr(root);
+        roots[2] = nekoCloneExpr(root);
+        if (!roots[1] || !roots[2]) {
+            formulaFreeRoots(roots, 3);
+            return 0;
+        }
+        return 3;
+    }
+
+    long double radicalValue = delta1 * delta1 - 4.0L * delta0 * delta0 * delta0;
+    bool useMinus = radicalValue >= 0.0L
+        && formulaNearZero((delta1 + sqrtl(radicalValue)) / 2.0L);
+    NekoExpr* radical = formulaSqrtOwned(formulaConst(radicalValue));
+    NekoExpr* cRadicand = formulaDivOwned(
+        useMinus ? formulaSubOwned(formulaConst(delta1), radical)
+                 : formulaAddOwned(formulaConst(delta1), radical),
+        formulaConst(2.0L));
+    NekoExpr* bigC = formulaCbrtOwned(cRadicand);
+    if (!bigC) return 0;
+
+    for (int k = 0; k < 3; k++) {
+        NekoExpr* omegaC = formulaMulOwned(formulaOmega(k), nekoCloneExpr(bigC));
+        NekoExpr* deltaTerm = formulaDivOwned(formulaConst(delta0), nekoCloneExpr(omegaC));
+        NekoExpr* term = formulaAddOwned(formulaAddOwned(formulaConst(b), omegaC), deltaTerm);
+        roots[k] = formulaNegOwned(formulaDivOwned(term, formulaConst(3.0L * a)));
+        if (!roots[k]) {
+            nekoFreeExpr(bigC);
+            formulaFreeRoots(roots, (size_t)k);
+            return 0;
+        }
+    }
+
+    nekoFreeExpr(bigC);
+    return 3;
+}
+
+static NekoExpr* quarticAExpr(long double a, long double b) {
+    return formulaDivOwned(formulaConst(b), formulaConst(a));
+}
+
+static NekoExpr* quarticBExpr(long double a, long double c) {
+    return formulaDivOwned(formulaConst(c), formulaConst(a));
+}
+
+static NekoExpr* quarticCExpr(long double a, long double d) {
+    return formulaDivOwned(formulaConst(d), formulaConst(a));
+}
+
+static NekoExpr* quarticDExpr(long double a, long double e) {
+    return formulaDivOwned(formulaConst(e), formulaConst(a));
+}
+
+static NekoExpr* quarticAlphaExpr(const NekoExpr* A, const NekoExpr* B) {
+    return formulaAddOwned(nekoCloneExpr(B), formulaScaleOwned(formulaSquareClone(A), -3.0L, 8.0L));
+}
+
+static NekoExpr* quarticBetaExpr(const NekoExpr* A, const NekoExpr* B, const NekoExpr* C) {
+    return formulaAddOwned(
+        formulaSubOwned(
+            formulaScaleOwned(formulaCubeClone(A), 1.0L, 8.0L),
+            formulaScaleOwned(formulaMulOwned(nekoCloneExpr(A), nekoCloneExpr(B)), 1.0L, 2.0L)),
+        nekoCloneExpr(C));
+}
+
+static NekoExpr* quarticGammaExpr(const NekoExpr* A, const NekoExpr* B,
+                                  const NekoExpr* C, const NekoExpr* D) {
+    return formulaAddOwned(
+        formulaSubOwned(
+            formulaAddOwned(
+                formulaScaleOwned(formulaFourthClone(A), -3.0L, 256.0L),
+                formulaScaleOwned(formulaMulOwned(formulaSquareClone(A), nekoCloneExpr(B)), 1.0L, 16.0L)),
+            formulaScaleOwned(formulaMulOwned(nekoCloneExpr(A), nekoCloneExpr(C)), 1.0L, 4.0L)),
+        nekoCloneExpr(D));
+}
+
+static NekoExpr* quarticPExpr(const NekoExpr* alpha, const NekoExpr* gamma) {
+    return formulaSubOwned(formulaScaleOwned(formulaSquareClone(alpha), -1.0L, 12.0L),
+                           nekoCloneExpr(gamma));
+}
+
+static NekoExpr* quarticQExpr(const NekoExpr* alpha, const NekoExpr* beta, const NekoExpr* gamma) {
+    return formulaAddOwned(
+        formulaSubOwned(
+            formulaScaleOwned(formulaCubeClone(alpha), -1.0L, 108.0L),
+            formulaScaleOwned(formulaSquareClone(beta), 1.0L, 8.0L)),
+        formulaScaleOwned(formulaMulOwned(nekoCloneExpr(alpha), nekoCloneExpr(gamma)), 1.0L, 3.0L));
+}
+
+static NekoExpr* quarticYExpr(const NekoExpr* alpha, const NekoExpr* P, const NekoExpr* Q,
+                              long double p, long double q) {
+    if (formulaNearZero(p) && formulaNearZero(q)) {
+        return formulaScaleOwned(nekoCloneExpr(alpha), -5.0L, 6.0L);
+    }
+
+    long double rRadicandValue = q * q / 4.0L + p * p * p / 27.0L;
+    NekoExpr* rRadicand = formulaAddOwned(formulaScaleOwned(formulaSquareClone(Q), 1.0L, 4.0L),
+                                          formulaScaleOwned(formulaCubeClone(P), 1.0L, 27.0L));
+    bool useMinus = rRadicandValue >= 0.0L
+        && formulaNearZero(-q / 2.0L + sqrtl(rRadicandValue));
+    NekoExpr* radical = formulaSqrtOwned(rRadicand);
+    NekoExpr* halfNegQ = formulaScaleOwned(formulaNegOwned(nekoCloneExpr(Q)), 1.0L, 2.0L);
+    NekoExpr* R = useMinus ? formulaSubOwned(halfNegQ, radical)
+                           : formulaAddOwned(halfNegQ, radical);
+    NekoExpr* U = formulaCbrtOwned(R);
+    long double uValue = 0.0L;
+    if (formulaConstValue(U, &uValue) && formulaNearZero(uValue)) {
+        nekoFreeExpr(U);
+        return formulaSubOwned(formulaScaleOwned(nekoCloneExpr(alpha), -5.0L, 6.0L),
+                               formulaCbrtOwned(nekoCloneExpr(Q)));
+    }
+    if (formulaNearZero(rRadicandValue) && formulaNearZero(q)) {
+        return formulaAddOwned(formulaScaleOwned(nekoCloneExpr(alpha), -5.0L, 6.0L), U);
+    }
+    if (!U) return NULL;
+    return formulaAddOwned(
+        formulaScaleOwned(nekoCloneExpr(alpha), -5.0L, 6.0L),
+        formulaSubOwned(U, formulaScaleOwned(formulaDivOwned(nekoCloneExpr(P), nekoCloneExpr(U)), 1.0L, 3.0L)));
+}
+
+static size_t formulaBiquadraticQuarticRoots(const NekoExpr* alpha, const NekoExpr* gamma,
+                                             const NekoExpr* shift,
+                                             NekoExpr** roots, size_t maxRoots) {
+    if (!roots || maxRoots < 4) return 0;
+    NekoExpr* radical = formulaSqrtOwned(
+        formulaSubOwned(formulaSquareClone(alpha), formulaScaleOwned(nekoCloneExpr(gamma), 4.0L, 1.0L)));
+    NekoExpr* y1 = formulaScaleOwned(formulaAddOwned(formulaNegOwned(nekoCloneExpr(alpha)), nekoCloneExpr(radical)), 1.0L, 2.0L);
+    NekoExpr* y2 = formulaScaleOwned(formulaSubOwned(formulaNegOwned(nekoCloneExpr(alpha)), radical), 1.0L, 2.0L);
+    NekoExpr* s1 = formulaSqrtOwned(y1);
+    NekoExpr* s2 = formulaSqrtOwned(y2);
+
+    roots[0] = formulaAddOwned(nekoCloneExpr(shift), nekoCloneExpr(s1));
+    roots[1] = formulaSubOwned(nekoCloneExpr(shift), s1);
+    roots[2] = formulaAddOwned(nekoCloneExpr(shift), nekoCloneExpr(s2));
+    roots[3] = formulaSubOwned(nekoCloneExpr(shift), s2);
+    if (!roots[0] || !roots[1] || !roots[2] || !roots[3]) {
+        formulaFreeRoots(roots, 4);
+        return 0;
+    }
+    return 4;
+}
+
+static size_t formulaQuarticRoots(long double a, long double b, long double c,
+                                  long double d, long double e,
+                                  NekoExpr** roots, size_t maxRoots) {
+    if (!roots || maxRoots < 4) return 0;
+    if (formulaNearZero(a)) return formulaCubicRoots(b, c, d, e, roots, maxRoots);
+
+    long double Avalue = b / a;
+    long double Bvalue = c / a;
+    long double Cvalue = d / a;
+    long double Dvalue = e / a;
+    long double alphaValue = Bvalue - 3.0L * Avalue * Avalue / 8.0L;
+    long double betaValue = Avalue * Avalue * Avalue / 8.0L - Avalue * Bvalue / 2.0L + Cvalue;
+    long double gammaValue = -3.0L * Avalue * Avalue * Avalue * Avalue / 256.0L
+                           + Avalue * Avalue * Bvalue / 16.0L
+                           - Avalue * Cvalue / 4.0L + Dvalue;
+    long double pValue = -alphaValue * alphaValue / 12.0L - gammaValue;
+    long double qValue = -alphaValue * alphaValue * alphaValue / 108.0L
+                       - betaValue * betaValue / 8.0L
+                       + alphaValue * gammaValue / 3.0L;
+
+    NekoExpr* A = quarticAExpr(a, b);
+    NekoExpr* B = quarticBExpr(a, c);
+    NekoExpr* C = quarticCExpr(a, d);
+    NekoExpr* D = quarticDExpr(a, e);
+    NekoExpr* alpha = quarticAlphaExpr(A, B);
+    NekoExpr* beta = quarticBetaExpr(A, B, C);
+    NekoExpr* gamma = quarticGammaExpr(A, B, C, D);
+    NekoExpr* shift = formulaScaleOwned(nekoCloneExpr(A), -1.0L, 4.0L);
+    if (!A || !B || !C || !D || !alpha || !beta || !gamma || !shift) {
+        nekoFreeExpr(A); nekoFreeExpr(B); nekoFreeExpr(C); nekoFreeExpr(D);
+        nekoFreeExpr(alpha); nekoFreeExpr(beta); nekoFreeExpr(gamma); nekoFreeExpr(shift);
+        return 0;
+    }
+
+    if (formulaNearZero(betaValue)) {
+        size_t count = formulaBiquadraticQuarticRoots(alpha, gamma, shift, roots, maxRoots);
+        nekoFreeExpr(A); nekoFreeExpr(B); nekoFreeExpr(C); nekoFreeExpr(D);
+        nekoFreeExpr(alpha); nekoFreeExpr(beta); nekoFreeExpr(gamma); nekoFreeExpr(shift);
+        return count;
+    }
+
+    NekoExpr* P = quarticPExpr(alpha, gamma);
+    NekoExpr* Q = quarticQExpr(alpha, beta, gamma);
+    NekoExpr* y = quarticYExpr(alpha, P, Q, pValue, qValue);
+    NekoExpr* W = formulaSqrtOwned(formulaAddOwned(nekoCloneExpr(alpha), formulaScaleOwned(nekoCloneExpr(y), 2.0L, 1.0L)));
+    if (!P || !Q || !y || !W) {
+        nekoFreeExpr(A); nekoFreeExpr(B); nekoFreeExpr(C); nekoFreeExpr(D);
+        nekoFreeExpr(alpha); nekoFreeExpr(beta); nekoFreeExpr(gamma); nekoFreeExpr(shift);
+        nekoFreeExpr(P); nekoFreeExpr(Q); nekoFreeExpr(y); nekoFreeExpr(W);
+        return 0;
+    }
+
+    NekoExpr* threeAlphaTwoY = formulaAddOwned(formulaScaleOwned(nekoCloneExpr(alpha), 3.0L, 1.0L),
+                                               formulaScaleOwned(nekoCloneExpr(y), 2.0L, 1.0L));
+    NekoExpr* betaOverW = formulaDivOwned(nekoCloneExpr(beta), nekoCloneExpr(W));
+    NekoExpr* inner1 = formulaNegOwned(formulaAddOwned(nekoCloneExpr(threeAlphaTwoY),
+                                                       formulaScaleOwned(nekoCloneExpr(betaOverW), 2.0L, 1.0L)));
+    NekoExpr* inner2 = formulaNegOwned(formulaSubOwned(threeAlphaTwoY,
+                                                       formulaScaleOwned(betaOverW, 2.0L, 1.0L)));
+    NekoExpr* sqrt1 = formulaSqrtOwned(inner1);
+    NekoExpr* sqrt2 = formulaSqrtOwned(inner2);
+
+    roots[0] = formulaAddOwned(nekoCloneExpr(shift),
+                               formulaScaleOwned(formulaAddOwned(nekoCloneExpr(W), nekoCloneExpr(sqrt1)), 1.0L, 2.0L));
+    roots[1] = formulaAddOwned(nekoCloneExpr(shift),
+                               formulaScaleOwned(formulaSubOwned(nekoCloneExpr(W), sqrt1), 1.0L, 2.0L));
+    roots[2] = formulaAddOwned(nekoCloneExpr(shift),
+                               formulaScaleOwned(formulaAddOwned(formulaNegOwned(nekoCloneExpr(W)), nekoCloneExpr(sqrt2)), 1.0L, 2.0L));
+    roots[3] = formulaAddOwned(nekoCloneExpr(shift),
+                               formulaScaleOwned(formulaSubOwned(formulaNegOwned(W), sqrt2), 1.0L, 2.0L));
+
+    nekoFreeExpr(A); nekoFreeExpr(B); nekoFreeExpr(C); nekoFreeExpr(D);
+    nekoFreeExpr(alpha); nekoFreeExpr(beta); nekoFreeExpr(gamma); nekoFreeExpr(shift);
+    nekoFreeExpr(P); nekoFreeExpr(Q); nekoFreeExpr(y);
+
+    if (!roots[0] || !roots[1] || !roots[2] || !roots[3]) {
+        formulaFreeRoots(roots, 4);
+        return 0;
+    }
+    return 4;
+}
+
+static int formulaComplexDegreeFromCoeffs(const ComplexNumber* coeffs, int degree) {
+    if (!coeffs) return -1;
+    while (degree > 0 && formulaComplexNearZero(coeffs[degree])) degree--;
+    return degree;
+}
+
+static size_t formulaComplexLinearRoots(ComplexNumber a, ComplexNumber b,
+                                        NekoExpr** roots, size_t maxRoots) {
+    if (!roots || maxRoots < 1 || formulaComplexNearZero(a)) return 0;
+    roots[0] = formulaNegOwned(
+        formulaDivOwned(formulaComplexConst(b), formulaComplexConst(a)));
+    return roots[0] ? 1 : 0;
+}
+
+static size_t formulaComplexQuadraticRoots(ComplexNumber a, ComplexNumber b,
+                                           ComplexNumber c,
+                                           NekoExpr** roots, size_t maxRoots) {
+    if (!roots || maxRoots < 2) return 0;
+    if (formulaComplexNearZero(a)) return formulaComplexLinearRoots(b, c, roots, maxRoots);
+
+    NekoExpr* B = formulaComplexConst(b);
+    ComplexNumber discriminant = complexSub(complexMul(b, b),
+                                            formulaComplexScale(complexMul(a, c), 4.0L));
+    NekoExpr* radical = formulaComplexSqrtConst(discriminant);
+    NekoExpr* denom = formulaComplexConst(formulaComplexScale(a, 2.0L));
+    if (!B || !radical || !denom) {
+        nekoFreeExpr(B);
+        nekoFreeExpr(radical); nekoFreeExpr(denom);
+        return 0;
+    }
+
+    roots[0] = formulaDivOwned(
+        formulaSubOwned(formulaNegOwned(nekoCloneExpr(B)), nekoCloneExpr(radical)),
+        nekoCloneExpr(denom));
+    roots[1] = formulaDivOwned(
+        formulaAddOwned(formulaNegOwned(nekoCloneExpr(B)), radical),
+        denom);
+
+    nekoFreeExpr(B);
+    if (!roots[0] || !roots[1]) {
+        formulaFreeRoots(roots, 2);
+        return 0;
+    }
+    return 2;
+}
+
+static size_t formulaComplexCubicRoots(ComplexNumber a, ComplexNumber b,
+                                       ComplexNumber c, ComplexNumber d,
+                                       NekoExpr** roots, size_t maxRoots) {
+    if (!roots || maxRoots < 3) return 0;
+    if (formulaComplexNearZero(a)) return formulaComplexQuadraticRoots(b, c, d, roots, maxRoots);
+
+    ComplexNumber a2 = complexMul(a, a);
+    ComplexNumber b2 = complexMul(b, b);
+    ComplexNumber b3 = complexMul(b2, b);
+    ComplexNumber delta0 = complexSub(b2, formulaComplexScale(complexMul(a, c), 3.0L));
+    ComplexNumber delta1 = complexAdd(
+        complexSub(formulaComplexScale(b3, 2.0L),
+                   formulaComplexScale(complexMul(complexMul(a, b), c), 9.0L)),
+        formulaComplexScale(complexMul(a2, d), 27.0L));
+
+    NekoExpr* B = formulaComplexConst(b);
+    NekoExpr* delta0Expr = formulaComplexConst(delta0);
+    NekoExpr* delta1Expr = formulaComplexConst(delta1);
+    if (!B || !delta0Expr || !delta1Expr) {
+        nekoFreeExpr(B);
+        nekoFreeExpr(delta0Expr); nekoFreeExpr(delta1Expr);
+        return 0;
+    }
+
+    if (formulaComplexNearZero(delta0) && formulaComplexNearZero(delta1)) {
+        NekoExpr* root = formulaNegOwned(
+            formulaDivOwned(formulaComplexConst(b), formulaComplexConst(formulaComplexScale(a, 3.0L))));
+        roots[0] = root;
+        roots[1] = nekoCloneExpr(root);
+        roots[2] = nekoCloneExpr(root);
+        nekoFreeExpr(B);
+        nekoFreeExpr(delta0Expr); nekoFreeExpr(delta1Expr);
+        if (!roots[0] || !roots[1] || !roots[2]) {
+            formulaFreeRoots(roots, 3);
+            return 0;
+        }
+        return 3;
+    }
+
+    ComplexNumber delta0Cubed = complexMul(complexMul(delta0, delta0), delta0);
+    ComplexNumber radicand = complexSub(complexMul(delta1, delta1),
+                                        formulaComplexScale(delta0Cubed, 4.0L));
+    ComplexNumber radicalValue = complexSqrt(radicand);
+    bool useMinus = formulaComplexNearZero(
+        formulaComplexScale(complexAdd(delta1, radicalValue), 0.5L));
+
+    NekoExpr* radical = formulaComplexSqrtConst(radicand);
+    NekoExpr* cRadicand = formulaScaleOwned(
+        useMinus ? formulaSubOwned(nekoCloneExpr(delta1Expr), radical)
+                 : formulaAddOwned(nekoCloneExpr(delta1Expr), radical),
+        1.0L, 2.0L);
+    NekoExpr* bigC = formulaCbrtOwned(cRadicand);
+    if (!bigC) {
+        nekoFreeExpr(B);
+        nekoFreeExpr(delta0Expr); nekoFreeExpr(delta1Expr);
+        return 0;
+    }
+
+    for (int k = 0; k < 3; k++) {
+        NekoExpr* omegaC = formulaMulOwned(formulaOmega(k), nekoCloneExpr(bigC));
+        NekoExpr* deltaTerm = formulaDivOwned(nekoCloneExpr(delta0Expr), nekoCloneExpr(omegaC));
+        NekoExpr* term = formulaAddOwned(formulaAddOwned(nekoCloneExpr(B), omegaC), deltaTerm);
+        roots[k] = formulaNegOwned(
+            formulaDivOwned(term, formulaComplexConst(formulaComplexScale(a, 3.0L))));
+        if (!roots[k]) {
+            nekoFreeExpr(bigC);
+            nekoFreeExpr(B);
+            nekoFreeExpr(delta0Expr); nekoFreeExpr(delta1Expr);
+            formulaFreeRoots(roots, (size_t)k);
+            return 0;
+        }
+    }
+
+    nekoFreeExpr(bigC);
+    nekoFreeExpr(B);
+    nekoFreeExpr(delta0Expr); nekoFreeExpr(delta1Expr);
+    return 3;
+}
+
+static NekoExpr* quarticYComplexExpr(const NekoExpr* alpha, const NekoExpr* P,
+                                     const NekoExpr* Q,
+                                     ComplexNumber p, ComplexNumber q) {
+    if (formulaComplexNearZero(p) && formulaComplexNearZero(q)) {
+        return formulaScaleOwned(nekoCloneExpr(alpha), -5.0L, 6.0L);
+    }
+
+    ComplexNumber p2 = complexMul(p, p);
+    ComplexNumber p3 = complexMul(p2, p);
+    ComplexNumber q2 = complexMul(q, q);
+    ComplexNumber rRadicandValue = complexAdd(formulaComplexScale(q2, 0.25L),
+                                              formulaComplexScale(p3, 1.0L / 27.0L));
+    ComplexNumber radicalValue = complexSqrt(rRadicandValue);
+    ComplexNumber halfNegQValue = formulaComplexScale(complexNeg(q), 0.5L);
+    bool useMinus = formulaComplexNearZero(complexAdd(halfNegQValue, radicalValue));
+
+    NekoExpr* radical = formulaComplexSqrtConst(rRadicandValue);
+    NekoExpr* halfNegQ = formulaScaleOwned(formulaNegOwned(nekoCloneExpr(Q)), 1.0L, 2.0L);
+    NekoExpr* R = useMinus ? formulaSubOwned(halfNegQ, radical)
+                           : formulaAddOwned(halfNegQ, radical);
+    ComplexNumber Rvalue = useMinus ? complexSub(halfNegQValue, radicalValue)
+                                    : complexAdd(halfNegQValue, radicalValue);
+    NekoExpr* U = formulaCbrtOwned(R);
+    if (!U) return NULL;
+
+    if (formulaComplexNearZero(complexCbrt(Rvalue))) {
+        nekoFreeExpr(U);
+        return formulaSubOwned(formulaScaleOwned(nekoCloneExpr(alpha), -5.0L, 6.0L),
+                               formulaCbrtOwned(nekoCloneExpr(Q)));
+    }
+    if (formulaComplexNearZero(rRadicandValue) && formulaComplexNearZero(q)) {
+        return formulaAddOwned(formulaScaleOwned(nekoCloneExpr(alpha), -5.0L, 6.0L), U);
+    }
+    return formulaAddOwned(
+        formulaScaleOwned(nekoCloneExpr(alpha), -5.0L, 6.0L),
+        formulaSubOwned(U, formulaScaleOwned(formulaDivOwned(nekoCloneExpr(P), nekoCloneExpr(U)), 1.0L, 3.0L)));
+}
+
+static size_t formulaComplexQuarticRoots(ComplexNumber a, ComplexNumber b,
+                                         ComplexNumber c, ComplexNumber d,
+                                         ComplexNumber e,
+                                         NekoExpr** roots, size_t maxRoots) {
+    if (!roots || maxRoots < 4) return 0;
+    if (formulaComplexNearZero(a)) return formulaComplexCubicRoots(b, c, d, e, roots, maxRoots);
+
+    ComplexNumber Avalue = complexDiv(b, a);
+    ComplexNumber Bvalue = complexDiv(c, a);
+    ComplexNumber Cvalue = complexDiv(d, a);
+    ComplexNumber Dvalue = complexDiv(e, a);
+    ComplexNumber A2 = complexMul(Avalue, Avalue);
+    ComplexNumber A3 = complexMul(A2, Avalue);
+    ComplexNumber A4 = complexMul(A2, A2);
+    ComplexNumber alphaValue = complexAdd(Bvalue, formulaComplexScale(A2, -3.0L / 8.0L));
+    ComplexNumber betaValue = complexAdd(
+        complexSub(formulaComplexScale(A3, 1.0L / 8.0L),
+                   formulaComplexScale(complexMul(Avalue, Bvalue), 0.5L)),
+        Cvalue);
+    ComplexNumber gammaValue = complexAdd(
+        complexSub(complexAdd(formulaComplexScale(A4, -3.0L / 256.0L),
+                              formulaComplexScale(complexMul(A2, Bvalue), 1.0L / 16.0L)),
+                   formulaComplexScale(complexMul(Avalue, Cvalue), 0.25L)),
+        Dvalue);
+    ComplexNumber pValue = complexSub(formulaComplexScale(complexMul(alphaValue, alphaValue),
+                                                          -1.0L / 12.0L),
+                                      gammaValue);
+    ComplexNumber qValue = complexAdd(
+        complexSub(formulaComplexScale(complexMul(complexMul(alphaValue, alphaValue), alphaValue),
+                                       -1.0L / 108.0L),
+                   formulaComplexScale(complexMul(betaValue, betaValue), 1.0L / 8.0L)),
+        formulaComplexScale(complexMul(alphaValue, gammaValue), 1.0L / 3.0L));
+
+    NekoExpr* alpha = formulaComplexConst(alphaValue);
+    NekoExpr* beta = formulaComplexConst(betaValue);
+    NekoExpr* gamma = formulaComplexConst(gammaValue);
+    NekoExpr* shift = formulaComplexConst(formulaComplexScale(Avalue, -0.25L));
+    if (!alpha || !beta || !gamma || !shift) {
+        nekoFreeExpr(alpha); nekoFreeExpr(beta); nekoFreeExpr(gamma); nekoFreeExpr(shift);
+        return 0;
+    }
+
+    if (formulaComplexNearZero(betaValue)) {
+        size_t count = formulaBiquadraticQuarticRoots(alpha, gamma, shift, roots, maxRoots);
+        nekoFreeExpr(alpha); nekoFreeExpr(beta); nekoFreeExpr(gamma); nekoFreeExpr(shift);
+        return count;
+    }
+
+    NekoExpr* P = formulaComplexConst(pValue);
+    NekoExpr* Q = formulaComplexConst(qValue);
+    NekoExpr* y = quarticYComplexExpr(alpha, P, Q, pValue, qValue);
+    NekoExpr* W = formulaSqrtOwned(formulaAddOwned(nekoCloneExpr(alpha),
+                                                   formulaScaleOwned(nekoCloneExpr(y), 2.0L, 1.0L)));
+    if (!P || !Q || !y || !W) {
+        nekoFreeExpr(alpha); nekoFreeExpr(beta); nekoFreeExpr(gamma); nekoFreeExpr(shift);
+        nekoFreeExpr(P); nekoFreeExpr(Q); nekoFreeExpr(y); nekoFreeExpr(W);
+        return 0;
+    }
+
+    NekoExpr* threeAlphaTwoY = formulaAddOwned(formulaScaleOwned(nekoCloneExpr(alpha), 3.0L, 1.0L),
+                                               formulaScaleOwned(nekoCloneExpr(y), 2.0L, 1.0L));
+    NekoExpr* betaOverW = formulaDivOwned(nekoCloneExpr(beta), nekoCloneExpr(W));
+    NekoExpr* inner1 = formulaNegOwned(formulaAddOwned(nekoCloneExpr(threeAlphaTwoY),
+                                                       formulaScaleOwned(nekoCloneExpr(betaOverW), 2.0L, 1.0L)));
+    NekoExpr* inner2 = formulaNegOwned(formulaSubOwned(threeAlphaTwoY,
+                                                       formulaScaleOwned(betaOverW, 2.0L, 1.0L)));
+    NekoExpr* sqrt1 = formulaSqrtOwned(inner1);
+    NekoExpr* sqrt2 = formulaSqrtOwned(inner2);
+
+    roots[0] = formulaAddOwned(nekoCloneExpr(shift),
+                               formulaScaleOwned(formulaAddOwned(nekoCloneExpr(W), nekoCloneExpr(sqrt1)), 1.0L, 2.0L));
+    roots[1] = formulaAddOwned(nekoCloneExpr(shift),
+                               formulaScaleOwned(formulaSubOwned(nekoCloneExpr(W), sqrt1), 1.0L, 2.0L));
+    roots[2] = formulaAddOwned(nekoCloneExpr(shift),
+                               formulaScaleOwned(formulaAddOwned(formulaNegOwned(nekoCloneExpr(W)), nekoCloneExpr(sqrt2)), 1.0L, 2.0L));
+    roots[3] = formulaAddOwned(nekoCloneExpr(shift),
+                               formulaScaleOwned(formulaSubOwned(formulaNegOwned(W), sqrt2), 1.0L, 2.0L));
+
+    nekoFreeExpr(alpha); nekoFreeExpr(beta); nekoFreeExpr(gamma); nekoFreeExpr(shift);
+    nekoFreeExpr(P); nekoFreeExpr(Q); nekoFreeExpr(y);
+
+    if (!roots[0] || !roots[1] || !roots[2] || !roots[3]) {
+        formulaFreeRoots(roots, 4);
+        return 0;
+    }
+    return 4;
+}
+
+size_t nekoPolynomialFormulaRoots(const long double* coeffs, int degree,
+                                  NekoExpr** roots, size_t maxRoots) {
+    if (!coeffs || !roots) return 0;
+    for (size_t i = 0; i < maxRoots; i++) roots[i] = NULL;
+
+    degree = formulaDegreeFromCoeffs(coeffs, degree);
+    if (degree <= 0) return 0;
+    if (degree == 1) return formulaLinearRoots(coeffs[1], coeffs[0], roots, maxRoots);
+    if (degree == 2) return formulaQuadraticRoots(coeffs[2], coeffs[1], coeffs[0], roots, maxRoots);
+    if (degree == 3) return formulaCubicRoots(coeffs[3], coeffs[2], coeffs[1], coeffs[0], roots, maxRoots);
+    if (degree == 4) return formulaQuarticRoots(coeffs[4], coeffs[3], coeffs[2], coeffs[1], coeffs[0], roots, maxRoots);
+    return 0;
+}
+
+size_t nekoPolynomialComplexFormulaRoots(const ComplexNumber* coeffs, int degree,
+                                         NekoExpr** roots, size_t maxRoots) {
+    if (!coeffs || !roots) return 0;
+    for (size_t i = 0; i < maxRoots; i++) roots[i] = NULL;
+
+    degree = formulaComplexDegreeFromCoeffs(coeffs, degree);
+    if (degree <= 0) return 0;
+    if (degree == 1) return formulaComplexLinearRoots(coeffs[1], coeffs[0], roots, maxRoots);
+    if (degree == 2) return formulaComplexQuadraticRoots(coeffs[2], coeffs[1], coeffs[0], roots, maxRoots);
+    if (degree == 3) return formulaComplexCubicRoots(coeffs[3], coeffs[2], coeffs[1], coeffs[0], roots, maxRoots);
+    if (degree == 4) return formulaComplexQuarticRoots(coeffs[4], coeffs[3], coeffs[2], coeffs[1], coeffs[0], roots, maxRoots);
+    return 0;
+}
+
 /* ---------- Evaluation ---------- */
 
 // Evaluate an expression numerically at a variable value

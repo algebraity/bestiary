@@ -49,7 +49,7 @@ ifeq ($(PLATFORM),windows)
 	MACOS_RELEASE_DIR :=
 	MACOS_RELEASE_ARCHIVE :=
 	WINDOWS_INSTALLER_FILES := packaging/windows/install.bat packaging/windows/README-WINDOWS.txt
-	CPPFLAGS += -Iinclude -Ithird_party/linenoise -DBST_PLATFORM_WINDOWS -DWINVER=0x0A00 -D_WIN32_WINNT=0x0A00
+	CPPFLAGS += -Iinclude -Ithird_party/linenoise -DBST_PLATFORM_WINDOWS -DWINVER=0x0A00 -D_WIN32_WINNT=0x0A00 -D__USE_MINGW_ANSI_STDIO=1
   LDFLAGS += -static -static-libgcc
   LDLIBS := -lm
   GUI_LIBS :=
