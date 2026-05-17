@@ -1226,6 +1226,57 @@ static void testCompoundAssignments(void) {
     evalCtxFree(ctx);
 }
 
+static void testOokamiCommandEdges(void) {
+    SECTION("OOKAMI command edge cases");
+    EvalContext* ctx = evalCtxNew();
+
+    Value out = evalLine(ctx, "\\AP{1,2,3}");
+    CHECK(out.kind == VAL_COMBSET, "AP accepts three integer arguments");
+    valFree(out);
+
+    out = evalLine(ctx, "\\AP{\\list{1,2,3}}");
+    CHECK(out.kind == VAL_COMBSET, "AP accepts a list tuple");
+    valFree(out);
+
+    out = evalLine(ctx, "\\AP{1,2}");
+    CHECK(out.kind == VAL_ERROR, "AP rejects too few arguments");
+    valFree(out);
+
+    out = evalLine(ctx, "\\AP{1,2,3,4}");
+    CHECK(out.kind == VAL_ERROR, "AP rejects too many arguments");
+    valFree(out);
+
+    out = evalLine(ctx, "\\GP{2,3,4}");
+    CHECK(out.kind == VAL_COMBSET, "GP accepts three integer arguments");
+    valFree(out);
+
+    out = evalLine(ctx, "\\GP{\\list{2,3,4}}");
+    CHECK(out.kind == VAL_COMBSET, "GP accepts a list tuple");
+    valFree(out);
+
+    out = evalLine(ctx, "\\GP{2,3}");
+    CHECK(out.kind == VAL_ERROR, "GP rejects too few arguments");
+    valFree(out);
+
+    out = evalLine(ctx, "\\GP{2,3,4,5}");
+    CHECK(out.kind == VAL_ERROR, "GP rejects too many arguments");
+    valFree(out);
+
+    out = evalLine(ctx, "\\rangeSet{1}");
+    CHECK(out.kind == VAL_ERROR, "rangeSet rejects too few arguments");
+    valFree(out);
+
+    out = evalLine(ctx, "\\rangeSet{1,2,3,4}");
+    CHECK(out.kind == VAL_ERROR, "rangeSet rejects too many arguments");
+    valFree(out);
+
+    out = evalLine(ctx, "\\subsetSums{1,2,3}");
+    CHECK(out.kind == VAL_ERROR, "subsetSums rejects too many arguments");
+    valFree(out);
+
+    evalCtxFree(ctx);
+}
+
 static void testUsagiCommands(void) {
     SECTION("USAGI commands");
     EvalContext* ctx = evalCtxNew();
@@ -1645,6 +1696,7 @@ int main(void) {
     testPrintCommand();
     testLoops();
     testCompoundAssignments();
+    testOokamiCommandEdges();
     testUsagiCommands();
     testUserFunctions();
     testGraphCommandAxes();

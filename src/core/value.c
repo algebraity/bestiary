@@ -18,6 +18,7 @@ static char* dupstr(const char* s) {
     if (!s) return NULL;
     size_t n = strlen(s);
     char* r = malloc(n + 1);
+    if (!r) return NULL;
     memcpy(r, s, n + 1);
     return r;
 }

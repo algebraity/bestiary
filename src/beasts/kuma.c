@@ -4480,7 +4480,7 @@ Number exponentialSample(ProbabilityDistribution* dist) {
 
     // Apply inverse-transform sampling
     long double u = randomReal(0.0L, 1.0L);
-    if (u >= 1.0L) u = 1.0L - 1e-18L;
+    if (u >= 1.0L) u = nextafterl(1.0L, 0.0L);
     return constructNumberFromDouble(-logl(1.0L - u) / lambda);
 }
 

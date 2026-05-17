@@ -1139,6 +1139,7 @@ Ring* constructTableRingSkipValidate(RingElement** elements, int** addTable, int
 
 // Recursively collect leaf reprs from a nested product repr, e.g. "((0,1),2)" → "0,1,2"
 char* flattenReprInner(const char* s) {
+    if (!s) return NULL;
     int len = strlen(s);
     if (s[0] != '(' || s[len-1] != ')') return strdup(s);
 
@@ -1152,19 +1153,34 @@ char* flattenReprInner(const char* s) {
 
     int leftLen = commaPos - 1;
     char* left = malloc(leftLen + 1);
+    if (!left) return NULL;
     strncpy(left, s + 1, leftLen);
     left[leftLen] = '\0';
 
     int rightLen = len - commaPos - 2;
     char* right = malloc(rightLen + 1);
+    if (!right) {
+        free(left);
+        return NULL;
+    }
     strncpy(right, s + commaPos + 1, rightLen);
     right[rightLen] = '\0';
 
     char* flatLeft  = flattenReprInner(left);
     char* flatRight = flattenReprInner(right);
     free(left); free(right);
+    if (!flatLeft || !flatRight) {
+        free(flatLeft);
+        free(flatRight);
+        return NULL;
+    }
 
     char* result = malloc(strlen(flatLeft) + strlen(flatRight) + 2);
+    if (!result) {
+        free(flatLeft);
+        free(flatRight);
+        return NULL;
+    }
     sprintf(result, "%s,%s", flatLeft, flatRight);
     free(flatLeft); free(flatRight);
     return result;

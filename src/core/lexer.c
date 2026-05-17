@@ -30,14 +30,34 @@ static void bstlFlush(Token** tokens, size_t* len, size_t* cap,
 	if (*bufr == 0) return;
 	buf[*bufr] = '\0';
 	char* text = malloc(*bufr + 1);
+	if (!text) {
+		*bufr = 0;
+		return;
+	}
 	memcpy(text, buf, *bufr + 1);
 	Token t;
 	t.kind = kind;
 	t.text = text;
 	t.line = line;
 	t.col  = col;
-	bstlPush(tokens, len, cap, t);
+	if (!bstlPush(tokens, len, cap, t)) free(text);
 	*bufr = 0;
+}
+
+static int growLexBuffer(char** buf, size_t* cap)
+{
+	size_t newcap = *cap * 2;
+	char* grown = realloc(*buf, newcap);
+	if (!grown) return 0;
+	*buf = grown;
+	*cap = newcap;
+	return 1;
+}
+
+static void freeLexedTokens(Token* tokens, size_t len)
+{
+	for (size_t i = 0; i < len; i++) free(tokens[i].text);
+	free(tokens);
 }
 
 Token* bstLex(char* string, size_t* out_len)
@@ -53,6 +73,7 @@ Token* bstLex(char* string, size_t* out_len)
 	size_t line = 1, col = 1, tokcol = 1;
 	size_t l = strlen(string);
 	size_t braceDepth = 0;
+	if (!buf) goto lex_oom;
 
 	for (size_t i = 0; i < l; i++) {
 		char c = string[i];
@@ -62,8 +83,7 @@ Token* bstLex(char* string, size_t* out_len)
 		if (mode == COMMAND_M) {
 			if (isalnum((unsigned char)c)) {
 				if (bufr + 1 >= bufcap) {
-					bufcap *= 2;
-					buf = realloc(buf, bufcap);
+					if (!growLexBuffer(&buf, &bufcap)) goto lex_oom;
 				}
 				buf[bufr++] = c;
 				col++;
@@ -88,6 +108,7 @@ Token* bstLex(char* string, size_t* out_len)
 					j++;
 				}
 				char* text = malloc(slen + 1);
+				if (!text) goto lex_oom;
 				for (size_t k = 0; k < slen; k++) text[k] = string[i + 1 + k];
 				text[slen] = '\0';
 				Token t;
@@ -95,7 +116,10 @@ Token* bstLex(char* string, size_t* out_len)
 				t.text = text;
 				t.line = line;
 				t.col = startCol;
-				bstlPush(&tokens, &len, &cap, t);
+				if (!bstlPush(&tokens, &len, &cap, t)) {
+					free(text);
+					goto lex_oom;
+				}
 				if (j < l && string[j] == quote) {
 					col += slen + 2;
 					i = j;
@@ -213,8 +237,7 @@ Token* bstLex(char* string, size_t* out_len)
 				// Otherwise '.' is its own TOK_DOT token.
 				if (lastok == TOK_NUMBER && i + 1 < l && isdigit((unsigned char)string[i + 1])) {
 					if (bufr + 1 >= bufcap) {
-						bufcap *= 2;
-						buf = realloc(buf, bufcap);
+						if (!growLexBuffer(&buf, &bufcap)) goto lex_oom;
 					}
 					buf[bufr++] = '.';
 					curtok = TOK_DECIMAL;
@@ -280,8 +303,7 @@ Token* bstLex(char* string, size_t* out_len)
 			bstlFlush(&tokens, &len, &cap, lastok, buf, &bufr, line, tokcol);
 		if (bufr == 0) tokcol = col;
 		if (bufr + 1 >= bufcap) {
-			bufcap *= 2;
-			buf = realloc(buf, bufcap);
+			if (!growLexBuffer(&buf, &bufcap)) goto lex_oom;
 		}
 		buf[bufr++] = c;     // store char in buf--was not done before, I think
 		col++;
@@ -312,4 +334,10 @@ Token* bstLex(char* string, size_t* out_len)
 
 	if (out_len) *out_len = len;
 	return tokens;
+
+lex_oom:
+	free(buf);
+	freeLexedTokens(tokens, len);
+	if (out_len) *out_len = 0;
+	return NULL;
 }

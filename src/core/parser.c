@@ -15,6 +15,7 @@ static char* dupstr(const char* s) {
     if (!s) return NULL;
     size_t n = strlen(s);
     char* r = malloc(n + 1);
+    if (!r) return NULL;
     memcpy(r, s, n + 1);
     return r;
 }
@@ -78,6 +79,18 @@ static void parseError(P* p, const char* msg) {
     p->failed = 1;
     Token* t = peek(p);
     if (p->err) { p->err->msg = msg; p->err->line = t->line; p->err->col = t->col; }
+}
+
+static int growRowLens(P* p, size_t** rowlens, size_t* rowcap) {
+    size_t newcap = *rowcap ? *rowcap * 2 : 4;
+    size_t* grown = realloc(*rowlens, newcap * sizeof(size_t));
+    if (!grown) {
+        parseError(p, "out of memory");
+        return 0;
+    }
+    *rowlens = grown;
+    *rowcap = newcap;
+    return 1;
 }
 
 // True if the token is a TOK_COMMAND whose text equals `name`
@@ -535,9 +548,9 @@ static AstNode* parseMatrixLit(P* p) {
             rowcount++;
         }
         if (nrows == rowcap) {
-            rowcap = rowcap ? rowcap * 2 : 4;
-            rowlens = realloc(rowlens, rowcap * sizeof(size_t));
+            if (!growRowLens(p, &rowlens, &rowcap)) break;
         }
+        if (p->failed) break;
         rowlens[nrows++] = rowcount;
 
         if (match(p, TOK_SEMICOLON)) continue;        // another row
@@ -587,9 +600,9 @@ static AstNode* parseEnvironment(P* p, size_t beginLine, size_t beginCol) {
         if (match(p, TOK_AMP)) continue;              // next cell in same row
         if (match(p, TOK_DBLBACKSLASH)) {             // row separator
             if (nrows == rowcap) {
-                rowcap = rowcap ? rowcap * 2 : 4;
-                rowlens = realloc(rowlens, rowcap * sizeof(size_t));
+                if (!growRowLens(p, &rowlens, &rowcap)) break;
             }
+            if (p->failed) break;
             rowlens[nrows++] = rowcount;
             rowcount = 0;
             continue;
@@ -602,10 +615,9 @@ static AstNode* parseEnvironment(P* p, size_t beginLine, size_t beginCol) {
     // Final row (if a trailing '\\' wasn't given)
     if (rowcount > 0) {
         if (nrows == rowcap) {
-            rowcap = rowcap ? rowcap * 2 : 4;
-            rowlens = realloc(rowlens, rowcap * sizeof(size_t));
+            if (!growRowLens(p, &rowlens, &rowcap)) rowcount = 0;
         }
-        rowlens[nrows++] = rowcount;
+        if (!p->failed && rowcount > 0) rowlens[nrows++] = rowcount;
     }
 
     // Consume \end{env} and verify the name matches
@@ -957,6 +969,12 @@ static AstNode* parseBracketArg(P* p) {
         NodeBuf pairs; nbInit(&pairs);
 
         AstNode** pairItems = malloc(2 * sizeof(AstNode*));
+        if (!pairItems) {
+            astFree(first);
+            astFree(second);
+            parseError(p, "out of memory");
+            return NULL;
+        }
         pairItems[0] = first;
         pairItems[1] = second;
         nbPush(&pairs, astTuple(pairItems, 2));
@@ -966,6 +984,12 @@ static AstNode* parseBracketArg(P* p) {
             if (!match(p, TOK_COLON)) { parseError(p, "expected ':' in mapping entry"); }
             AstNode* rhs = parseExpr(p);
             AstNode** items = malloc(2 * sizeof(AstNode*));
+            if (!items) {
+                astFree(lhs);
+                astFree(rhs);
+                parseError(p, "out of memory");
+                break;
+            }
             items[0] = lhs;
             items[1] = rhs;
             nbPush(&pairs, astTuple(items, 2));

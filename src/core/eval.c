@@ -34,6 +34,7 @@ static char* dupstr(const char* s) {
     if (!s) return NULL;
     size_t n = strlen(s);
     char* r = malloc(n + 1);
+    if (!r) return NULL;
     memcpy(r, s, n + 1);
     return r;
 }
@@ -326,7 +327,7 @@ static const BuiltinDoc BUILTIN_DOCS[] = {
     { "int", "Integrates a NEKO expression with respect to x by default, optionally over numeric bounds, or with respect to an explicit variable.", "expression alone for symbolic integration in x; expression and Symbol/String variable for symbolic integration in that variable; expression plus numeric lower and upper bounds for definite integration in x; or expression, variable, lower bound, upper bound for definite integration in that variable", "NEKO expression for symbolic integrals, Decimal for definite integrals" },
     { "integral", "Alias for int.", "expression alone for symbolic integration in x; expression and Symbol/String variable for symbolic integration in that variable; expression plus numeric lower and upper bounds for definite integration in x; or expression, variable, lower bound, upper bound for definite integration in that variable", "NEKO expression for symbolic integrals, Decimal for definite integrals" },
     { "eval", "Evaluates a NEKO expression at a numeric value, using x by default or an explicit variable.", "expression and numeric value, or expression, Symbol/String variable, and numeric value", "Decimal" },
-    { "roots", "Finds roots of a supported expression in x, using exact degree <= 4 formulae for real or complex polynomials before numerical fallback.", "Symbol/numeric/NEKO expression", "List of exact formula expressions for degree <= 4 polynomials, otherwise Decimal or Complex roots" },
+    { "roots", "Finds roots of a supported expression in x, using exact degree <= 4 formulae for real or complex polynomials before real numerical fallback.", "Symbol/numeric/NEKO expression; complex-coefficient polynomials are supported through degree 4", "List of exact formula expressions for degree <= 4 polynomials, otherwise Decimal or Complex roots for supported real-coefficient fallback cases" },
     { "factorPoly", "Factors a polynomial in x over real roots currently found by the real factorer.", "Symbol/numeric/NEKO expression representing a polynomial in x", "NEKO expression" },
     { "factorPolyReal", "Factors a polynomial in x over real roots.", "Symbol/numeric/NEKO expression representing a polynomial in x", "NEKO expression" },
     { "factorPolyComplex", "Factors a polynomial in x over complex roots.", "Symbol/numeric/NEKO expression representing a polynomial in x", "Symbol containing a formatted complex factorization" },
@@ -10408,10 +10409,12 @@ static Value bi_rangeSet(EvalContext* c, Value* a, size_t n) {
         free(tupleArgs);
         return result;
     }
-    if ((n != 2 && n != 3) || !valueToCombSetInt(a[0], &start) || !valueToCombSetInt(a[1], &end)) {
-        valFree(a[0]);
-        valFree(a[1]);
-        if (n > 2) valFree(a[2]);
+    if (n != 2 && n != 3) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\rangeSet expects integer start/end values and an optional integer step");
+    }
+    if (!valueToCombSetInt(a[0], &start) || !valueToCombSetInt(a[1], &end)) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
         return valError("\\rangeSet expects integer start/end values and an optional integer step");
     }
 
@@ -10438,7 +10441,7 @@ static Value bi_rangeSet(EvalContext* c, Value* a, size_t n) {
 }
 
 static Value bi_AP(EvalContext* c, Value* a, size_t n) {
-    (void)c; (void)n;
+    (void)c;
     long long first, diff, terms;
     if (n == 1 && a[0].kind == VAL_LIST) {
         Value* tupleArgs = NULL;
@@ -10451,6 +10454,10 @@ static Value bi_AP(EvalContext* c, Value* a, size_t n) {
         Value result = bi_AP(c, tupleArgs, tupleCount);
         free(tupleArgs);
         return result;
+    }
+    if (n != 3) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\AP expects integer first term, common difference, and number of terms");
     }
     if (!valueToCombSetInt(a[0], &first) || !valueToCombSetInt(a[1], &diff) || !valueToCombSetInt(a[2], &terms)) {
         valFree(a[0]);
@@ -10469,7 +10476,7 @@ static Value bi_AP(EvalContext* c, Value* a, size_t n) {
 }
 
 static Value bi_GP(EvalContext* c, Value* a, size_t n) {
-    (void)c; (void)n;
+    (void)c;
     long long first, ratio, terms;
     if (n == 1 && a[0].kind == VAL_LIST) {
         Value* tupleArgs = NULL;
@@ -10482,6 +10489,10 @@ static Value bi_GP(EvalContext* c, Value* a, size_t n) {
         Value result = bi_GP(c, tupleArgs, tupleCount);
         free(tupleArgs);
         return result;
+    }
+    if (n != 3) {
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
+        return valError("\\GP expects integer first term, common ratio, and number of terms");
     }
     if (!valueToCombSetInt(a[0], &first) || !valueToCombSetInt(a[1], &ratio) || !valueToCombSetInt(a[2], &terms)) {
         valFree(a[0]);
@@ -10515,8 +10526,7 @@ static Value bi_subsetSums(EvalContext* c, Value* a, size_t n) {
         return result;
     }
     if ((n != 1 && n != 2) || !valueIsCombSet(a[0])) {
-        valFree(a[0]);
-        if (n > 1) valFree(a[1]);
+        for (size_t i = 0; i < n; i++) valFree(a[i]);
         return valError("\\subsetSums expects a CombSet and an optional integer subset size");
     }
     if (n == 2) {
@@ -13208,10 +13218,8 @@ static Value bi_listIrrpes_cmd(EvalContext* c, Value* a, size_t n) {
 
     Value* items = calloc((size_t)count, sizeof(Value));
     if (!items && count > 0) {
-        if (count > 0) {
-            for (int i = 0; i < irreps[0]->numClasses; i++) freeConjugacyClass(irreps[0]->classes[i]);
-            for (int k = 0; k < count; k++) freeCharacter(irreps[k]);
-        }
+        for (int i = 0; i < irreps[0]->numClasses; i++) freeConjugacyClass(irreps[0]->classes[i]);
+        for (int k = 0; k < count; k++) freeCharacter(irreps[k]);
         free(irreps);
         return valError("\\listIrreps failed");
     }
