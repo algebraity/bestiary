@@ -95,7 +95,7 @@ static constexpr Section kSections[] = {
         "* compute a gradient or Hessian: `\\gradient{x^2 + y^2}` and `\\hessian{x^2 + y^2}`\n"
         "* evaluate by substitution: `f(3)`\n"
         "* graph explicit or implicit 3D surfaces: `\\graph3D{x^2 + y^2}` and `\\graph3D{x^2 + y^2 + z^2 = 9}`\n"
-        "* find roots or solve ODEs: `\\roots{x^2 - 4}` and `\\solveODE{\"y' = 2x\"}`"
+        "* find roots or solve ODEs: `\\roots{x^2 - 4}`, `\\realRoots{x^3 - x}`, and `\\solveODE{\"y' = 2x\"}`"
     },
     {
         Beast::Poni,
@@ -118,6 +118,7 @@ static constexpr Section kSections[] = {
         "* define a finite field ring: `F = \\FFRing{2}{3}` or `F = \\FFRing{2^3}`\n"
         "* define elements: `g = \\getElement{G,\"2\"}` and `a = \\getElement{R,\"4\"}`\n"
         "* define a subgroup: `H = \\subgroupGeneratedBy{G,g}`\n"
+        "* list algebraic objects: `\\listElements{G}`, `\\listSubgroups{G}`, and `\\listLeftCosets{H}`\n"
         "* define a subring and ideals: `S = \\subring{a}`, `I = \\leftIdeal{a}`, and `J = \\rightIdeal{a}`\n"
         "* form quotient structures inline: `G / \\groupCenter{G}` and `R / I`\n"
         "* compute commutators and associators: `\\commutator{g}{h}` and `\\associator{a}{b}{c}`\n"
@@ -132,6 +133,7 @@ static constexpr Section kSections[] = {
         "* define a representation: `rho = \\regularRep{\\Sn{3}}`\n"
         "* define more representations: `\\trivialRep{\\ZnGroup{4}}`, `\\signRep{\\Sn{4}}`, and `\\standardRep{\\Sn{4}}`\n"
         "* define a character and a character table: `chi = \\getIrrep{\\Sn{4},1}` and `T = \\charTable{\\Sn{4}}`\n"
+        "* list irreducible characters as objects: `irreps = \\listIrreps{\\Sn{4}}`\n"
         "* use inner products inline: `<chi, chi>`\n"
         "* inspect representations: `\\repDegree{rho}` and `\\isIrrep{rho}`\n"
         "* build related objects: `\\dualRep{rho}`, `\\tensorRep{rho,\\dualRep{rho}}`, and `pi = \\projectToAbelianization{\\Sn{3}}`\n"
@@ -417,6 +419,9 @@ static constexpr Command kCommands[] = {
     HELP_CMD("integral", -1, Beast::Neko, "Alias for int.", "expression alone for symbolic integration in x; expression and Symbol/String variable for symbolic integration in that variable; expression plus numeric lower and upper bounds for definite integration in x; or expression, variable, lower bound, upper bound for definite integration in that variable", "NEKO expression for symbolic integrals, Decimal for definite integrals"),
     HELP_CMD("eval", -1, Beast::Neko, "Evaluates a NEKO expression at a numeric value, using x by default or an explicit variable.", "expression and numeric value, or expression, Symbol/String variable, and numeric value", "Decimal"),
     HELP_CMD("roots", 1, Beast::Neko, "Finds roots of a supported expression in x, using exact degree <= 4 formulae for real or complex polynomials before real numerical fallback.", "Symbol/numeric/NEKO expression; complex-coefficient polynomials are supported through degree 4", "List of exact formula expressions for degree <= 4 polynomials, otherwise Decimal or Complex roots for supported real-coefficient fallback cases"),
+    HELP_CMD("realRoots", 1, Beast::Neko, "Finds only the real roots reported by NEKO's supported root pipeline.", "Symbol/numeric/NEKO expression representing a polynomial or supported expression in x", "List of real root values or exact root expressions"),
+    HELP_CMD("imaginaryRoots", 1, Beast::Neko, "Finds only the purely imaginary nonzero roots reported by NEKO's supported root pipeline.", "Symbol/numeric/NEKO expression representing a polynomial or supported expression in x", "List of purely imaginary root values or exact root expressions"),
+    HELP_CMD("nonRealRoots", 1, Beast::Neko, "Finds only the non-real complex roots reported by NEKO's supported root pipeline.", "Symbol/numeric/NEKO expression representing a polynomial or supported expression in x", "List of non-real Complex values or exact root expressions"),
     HELP_CMD("factorPoly", 1, Beast::Neko, "Factors a polynomial in x over real roots currently found by the real factorer.", "Symbol/numeric/NEKO expression representing a polynomial in x", "NEKO expression"),
     HELP_CMD("factorPolyReal", 1, Beast::Neko, "Factors a polynomial in x over real roots.", "Symbol/numeric/NEKO expression representing a polynomial in x", "NEKO expression"),
     HELP_CMD("factorPolyComplex", 1, Beast::Neko, "Factors a polynomial in x over complex roots.", "Symbol/numeric/NEKO expression representing a polynomial in x", "Symbol containing a formatted complex factorization"),
@@ -535,8 +540,8 @@ static constexpr Command kCommands[] = {
     HELP_CMD("subgroupConjugate", 2, Beast::Usagi, "Conjugates a subgroup by a group element.", "GroupElement and SubGroup from the same ambient Group", "SubGroup"),
     HELP_CMD("commutatorSubgroup", 1, Beast::Usagi, "Computes the commutator subgroup.", "Group", "SubGroup"),
     HELP_CMD("abelianization", 1, Beast::Usagi, "Computes the abelianization of a group.", "Group", "Group"),
-    HELP_CMD("listNormalSubgroups", 1, Beast::Usagi, "Lists normal subgroups of a group.", "Group", "Symbol summary"),
-    HELP_CMD("listMaximalSubgroups", 1, Beast::Usagi, "Lists maximal subgroups of a group.", "Group", "Symbol summary"),
+    HELP_CMD("listNormalSubgroups", 1, Beast::Usagi, "Lists normal subgroup objects of a group.", "Group", "List of SubGroup values"),
+    HELP_CMD("listMaximalSubgroups", 1, Beast::Usagi, "Lists maximal subgroup objects of a group.", "Group", "List of SubGroup values"),
     HELP_CMD("numNormalSubgroups", 1, Beast::Usagi, "Counts normal subgroups of a group.", "Group", "Int"),
     HELP_CMD("numMaximalSubgroups", 1, Beast::Usagi, "Counts maximal subgroups of a group.", "Group", "Int"),
     HELP_CMD("largestCoreFreeSubgroup", 1, Beast::Usagi, "Finds a largest core-free subgroup.", "Group", "SubGroup"),
@@ -569,7 +574,7 @@ static constexpr Command kCommands[] = {
     HELP_CMD("ringHomomorphismImage", 1, Beast::Usagi, "Computes the image of a ring homomorphism.", "RingHomomorphism", "Ring"),
     HELP_CMD("isGroupIsomorphism", 1, Beast::Usagi, "Tests whether a group homomorphism is an isomorphism.", "GroupHomomorphism", "Bool"),
     HELP_CMD("isRingIsomorphism", 1, Beast::Usagi, "Tests whether a ring homomorphism is an isomorphism.", "RingHomomorphism", "Bool"),
-    HELP_CMD("listSubgroups", 1, Beast::Usagi, "Formats a list of all subgroups of a group.", "Group", "Symbol summary"),
+    HELP_CMD("listSubgroups", 1, Beast::Usagi, "Lists subgroup objects of a group.", "Group", "List of SubGroup values"),
     HELP_CMD("numSubgroups", 1, Beast::Usagi, "Counts all subgroups of a group.", "Group", "Int"),
     HELP_CMD("getSubgroup", 2, Beast::Usagi, "Retrieves a subgroup by one-based index from the subgroup list.", "Group and Int index >= 1", "SubGroup"),
     HELP_CMD("subgroupInfo", 1, Beast::Usagi, "Formats information about a subgroup and its ambient group.", "SubGroup", "Symbol summary"),
@@ -612,7 +617,7 @@ static constexpr Command kCommands[] = {
     HELP_CMD("repDegree", 1, Beast::Tora, "Returns the degree of a representation.", "Representation", "Int"),
     HELP_CMD("charDegree", 1, Beast::Tora, "Returns the degree of a character, or of the character of a representation.", "Character or Representation", "Int, Decimal, or Complex scalar"),
     HELP_CMD("isIrrep", 1, Beast::Tora, "Tests whether a representation is irreducible.", "Representation", "Bool"),
-    HELP_CMD("listIrreps", 1, Beast::Tora, "Lists labels for irreducible characters of a group.", "Group", "List of String labels"),
+    HELP_CMD("listIrreps", 1, Beast::Tora, "Lists irreducible character objects of a group.", "Group", "List of Character values"),
     HELP_CMD("numIrreps", 1, Beast::Tora, "Counts irreducible characters of a group.", "Group", "Int"),
     HELP_CMD("getIrrep", 2, Beast::Tora, "Retrieves an irreducible character by one-based index.", "Group and Int index >= 1", "Character"),
     HELP_CMD("decomposeRep", 1, Beast::Tora, "Decomposes a representation into irreducible multiplicities.", "Representation", "List of Int multiplicities"),

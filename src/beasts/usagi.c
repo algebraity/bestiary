@@ -3286,12 +3286,477 @@ SubGroup* subgroupConjugate(GroupElement* g, SubGroup* H) {
 	return K;
 }
 
+typedef struct {
+    unsigned long long* bits;
+    int* indices;
+    int count;
+} ZnProductSubgroupData;
+
+static size_t bitsetWords(size_t count) {
+    size_t wordBits = sizeof(unsigned long long) * CHAR_BIT;
+    return (count + wordBits - 1) / wordBits;
+}
+
+static bool bitsetGet(const unsigned long long* bits, size_t index) {
+    size_t wordBits = sizeof(unsigned long long) * CHAR_BIT;
+    return (bits[index / wordBits] & (1ULL << (index % wordBits))) != 0;
+}
+
+static void bitsetSet(unsigned long long* bits, size_t index) {
+    size_t wordBits = sizeof(unsigned long long) * CHAR_BIT;
+    bits[index / wordBits] |= 1ULL << (index % wordBits);
+}
+
+static void freeZnProductSubgroupData(ZnProductSubgroupData* subgroup) {
+    if (!subgroup) return;
+    free(subgroup->bits);
+    free(subgroup->indices);
+    subgroup->bits = NULL;
+    subgroup->indices = NULL;
+    subgroup->count = 0;
+}
+
+static void freeZnProductSubgroupDataList(ZnProductSubgroupData* subgroups, int count) {
+    if (!subgroups) return;
+    for (int i = 0; i < count; i++) freeZnProductSubgroupData(&subgroups[i]);
+    free(subgroups);
+}
+
+static bool appendZnFactorModulus(Group* G, long long** moduli, int* count, int* capacity) {
+    if (!G || !moduli || !count || !capacity) return false;
+
+    if (G->type == GROUP_ZN) {
+        long long modulus = G->data.zn.modulus;
+        if (modulus < 1) return false;
+        if (*count >= *capacity) {
+            int newCapacity = *capacity ? (*capacity * 2) : 4;
+            long long* grown = realloc(*moduli, (size_t)newCapacity * sizeof(long long));
+            if (!grown) return false;
+            *moduli = grown;
+            *capacity = newCapacity;
+        }
+        (*moduli)[(*count)++] = modulus;
+        return true;
+    }
+
+    if (G->type != GROUP_PRODUCT || !G->data.product.factors || G->data.product.count < 1) return false;
+
+    for (size_t i = 0; i < G->data.product.count; i++) {
+        if (!appendZnFactorModulus(G->data.product.factors[i], moduli, count, capacity)) return false;
+    }
+    return true;
+}
+
+static bool getZnProductModuli(Group* G, long long** moduliOut, int* rankOut) {
+    if (moduliOut) *moduliOut = NULL;
+    if (rankOut) *rankOut = 0;
+    if (!G || !moduliOut || !rankOut) return false;
+    if (G->type != GROUP_ZN && G->type != GROUP_PRODUCT) return false;
+
+    long long* moduli = NULL;
+    int count = 0;
+    int capacity = 0;
+    if (!appendZnFactorModulus(G, &moduli, &count, &capacity) || count < 1) {
+        free(moduli);
+        return false;
+    }
+
+    long long card = 1;
+    for (int i = 0; i < count; i++) {
+        if (moduli[i] < 1 || card > LLONG_MAX / moduli[i]) {
+            free(moduli);
+            return false;
+        }
+        card *= moduli[i];
+    }
+    if ((size_t)card != G->card || G->card > (size_t)INT_MAX) {
+        free(moduli);
+        return false;
+    }
+
+    *moduliOut = moduli;
+    *rankOut = count;
+    return true;
+}
+
+static int compareLongLongValues(const void* left, const void* right) {
+    long long a = *(const long long*)left;
+    long long b = *(const long long*)right;
+    return (a > b) - (a < b);
+}
+
+static SubGroup* constructSubgroupUnchecked(Group* G, int* indices, int indicesLen) {
+    if (!G || !indices || indicesLen < 1 || !G->isFinite || !G->elements) return NULL;
+    for (int i = 0; i < indicesLen; i++) {
+        if (indices[i] < 0 || (size_t)indices[i] >= G->card) return NULL;
+    }
+    sortIndices(indices, indicesLen);
+    if (hasDuplicateIndices(indices, indicesLen)) return NULL;
+    if (indices[0] != 0) return NULL;
+
+    GroupElement** elements = subgroupElementView(G, indices, indicesLen);
+    if (!elements) return NULL;
+
+    SubGroup* H = calloc(1, sizeof(SubGroup));
+    if (!H) {
+        free(elements);
+        return NULL;
+    }
+    H->ambient = G;
+    H->card = (size_t)indicesLen;
+    H->isFinite = true;
+    H->elements = elements;
+    H->type = SUBGROUP_INDEXED;
+    H->data.indexed.indices = indices;
+
+    return H;
+}
+
+static SubGroup** listZnSubgroups(Group* G, int* count) {
+    if (!G || !count || G->type != GROUP_ZN || G->data.zn.modulus < 1) return NULL;
+    long long n = G->data.zn.modulus;
+    if (n > INT_MAX) return NULL;
+
+    int capacity = 16;
+    int divCount = 0;
+    long long* divisors = malloc((size_t)capacity * sizeof(long long));
+    if (!divisors) return NULL;
+
+    for (long long d = 1; d <= n / d; d++) {
+        if (n % d != 0) continue;
+        if (divCount >= capacity) {
+            capacity *= 2;
+            long long* grown = realloc(divisors, (size_t)capacity * sizeof(long long));
+            if (!grown) {
+                free(divisors);
+                return NULL;
+            }
+            divisors = grown;
+        }
+        divisors[divCount++] = d;
+        long long other = n / d;
+        if (other != d) {
+            if (divCount >= capacity) {
+                capacity *= 2;
+                long long* grown = realloc(divisors, (size_t)capacity * sizeof(long long));
+                if (!grown) {
+                    free(divisors);
+                    return NULL;
+                }
+                divisors = grown;
+            }
+            divisors[divCount++] = other;
+        }
+    }
+
+    qsort(divisors, (size_t)divCount, sizeof(long long), compareLongLongValues);
+
+    SubGroup** subgroups = calloc((size_t)divCount, sizeof(SubGroup*));
+    if (!subgroups) {
+        free(divisors);
+        return NULL;
+    }
+
+    for (int i = 0; i < divCount; i++) {
+        long long step = divisors[divCount - 1 - i];
+        int card = (int)(n / step);
+        int* indices = malloc((size_t)card * sizeof(int));
+        if (!indices) {
+            for (int j = 0; j < i; j++) freeSubgroup(subgroups[j]);
+            free(subgroups);
+            free(divisors);
+            return NULL;
+        }
+        for (int j = 0; j < card; j++) indices[j] = (int)(j * step);
+        subgroups[i] = constructSubgroupUnchecked(G, indices, card);
+        if (!subgroups[i]) {
+            free(indices);
+            for (int j = 0; j < i; j++) freeSubgroup(subgroups[j]);
+            free(subgroups);
+            free(divisors);
+            return NULL;
+        }
+    }
+
+    free(divisors);
+    *count = divCount;
+    return subgroups;
+}
+
+static bool buildZnProductCoordinates(size_t card, const long long* moduli, int rank, long long** coordsOut) {
+    if (coordsOut) *coordsOut = NULL;
+    if (!moduli || rank < 1 || !coordsOut || card > (size_t)INT_MAX) return false;
+
+    long long* coords = malloc(card * (size_t)rank * sizeof(long long));
+    if (!coords) return false;
+
+    for (size_t i = 0; i < card; i++) {
+        size_t x = i;
+        for (int r = rank - 1; r >= 0; r--) {
+            coords[i * (size_t)rank + (size_t)r] = (long long)(x % (size_t)moduli[r]);
+            x /= (size_t)moduli[r];
+        }
+    }
+
+    *coordsOut = coords;
+    return true;
+}
+
+static int znProductAddIndex(int left, int right, const long long* moduli, int rank, const long long* coords) {
+    if (left < 0 || right < 0 || !moduli || !coords || rank < 1) return -1;
+
+    long long index = 0;
+    for (int r = 0; r < rank; r++) {
+        long long modulus = moduli[r];
+        long long sum = (coords[(size_t)left * (size_t)rank + (size_t)r]
+                       + coords[(size_t)right * (size_t)rank + (size_t)r]) % modulus;
+        if (index > (LLONG_MAX - sum) / modulus) return -1;
+        index = index * modulus + sum;
+    }
+
+    return index <= INT_MAX ? (int)index : -1;
+}
+
+static bool buildIndicesFromBits(const unsigned long long* bits, size_t card, int** indicesOut, int* countOut) {
+    if (indicesOut) *indicesOut = NULL;
+    if (countOut) *countOut = 0;
+    if (!bits || !indicesOut || !countOut || card > (size_t)INT_MAX) return false;
+
+    int count = 0;
+    for (size_t i = 0; i < card; i++) {
+        if (bitsetGet(bits, i)) count++;
+    }
+    if (count < 1) return false;
+
+    int* indices = malloc((size_t)count * sizeof(int));
+    if (!indices) return false;
+
+    int j = 0;
+    for (size_t i = 0; i < card; i++) {
+        if (bitsetGet(bits, i)) indices[j++] = (int)i;
+    }
+
+    *indicesOut = indices;
+    *countOut = count;
+    return true;
+}
+
+static bool buildCyclicZnProductSubgroup(int generator,
+                                         size_t card,
+                                         const long long* moduli,
+                                         int rank,
+                                         const long long* coords,
+                                         int** indicesOut,
+                                         int* countOut) {
+    if (indicesOut) *indicesOut = NULL;
+    if (countOut) *countOut = 0;
+    if (generator < 0 || (size_t)generator >= card) return false;
+
+    size_t words = bitsetWords(card);
+    unsigned long long* bits = calloc(words, sizeof(unsigned long long));
+    int* indices = malloc(card * sizeof(int));
+    if (!bits || !indices) {
+        free(bits);
+        free(indices);
+        return false;
+    }
+
+    int count = 0;
+    int current = 0;
+    while (!bitsetGet(bits, (size_t)current)) {
+        bitsetSet(bits, (size_t)current);
+        indices[count++] = current;
+        current = znProductAddIndex(current, generator, moduli, rank, coords);
+        if (current < 0 || (size_t)current >= card) {
+            free(bits);
+            free(indices);
+            return false;
+        }
+    }
+
+    free(bits);
+    *indicesOut = indices;
+    *countOut = count;
+    return true;
+}
+
+static bool sumZnProductSubgroups(ZnProductSubgroupData* H,
+                                  const int* cyclic,
+                                  int cyclicCount,
+                                  size_t card,
+                                  const long long* moduli,
+                                  int rank,
+                                  const long long* coords,
+                                  ZnProductSubgroupData* out) {
+    if (!H || !cyclic || cyclicCount < 1 || !out) return false;
+    out->bits = NULL;
+    out->indices = NULL;
+    out->count = 0;
+
+    size_t words = bitsetWords(card);
+    out->bits = calloc(words, sizeof(unsigned long long));
+    if (!out->bits) return false;
+
+    for (int i = 0; i < H->count; i++) {
+        for (int j = 0; j < cyclicCount; j++) {
+            int index = znProductAddIndex(H->indices[i], cyclic[j], moduli, rank, coords);
+            if (index < 0 || (size_t)index >= card) {
+                freeZnProductSubgroupData(out);
+                return false;
+            }
+            bitsetSet(out->bits, (size_t)index);
+        }
+    }
+
+    if (!buildIndicesFromBits(out->bits, card, &out->indices, &out->count)) {
+        freeZnProductSubgroupData(out);
+        return false;
+    }
+    return true;
+}
+
+static bool znProductSubgroupAlreadyListed(ZnProductSubgroupData* subgroups,
+                                           int count,
+                                           ZnProductSubgroupData* candidate,
+                                           size_t words) {
+    if (!subgroups || !candidate) return false;
+    for (int i = 0; i < count; i++) {
+        if (memcmp(subgroups[i].bits, candidate->bits, words * sizeof(unsigned long long)) == 0) return true;
+    }
+    return false;
+}
+
+static SubGroup** listZnProductSubgroups(Group* G, int* count, const long long* moduli, int rank) {
+    if (!G || !count || !moduli || rank < 2 || !G->isFinite || !G->elements) return NULL;
+    if (G->card > (size_t)INT_MAX) return NULL;
+
+    size_t card = G->card;
+    size_t words = bitsetWords(card);
+    long long* coords = NULL;
+    if (!buildZnProductCoordinates(card, moduli, rank, &coords)) return NULL;
+
+    int capacity = 16;
+    int n = 0;
+    ZnProductSubgroupData* found = calloc((size_t)capacity, sizeof(ZnProductSubgroupData));
+    if (!found) {
+        free(coords);
+        return NULL;
+    }
+
+    found[0].bits = calloc(words, sizeof(unsigned long long));
+    found[0].indices = malloc(sizeof(int));
+    if (!found[0].bits || !found[0].indices) {
+        free(coords);
+        freeZnProductSubgroupDataList(found, capacity);
+        return NULL;
+    }
+    bitsetSet(found[0].bits, 0);
+    found[0].indices[0] = 0;
+    found[0].count = 1;
+    n = 1;
+
+    int scanStart = 0;
+    while (scanStart < n) {
+        int scanEnd = n;
+        for (int s = scanStart; s < scanEnd; s++) {
+            ZnProductSubgroupData* H = &found[s];
+            for (int gi = 0; gi < (int)card; gi++) {
+                if (bitsetGet(H->bits, (size_t)gi)) continue;
+
+                int* cyclic = NULL;
+                int cyclicCount = 0;
+                if (!buildCyclicZnProductSubgroup(gi, card, moduli, rank, coords, &cyclic, &cyclicCount)) {
+                    free(coords);
+                    freeZnProductSubgroupDataList(found, n);
+                    return NULL;
+                }
+
+                ZnProductSubgroupData candidate = {0};
+                bool ok = sumZnProductSubgroups(H, cyclic, cyclicCount, card, moduli, rank, coords, &candidate);
+                free(cyclic);
+                if (!ok) {
+                    free(coords);
+                    freeZnProductSubgroupDataList(found, n);
+                    return NULL;
+                }
+
+                if (znProductSubgroupAlreadyListed(found, n, &candidate, words)) {
+                    freeZnProductSubgroupData(&candidate);
+                    continue;
+                }
+
+                if (n >= capacity) {
+                    int oldCapacity = capacity;
+                    capacity *= 2;
+                    ZnProductSubgroupData* grown = realloc(found, (size_t)capacity * sizeof(ZnProductSubgroupData));
+                    if (!grown) {
+                        freeZnProductSubgroupData(&candidate);
+                        free(coords);
+                        freeZnProductSubgroupDataList(found, n);
+                        return NULL;
+                    }
+                    found = grown;
+                    memset(found + oldCapacity, 0, (size_t)(capacity - oldCapacity) * sizeof(ZnProductSubgroupData));
+                }
+
+                found[n++] = candidate;
+            }
+        }
+        scanStart = scanEnd;
+    }
+
+    SubGroup** subgroups = calloc((size_t)n, sizeof(SubGroup*));
+    if (!subgroups) {
+        free(coords);
+        freeZnProductSubgroupDataList(found, n);
+        return NULL;
+    }
+
+    for (int i = 0; i < n; i++) {
+        int* indices = found[i].indices;
+        found[i].indices = NULL;
+        subgroups[i] = constructSubgroupUnchecked(G, indices, found[i].count);
+        if (!subgroups[i]) {
+            free(indices);
+            for (int j = 0; j < i; j++) freeSubgroup(subgroups[j]);
+            free(subgroups);
+            free(coords);
+            freeZnProductSubgroupDataList(found, n);
+            return NULL;
+        }
+    }
+
+    free(coords);
+    freeZnProductSubgroupDataList(found, n);
+    *count = n;
+    return subgroups;
+}
+
+static SubGroup** listZnLikeSubgroups(Group* G, int* count) {
+    if (!G || !count) return NULL;
+
+    long long* moduli = NULL;
+    int rank = 0;
+    if (!getZnProductModuli(G, &moduli, &rank)) return NULL;
+
+    SubGroup** subgroups = NULL;
+    if (rank == 1 && G->type == GROUP_ZN) subgroups = listZnSubgroups(G, count);
+    else subgroups = listZnProductSubgroups(G, count, moduli, rank);
+
+    free(moduli);
+    return subgroups;
+}
+
 // List all subgroups of G.
 // Sets *count to the number of subgroups returned.
 // Caller is responsible for calling freeSubgroup on each and free on the array.
 SubGroup** listAllSubgroups(Group* G, int* count) {
     if (!G || !count) return NULL;
     if (!G->isFinite || !G->elements) return NULL;
+    if (G->type == GROUP_ZN || G->type == GROUP_PRODUCT) {
+        SubGroup** znSubgroups = listZnLikeSubgroups(G, count);
+        if (znSubgroups) return znSubgroups;
+    }
 
     // Start with a dynamic array of subgroups, initialized with the trivial subgroup {e}
     int capacity = 16;
@@ -3380,6 +3845,10 @@ SubGroup** listAllSubgroups(Group* G, int* count) {
 // Caller is responsible for calling freeSubgroup on each and free on the array.
 SubGroup** listAllNormalSubgroups(Group* G, int* count) {
     if (!G || !count) return NULL;
+    if (G->type == GROUP_ZN || G->type == GROUP_PRODUCT) {
+        SubGroup** znSubgroups = listZnLikeSubgroups(G, count);
+        if (znSubgroups) return znSubgroups;
+    }
 
     int allCount = 0;
     SubGroup** all = listAllSubgroups(G, &allCount);

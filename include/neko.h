@@ -151,6 +151,50 @@ typedef struct NekoOdeSystemResult {
     int iterations;
 } NekoOdeSystemResult;
 
+typedef enum {
+    NEKO_ROOT_REAL,
+    NEKO_ROOT_COMPLEX,
+    NEKO_ROOT_EXPR
+} NekoRootKind;
+
+typedef struct NekoRoot {
+    NekoRootKind kind;
+    long double real;
+    ComplexNumber complex;
+    NekoExpr* expr;
+} NekoRoot;
+
+typedef struct NekoRootResult {
+    NekoStatus status;
+    NekoRoot* roots;
+    size_t count;
+    char* error;
+} NekoRootResult;
+
+typedef NekoExpr* (*NekoParseExprFn)(const char* text, void* userdata);
+
+typedef enum {
+    NEKO_ODE_STRING_ERROR,
+    NEKO_ODE_STRING_EXPR,
+    NEKO_ODE_STRING_RELATION,
+    NEKO_ODE_STRING_VALUE
+} NekoOdeStringResultKind;
+
+typedef struct NekoOdeStringResult {
+    NekoStatus status;
+    NekoOdeStringResultKind kind;
+    NekoExpr* expr;
+    char* text;
+    long double value;
+} NekoOdeStringResult;
+
+typedef struct NekoOdeSystemStringResult {
+    NekoStatus status;
+    char* error;
+    long double* values;
+    int dim;
+} NekoOdeSystemStringResult;
+
 typedef struct NekoGraphPoint {
     long double x;
     long double y;
@@ -277,9 +321,26 @@ NekoExpr* nekoDeserializeExpr(const char* text);
 long double nekoEvalExpr(const NekoExpr* expr, const char* var, long double x);
 long double nekoEvalExpr2D(const NekoExpr* expr, const char* xvar, long double x, const char* yvar, long double y);
 long double nekoEvalExpr3D(const NekoExpr* expr, const char* xvar, long double x, const char* yvar, long double y, const char* zvar, long double z);
+bool nekoExprDependsOnVar(const NekoExpr* expr, const char* var);
+bool nekoExprIsConstValue(const NekoExpr* expr, long double value);
+bool nekoExprEquivalent(const NekoExpr* lhs, const NekoExpr* rhs);
+NekoExpr* nekoParsePolynomialLiteral(const char* text);
+long long nekoMaxPolynomialDegree(void);
+bool nekoPolynomialDegreeExceedsMax(const NekoExpr* expr, const char* var, long long maxDegree);
+bool nekoExtractPolynomialCoeffs(const NekoExpr* expr, const char* var, long double* coeffs, long long maxDegree, long long* degree);
+bool nekoExtractComplexPolynomialCoeffs(const NekoExpr* expr, const char* var, ComplexNumber* coeffs, long long maxDegree, long long* degree);
+long long nekoPolynomialRealRoots(const long double* coeffs, long long degree, long double* roots, long long maxRoots);
+long long nekoPolynomialComplexRoots(const long double* coeffs, long long degree, ComplexNumber* roots, long long maxRoots);
+NekoRootResult nekoFindRoots(const NekoExpr* expr, const char* var);
+NekoRootResult nekoFindRealRoots(const NekoExpr* expr, const char* var);
+NekoRootResult nekoFindImaginaryRoots(const NekoExpr* expr, const char* var);
+NekoRootResult nekoFindNonRealRoots(const NekoExpr* expr, const char* var);
+void nekoFreeRootResult(NekoRootResult result);
+NekoExpr* nekoFactorPolynomialReal(const NekoExpr* expr, const char* var);
+char* nekoFactorPolynomialComplex(const NekoExpr* expr, const char* var);
 NekoExpr* nekoSimplify(NekoExpr* expr);
-size_t nekoPolynomialFormulaRoots(const long double* coeffs, int degree, NekoExpr** roots, size_t maxRoots);
-size_t nekoPolynomialComplexFormulaRoots(const ComplexNumber* coeffs, int degree, NekoExpr** roots, size_t maxRoots);
+size_t nekoPolynomialFormulaRoots(const long double* coeffs, long long degree, NekoExpr** roots, size_t maxRoots);
+size_t nekoPolynomialComplexFormulaRoots(const ComplexNumber* coeffs, long long degree, NekoExpr** roots, size_t maxRoots);
 NekoDiffResult nekoDifferentiateExpr(const NekoExpr* expr, const char* var);
 NekoFunc* nekoFuncFromExpr(const NekoExpr* expr);
 NekoFunc* nekoFuncFromCallback(NekoEvalFn callback, void* userdata);
@@ -318,6 +379,10 @@ NekoSolveResult nekoSolveOdeInitialValue(const NekoOde* ode);
 NekoOdeResult nekoEvalOde(const NekoOde* ode, long double x, int steps);
 NekoOdeSystemResult nekoEvalOdeSystem(const NekoOde* ode, long double x, int steps);
 void nekoFreeOdeSystemResult(NekoOdeSystemResult result);
+NekoOdeStringResult nekoSolveOdeString(const char* raw, NekoParseExprFn parser, void* userdata);
+void nekoFreeOdeStringResult(NekoOdeStringResult result);
+NekoOdeSystemStringResult nekoSolveOdeSystemStrings(const char* const* equations, int dim);
+void nekoFreeOdeSystemStringResult(NekoOdeSystemStringResult result);
 
 
 #ifdef __cplusplus

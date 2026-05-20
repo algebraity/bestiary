@@ -390,6 +390,102 @@ static void testListSorting(void) {
     evalCtxFree(ctx);
 }
 
+static void testListCommandObjectReturns(void) {
+    SECTION("list command object returns");
+    EvalContext* ctx = evalCtxNew();
+
+    Value out = evalLine(ctx, "\\listElements{\\ZnGroup{4}}");
+    CHECK(out.kind == VAL_LIST && out.as.list.n == 4
+          && listItemsHaveKind(out, VAL_GROUP_ELEMENT),
+          "listElements returns group element objects for groups");
+    valFree(out);
+
+    out = evalLine(ctx, "\\listElements{\\ZnRing{4}}");
+    CHECK(out.kind == VAL_LIST && out.as.list.n == 4
+          && listItemsHaveKind(out, VAL_RING_ELEMENT),
+          "listElements returns ring element objects for rings");
+    valFree(out);
+
+    out = evalLine(ctx, "\\listConjClasses{\\Sn{3}}");
+    CHECK(out.kind == VAL_LIST && out.as.list.n == 3
+          && listItemsHaveKind(out, VAL_CONJUGACY_CLASS),
+          "listConjClasses returns conjugacy class objects");
+    valFree(out);
+
+    out = evalLine(ctx, "\\listSubgroups{\\ZnGroup{4}}");
+    CHECK(out.kind == VAL_LIST && out.as.list.n == 3
+          && listItemsHaveKind(out, VAL_SUBGROUP),
+          "listSubgroups returns subgroup objects");
+    valFree(out);
+
+    out = evalLine(ctx, "\\len{\\listSubgroups{\\ZnGroup{1000}}}");
+    CHECK(out.kind == VAL_INT && out.as.i == 16,
+          "listSubgroups uses divisor enumeration for large cyclic groups");
+    valFree(out);
+
+    out = evalLine(ctx, "\\len{\\listSubgroups{\\ZnProductGroup{[2,2]}}}");
+    CHECK(out.kind == VAL_INT && out.as.i == 5,
+          "listSubgroups includes diagonal subgroups of Zn products");
+    valFree(out);
+
+    out = evalLine(ctx, "\\len{\\listSubgroups{\\ZnProductGroup{[4,2]}}}");
+    CHECK(out.kind == VAL_INT && out.as.i == 8,
+          "listSubgroups enumerates all subgroups of non-elementary Zn products");
+    valFree(out);
+
+    out = evalLine(ctx, "\\listNormalSubgroups{\\ZnGroup{4}}");
+    CHECK(out.kind == VAL_LIST && out.as.list.n == 3
+          && listItemsHaveKind(out, VAL_SUBGROUP),
+          "listNormalSubgroups returns subgroup objects");
+    valFree(out);
+
+    out = evalLine(ctx, "\\len{\\listNormalSubgroups{\\ZnGroup{1000}}}");
+    CHECK(out.kind == VAL_INT && out.as.i == 16,
+          "listNormalSubgroups uses the abelian Zn fast path");
+    valFree(out);
+
+    out = evalLine(ctx, "\\listMaximalSubgroups{\\ZnGroup{4}}");
+    CHECK(out.kind == VAL_LIST && out.as.list.n == 1
+          && listItemsHaveKind(out, VAL_SUBGROUP),
+          "listMaximalSubgroups returns subgroup objects");
+    valFree(out);
+
+    out = evalLine(ctx, "\\len{\\listMaximalSubgroups{\\ZnGroup{1000}}}");
+    CHECK(out.kind == VAL_INT && out.as.i == 2,
+          "listMaximalSubgroups benefits from the Zn subgroup fast path");
+    valFree(out);
+
+    out = evalLine(ctx, "subs = \\listSubgroups{\\ZnGroup{4}}; \\subgroupIndex{subs[0]}");
+    CHECK(out.kind == VAL_INT && out.as.i >= 1,
+          "indexed listSubgroups result can be used as a subgroup");
+    valFree(out);
+
+    out = evalLine(ctx, "G = \\ZnGroup{4}; H = \\getCyclicSubgroup{\\getElement{G}{\"2\"}}; \\listLeftCosets{H}");
+    CHECK(out.kind == VAL_LIST && out.as.list.n == 2
+          && listItemsHaveKind(out, VAL_GROUP_COSET),
+          "listLeftCosets returns group coset objects");
+    valFree(out);
+
+    out = evalLine(ctx, "G = \\ZnGroup{4}; H = \\getCyclicSubgroup{\\getElement{G}{\"2\"}}; \\listRightCosets{H}");
+    CHECK(out.kind == VAL_LIST && out.as.list.n == 2
+          && listItemsHaveKind(out, VAL_GROUP_COSET),
+          "listRightCosets returns group coset objects");
+    valFree(out);
+
+    out = evalLine(ctx, "\\listIrreps{\\Sn{3}}");
+    CHECK(out.kind == VAL_LIST && out.as.list.n == 3
+          && listItemsHaveKind(out, VAL_CHARACTER),
+          "listIrreps returns character objects");
+    valFree(out);
+
+    out = evalLine(ctx, "irreps = \\listIrreps{\\Sn{3}}; \\charDegree{irreps[0]}");
+    CHECK(out.kind == VAL_INT || out.kind == VAL_DECIMAL,
+          "indexed listIrreps result can be used as a character");
+    valFree(out);
+
+    evalCtxFree(ctx);
+}
+
 static void testKumaValueOwnership(void) {
     SECTION("KUMA value ownership");
 
@@ -890,6 +986,47 @@ static void testPolynomialSolveCommands(void) {
           && listItemsHaveKind(out, VAL_NEKO_EXPR)
           && valuePrintContains(out, "[-i, i]"),
           "roots prefers exact formula expressions for supported polynomial degree");
+    valFree(out);
+
+    out = evalLine(ctx, "\\realRoots{x^2 - 1}");
+    CHECK(out.kind == VAL_LIST && out.as.list.n == 2
+          && listItemsHaveKind(out, VAL_NEKO_EXPR)
+          && valuePrintContains(out, "[-1, 1]"),
+          "realRoots keeps real polynomial roots");
+    valFree(out);
+
+    out = evalLine(ctx, "\\realRoots{x^2 + 1}");
+    CHECK(out.kind == VAL_LIST && out.as.list.n == 0,
+          "realRoots filters out non-real polynomial roots");
+    valFree(out);
+
+    out = evalLine(ctx, "\\imaginaryRoots{x^2 + 1}");
+    CHECK(out.kind == VAL_LIST && out.as.list.n == 2
+          && listItemsHaveKind(out, VAL_NEKO_EXPR)
+          && valuePrintContains(out, "[-i, i]"),
+          "imaginaryRoots keeps purely imaginary polynomial roots");
+    valFree(out);
+
+    out = evalLine(ctx, "\\imaginaryRoots{x^2 + 2*x + 2}");
+    CHECK(out.kind == VAL_LIST && out.as.list.n == 0,
+          "imaginaryRoots filters out non-purely-imaginary complex roots");
+    valFree(out);
+
+    out = evalLine(ctx, "\\imaginaryRoots{x^2 - 1}");
+    CHECK(out.kind == VAL_LIST && out.as.list.n == 0,
+          "imaginaryRoots filters out real polynomial roots");
+    valFree(out);
+
+    out = evalLine(ctx, "\\nonRealRoots{x^2 + 2*x + 2}");
+    CHECK(out.kind == VAL_LIST && out.as.list.n == 2
+          && listItemsHaveKind(out, VAL_NEKO_EXPR)
+          && valuePrintContains(out, "i"),
+          "nonRealRoots keeps non-real complex polynomial roots");
+    valFree(out);
+
+    out = evalLine(ctx, "\\nonRealRoots{x^2 - 1}");
+    CHECK(out.kind == VAL_LIST && out.as.list.n == 0,
+          "nonRealRoots filters out real polynomial roots");
     valFree(out);
 
     out = evalLine(ctx, "\\solveQuartic{}");
@@ -1684,6 +1821,7 @@ int main(void) {
     testMatrixIndexing();
     testListMutation();
     testListSorting();
+    testListCommandObjectReturns();
     testKumaValueOwnership();
     testKumaCommands();
     testRandomCommands();
