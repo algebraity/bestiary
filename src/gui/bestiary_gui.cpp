@@ -138,8 +138,15 @@ static void StyleDarkHyperlink(wxHyperlinkCtrl* link) {
 
 static void StyleDarkTextCtrl(wxTextCtrl* text) {
     if (!text) return;
-    text->SetBackgroundColour(ColourFromRgb(theme::kPanelBg));
-    text->SetForegroundColour(ColourFromRgb(theme::kText));
+    wxColour fg = ColourFromRgb(theme::kText);
+    wxColour bg = ColourFromRgb(theme::kPanelBg);
+    text->SetBackgroundColour(bg);
+    text->SetForegroundColour(fg);
+    wxTextAttr style(fg, bg);
+    style.SetFlags(wxTEXT_ATTR_TEXT_COLOUR | wxTEXT_ATTR_BACKGROUND_COLOUR);
+    text->SetDefaultStyle(style);
+    long end = text->GetLastPosition();
+    if (end > 0) text->SetStyle(0, end, style);
 }
 
 static wxString BestiaryExecutablePath() {
@@ -4856,8 +4863,8 @@ private:
         auto* block = new wxTextCtrl(parent, wxID_ANY, text, wxDefaultPosition, wxDefaultSize,
                                      wxTE_READONLY | wxTE_MULTILINE | wxTE_WORDWRAP |
                                      wxTE_NO_VSCROLL | wxTE_RICH2 | wxBORDER_NONE);
-        StyleDarkTextCtrl(block);
         block->SetFont(font);
+        StyleDarkTextCtrl(block);
         block->SetEditable(false);
         return block;
     }
@@ -5283,13 +5290,7 @@ private:
             // when SetFont is called. Re-apply the dark-theme colours to the
             // existing range so text doesn't go grey on zoom.
             control->SetForegroundColour(fg);
-            if (auto* tc = wxDynamicCast(control, wxTextCtrl)) {
-                tc->SetBackgroundColour(bg);
-                wxTextAttr style(fg, bg);
-                style.SetFlags(wxTEXT_ATTR_TEXT_COLOUR | wxTEXT_ATTR_BACKGROUND_COLOUR);
-                long end = tc->GetLastPosition();
-                if (end > 0) tc->SetStyle(0, end, style);
-            }
+            if (auto* tc = wxDynamicCast(control, wxTextCtrl)) StyleDarkTextCtrl(tc);
         }
         if (helpPage->wrappedBlocks) {
             for (auto& block : *helpPage->wrappedBlocks)
