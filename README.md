@@ -151,6 +151,14 @@ Bestiary can run any ".bsy" file as a line-by-line script:
 ./build/bin/linux/bestiary-cli file.bsy
 ```
 
+It can also evaluate temporary script text and exit immediately:
+
+```sh
+./build/bin/linux/bestiary-cli --eval "2 + 2"
+./build/bin/linux/bestiary-cli --eval "x = 3
+x^2"
+```
+
 Inside of a Bestiary environment, use `\run{file.bsy}` or `\run{"path with spaces.bsy"}` to run
 a script in the current session. Script lines share the same evaluator and
 environment as the REPL, so assignments made by a script remain available after

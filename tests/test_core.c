@@ -1154,6 +1154,43 @@ static void testScriptMultilineBraceBlocks(void) {
     unlink(path);
 }
 
+static void testScriptTextMode(void) {
+    SECTION("script text mode");
+    EvalContext* ctx = evalCtxNew();
+    ScriptRunOptions opts = {0, 0, 0, 0, 0, 0};
+    ScriptRunResult result = {0, 0, 0};
+    char error[256] = {0};
+
+    int ok = bstRunScriptText(ctx,
+        "\\if{1 == 1}{\n"
+        "xs = \\list{4,5}\n"
+        "\\append{xs}{6}\n"
+        "}\n"
+        "y = 7\n"
+        "y + 1",
+        "<eval>",
+        &opts,
+        &result,
+        error,
+        sizeof(error));
+    CHECK(ok && result.errors == 0, "script text runs");
+    CHECK(result.linesRead == 6, "script text reads physical lines");
+    CHECK(result.linesEvaluated == 3, "script text evaluates balanced chunks");
+
+    Value list;
+    CHECK(envList(ctx, "xs", &list), "script text block assignment persists");
+    CHECK(list.as.list.n == 3
+          && list.as.list.items[2].kind == VAL_INT
+          && list.as.list.items[2].as.i == 6,
+          "script text block append persists");
+
+    Value out = evalLine(ctx, "y");
+    CHECK(out.kind == VAL_INT && out.as.i == 7, "script text assignment before EOF persists");
+    valFree(out);
+
+    evalCtxFree(ctx);
+}
+
 static void testRestoreScriptMode(void) {
     SECTION("restore script mode");
     char path[] = "/tmp/bestiary-restore-XXXXXX";
@@ -1830,6 +1867,7 @@ int main(void) {
     testConditionals();
     testMultilineBraceBlocks();
     testScriptMultilineBraceBlocks();
+    testScriptTextMode();
     testRestoreScriptMode();
     testPrintCommand();
     testLoops();

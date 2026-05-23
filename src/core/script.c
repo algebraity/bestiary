@@ -214,6 +214,44 @@ static int evalScriptChunk(EvalContext* ctx,
     return ok;
 }
 
+static int runScriptLine(EvalContext* ctx,
+                         char* line,
+                         const char* label,
+                         const ScriptRunOptions* options,
+                         ScriptRunResult* result,
+                         char** chunk,
+                         size_t* chunkLen,
+                         size_t* chunkCap,
+                         size_t* chunkStartLine,
+                         size_t* braceDepth) {
+    result->linesRead++;
+
+    if (*chunkLen == 0 && lineIsBlank(line)) return 1;
+
+    if (*chunkLen == 0) *chunkStartLine = result->linesRead;
+    if (!appendLine(chunk, chunkLen, chunkCap, line)) {
+        result->errors++;
+        return 0;
+    }
+
+    if (!updateBraceDepth(line, braceDepth)) {
+        result->errors++;
+        return 0;
+    }
+
+    if (*braceDepth == 0) {
+        result->linesEvaluated++;
+        evalCtxRecordInput(ctx, *chunk);
+        if (!evalScriptChunk(ctx, *chunk, label, *chunkStartLine, options)) result->errors++;
+        free(*chunk);
+        *chunk = NULL;
+        *chunkLen = 0;
+        *chunkCap = 0;
+    }
+
+    return 1;
+}
+
 int bstRunScriptFile(EvalContext* ctx,
                      const char* filename,
                      const ScriptRunOptions* options,
@@ -244,36 +282,10 @@ int bstRunScriptFile(EvalContext* ctx,
     for (;;) {
         char* line = readLine(fp);
         if (!line) break;
-        local.linesRead++;
-
-        if (chunkLen == 0 && lineIsBlank(line)) {
-            free(line);
-            continue;
-        }
-
-        if (chunkLen == 0) chunkStartLine = local.linesRead;
-        if (!appendLine(&chunk, &chunkLen, &chunkCap, line)) {
-            local.errors++;
-            free(line);
-            break;
-        }
-
-        if (!updateBraceDepth(line, &braceDepth)) {
-            local.errors++;
-            free(line);
-            break;
-        }
+        int ok = runScriptLine(ctx, line, filename, &opts, &local,
+                               &chunk, &chunkLen, &chunkCap, &chunkStartLine, &braceDepth);
         free(line);
-
-        if (braceDepth == 0) {
-            local.linesEvaluated++;
-            evalCtxRecordInput(ctx, chunk);
-            if (!evalScriptChunk(ctx, chunk, filename, chunkStartLine, &opts)) local.errors++;
-            free(chunk);
-            chunk = NULL;
-            chunkLen = 0;
-            chunkCap = 0;
-        }
+        if (!ok) break;
     }
 
     if (chunkLen > 0) {
@@ -282,6 +294,58 @@ int bstRunScriptFile(EvalContext* ctx,
     }
 
     fclose(fp);
+    if (result) *result = local;
+    if (error && errorSize) error[0] = '\0';
+    return 1;
+}
+
+int bstRunScriptText(EvalContext* ctx,
+                     const char* text,
+                     const char* label,
+                     const ScriptRunOptions* options,
+                     ScriptRunResult* result,
+                     char* error,
+                     size_t errorSize) {
+    ScriptRunOptions opts = options ? *options : DEFAULT_OPTIONS;
+    ScriptRunResult local = {0, 0, 0};
+    const char* name = label && *label ? label : "<eval>";
+    const char* start = text;
+    char* chunk = NULL;
+    size_t chunkLen = 0;
+    size_t chunkCap = 0;
+    size_t chunkStartLine = 0;
+    size_t braceDepth = 0;
+
+    if (result) *result = local;
+    if (!ctx || !text) {
+        if (error && errorSize) snprintf(error, errorSize, "missing script text");
+        return 0;
+    }
+
+    while (*start) {
+        const char* end = strchr(start, '\n');
+        size_t lineLen = end ? (size_t)(end - start) + 1 : strlen(start);
+        char* line = malloc(lineLen + 1);
+        if (!line) {
+            local.errors++;
+            break;
+        }
+        memcpy(line, start, lineLen);
+        line[lineLen] = '\0';
+
+        int ok = runScriptLine(ctx, line, name, &opts, &local,
+                               &chunk, &chunkLen, &chunkCap, &chunkStartLine, &braceDepth);
+        free(line);
+        if (!ok) break;
+
+        start += lineLen;
+    }
+
+    if (chunkLen > 0) {
+        local.errors++;
+        free(chunk);
+    }
+
     if (result) *result = local;
     if (error && errorSize) error[0] = '\0';
     return 1;

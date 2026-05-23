@@ -27,4 +27,12 @@ int bstRunScriptFile(EvalContext* ctx,
                      char* error,
                      size_t errorSize);
 
+int bstRunScriptText(EvalContext* ctx,
+                     const char* text,
+                     const char* label,
+                     const ScriptRunOptions* options,
+                     ScriptRunResult* result,
+                     char* error,
+                     size_t errorSize);
+
 #endif

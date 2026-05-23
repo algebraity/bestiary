@@ -47,6 +47,12 @@ static Token* g_active_toks = NULL;
 static size_t g_active_ntok = 0;
 static AstNode* g_active_ast = NULL;
 
+static void printUsage(const char* argv0) {
+    fprintf(stderr,
+            "usage: %s [--tokens] [--ast] [--plain] [--no-startup-message] [--restore script-file] [--eval text] [script-file]\n",
+            argv0);
+}
+
 /* ---------- Helper methods ---------- */
 
 // Map a TokenKind to a printable tag
@@ -881,23 +887,36 @@ int main(int argc, char** argv) {
 #endif
     const char* script_filename = NULL;
     const char* restore_filename = NULL;
+    const char* eval_text = NULL;
 
     for (int i = 1; i < argc; i++) {
         if      (strcmp(argv[i], "--tokens") == 0) opt_dump_tokens = 1;
         else if (strcmp(argv[i], "--ast")    == 0) opt_dump_ast    = 1;
         else if (strcmp(argv[i], "--plain")  == 0) opt_plain_input = 1;
         else if (strcmp(argv[i], "--no-startup-message") == 0) opt_no_startup_message = 1;
-        else if (strcmp(argv[i], "--restore") == 0 && i + 1 < argc)
+        else if (strcmp(argv[i], "--restore") == 0) {
+            if (i + 1 >= argc || restore_filename) {
+                printUsage(argv[0]);
+                return 2;
+            }
             restore_filename = argv[++i];
+        }
+        else if (strcmp(argv[i], "--eval") == 0) {
+            if (i + 1 >= argc || eval_text) {
+                printUsage(argv[0]);
+                return 2;
+            }
+            eval_text = argv[++i];
+        }
         else if (!script_filename) script_filename = argv[i];
         else {
-            fprintf(stderr, "usage: %s [--tokens] [--ast] [--plain] [--no-startup-message] [--restore script-file] [script-file]\n", argv[0]);
+            printUsage(argv[0]);
             return 2;
         }
     }
 
-    if (restore_filename && script_filename) {
-        fprintf(stderr, "usage: %s [--tokens] [--ast] [--plain] [--no-startup-message] [--restore script-file] [script-file]\n", argv[0]);
+    if ((restore_filename && script_filename) || (eval_text && script_filename)) {
+        printUsage(argv[0]);
         return 2;
     }
 
@@ -918,6 +937,20 @@ int main(int argc, char** argv) {
         ScriptRunResult result = {0, 0, 0};
         char error[512] = {0};
         (void)bstRunScriptFile(ctx, restore_filename, &options, &result, error, sizeof(error));
+    }
+
+    if (eval_text) {
+        ScriptRunOptions options = {opt_dump_tokens, opt_dump_ast, 1, 0, 0, 0};
+        ScriptRunResult result = {0, 0, 0};
+        char error[512] = {0};
+        int ok = bstRunScriptText(ctx, eval_text, "<eval>", &options, &result, error, sizeof(error));
+        if (!ok) {
+            fprintf(stderr, "%s\n", error[0] ? error : "failed to evaluate text");
+            evalCtxFree(ctx);
+            return 1;
+        }
+        evalCtxFree(ctx);
+        return result.errors ? 1 : 0;
     }
 
     if (script_filename) {
