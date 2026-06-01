@@ -10,6 +10,8 @@ Each BEAST is written from scratch in C. The wxWidgets-based GUI application, wh
 
 Bestiary is currently in active development, but as of v2.0.0, it can be expected to be stable and efficient for regular use. Future releases will add new features to the core BEAST libraries, add new BEASTs, and fix any bugs that may be discovered, but the core architecture, GUI layout, and basic functionality will remain the same. Bestiary has mostly been tested on the GNU/Linux operating system, so there is more support for it than for Windows, but it is supported and developed for Windows as well. Build files for an unofficial Mac version exist in the source, but MacOS is not supported at this time.
 
+The original location of this repository is: [git.keimai.space](https://git.keimai.space/algebraity/bestiary)
+
 ## Features
 
 - LaTeX-inspired language: backslash commands, math-like syntax, native and LaTeX-style object definitions, variables, and expressions
